@@ -1,0 +1,160 @@
+/*
+ * Jerry design tokens, taken from design/project/Main.dc.html (renderVals: `c` and `d`).
+ * Source canvas: https://claude.ai/artifact/SyhnbNFneF1wHCtgTWaB76
+ *
+ * Light is the default; dark applies with [data-theme="dark"] on <html>
+ * (set by the app from the "App theme" setting, System = follow Windows).
+ * Accent is runtime-settable: set --jerry-accent-base on <html>; the derived
+ * accent colors below follow it.
+ */
+
+:root {
+  /* Accent (user-selectable; default Jerry blue) */
+  --jerry-accent-base: #005fb8;
+  --jerry-accent: var(--jerry-accent-base);
+  --jerry-accent-text: var(--jerry-accent-base);
+  --jerry-on-accent: #ffffff;
+  /* Selection = accent mixed 14% into white */
+  --jerry-sel: color-mix(in srgb, var(--jerry-accent-base) 14%, #ffffff);
+
+  /* Surfaces */
+  --jerry-mica: #edeff2;          /* window background, sidebar, title bar */
+  --jerry-bar: #f9f9f9;           /* pane toolbars, active tab, preview, transfer panel */
+  --jerry-pane: #ffffff;          /* file list background */
+  --jerry-ctrl: #ffffff;          /* inputs, secondary buttons */
+  --jerry-ctrl-border: #d4d6d9;
+  --jerry-stroke: #e1e3e6;        /* dividers, column header lines */
+  --jerry-flyout: #ffffff;        /* toast, palette, menus */
+  --jerry-flyout-border: #dcdcdc;
+  --jerry-preview-well: #f0f1f3;
+  --jerry-kbd: #f5f5f5;
+  --jerry-scrim: rgb(0 0 0 / 0.28);
+  --jerry-tab-sep: #cdd0d4;
+
+  /* Text */
+  --jerry-text: #1a1a1a;
+  --jerry-text-2: #5c5c5c;        /* secondary: dates, sizes, labels */
+  --jerry-text-3: #6b6b6b;        /* tertiary: captions, placeholders */
+  --jerry-disabled: #ababab;
+
+  /* Interaction states */
+  --jerry-hover: #f2f3f5;
+  --jerry-nav-sel: #e1e4e8;       /* selected nav item, pressed segmented button */
+  --jerry-sel-inactive: #ebebeb;  /* selection in the inactive pane */
+  --jerry-focus: #1a1a1a;         /* 2px focus outline, offset -2px */
+
+  /* Status */
+  --jerry-track: #d7dade;         /* progress and drive-usage track */
+  --jerry-red: #c42b1c;           /* drive >= 90% used, errors */
+  --jerry-green: #0f7b0f;         /* success, OneDrive available */
+  --jerry-on-green: #ffffff;
+  --jerry-onedrive: #0f6cbd;
+
+  /* File-type glyphs */
+  --jerry-folder-back: #d9a21b;
+  --jerry-folder-front: #ffc83d;
+  --jerry-page-fill: #ffffff;
+  --jerry-page-stroke: #8a8a8a;
+  --jerry-img-fill: #e3f0fb;
+  --jerry-img-stroke: #0f6cbd;
+  --jerry-img-placeholder: #dce2e9;
+  --jerry-badge-dwg: #a4262c;
+  --jerry-badge-pdf: #c4314b;
+  --jerry-badge-xlsx: #107c41;
+
+  /* Elevation */
+  --jerry-shadow: 0 8px 24px rgb(0 0 0 / 0.12), 0 1px 3px rgb(0 0 0 / 0.06);
+  --jerry-shadow-lg: 0 24px 48px rgb(0 0 0 / 0.18), 0 2px 8px rgb(0 0 0 / 0.08);
+
+  /* Type */
+  --jerry-font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --jerry-line-height: 1.35;
+
+  /* Radii */
+  --jerry-radius-ctrl: 4px;       /* buttons, inputs, rows, nav items */
+  --jerry-radius-kbd: 3px;
+  --jerry-radius-tab: 8px 8px 0 0;
+  --jerry-radius-flyout: 8px;     /* toast, palette, settings window */
+
+  /* Fixed layout (1440x900 reference window) */
+  --jerry-titlebar-h: 40px;
+  --jerry-tab-h: 32px;
+  --jerry-tab-w-active: 168px;
+  --jerry-tab-w: 140px;
+  --jerry-caption-btn-w: 46px;
+  --jerry-sidebar-w: 232px;
+  --jerry-preview-w: 288px;
+  --jerry-toolbar-btn: 30px;
+  --jerry-address-h: 30px;
+  --jerry-filter-h: 28px;
+  --jerry-active-pane-bar: 2px;
+  --jerry-col-header-h: 28px;
+  --jerry-col-date-w: 104px;
+  --jerry-col-type-w: 84px;
+  --jerry-col-size-w: 60px;
+  --jerry-transfer-h: 56px;
+  --jerry-statusbar-h: 28px;
+  --jerry-toast-w: 336px;
+  --jerry-palette-w: 640px;
+  --jerry-palette-row-h: 38px;
+
+  /* Density: comfortable (default) */
+  --jerry-row-h: 30px;
+  --jerry-nav-h: 28px;
+  --jerry-font-size: 13px;
+  --jerry-drive-pad: 6px;
+}
+
+:root[data-density="compact"] {
+  --jerry-row-h: 24px;
+  --jerry-nav-h: 24px;
+  --jerry-font-size: 12px;
+  --jerry-drive-pad: 4px;
+}
+
+:root[data-theme="dark"] {
+  /* Default blue becomes #60CDFF in dark; other accents are mixed 50% toward white
+     (set --jerry-accent explicitly from the app for non-default accents). */
+  --jerry-accent: #60cdff;
+  --jerry-accent-text: var(--jerry-accent);
+  --jerry-on-accent: #000000;
+  --jerry-sel: color-mix(in srgb, var(--jerry-accent) 20%, #1c1c1c);
+
+  --jerry-mica: #202020;
+  --jerry-bar: #2b2b2b;
+  --jerry-pane: #1c1c1c;
+  --jerry-ctrl: #323232;
+  --jerry-ctrl-border: #454545;
+  --jerry-stroke: #383838;
+  --jerry-flyout: #2c2c2c;
+  --jerry-flyout-border: #454545;
+  --jerry-preview-well: #232323;
+  --jerry-kbd: #383838;
+  --jerry-scrim: rgb(0 0 0 / 0.5);
+  --jerry-tab-sep: #3c3c3c;
+
+  --jerry-text: #ffffff;
+  --jerry-text-2: #c9c9c9;
+  --jerry-text-3: #a3a3a3;
+  --jerry-disabled: #5e5e5e;
+
+  --jerry-hover: #2a2a2a;
+  --jerry-nav-sel: #333333;
+  --jerry-sel-inactive: #303030;
+  --jerry-focus: #ffffff;
+
+  --jerry-track: #484848;
+  --jerry-red: #ff99a4;
+  --jerry-green: #6ccb5f;
+  --jerry-on-green: #0b2a0b;
+  --jerry-onedrive: #4cc2ff;
+
+  --jerry-page-fill: #3a3a3a;
+  --jerry-page-stroke: #9a9a9a;
+  --jerry-img-fill: #1e3a52;
+  --jerry-img-stroke: #6ab0ec;
+  --jerry-img-placeholder: #34383d;
+
+  --jerry-shadow: 0 8px 24px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.3);
+  --jerry-shadow-lg: 0 24px 48px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.35);
+}
