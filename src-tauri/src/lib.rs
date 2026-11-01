@@ -2,12 +2,13 @@
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
 mod spike;
+mod spike_drop;
 
 use std::time::Duration;
 
 use specta_typescript::Typescript;
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_specta::{Builder, collect_commands};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ipc/bindings.ts");
@@ -38,13 +39,27 @@ fn show(window: &WebviewWindow) {
 
 /// Every command the UI may call. The same list feeds the invoke handler and the bindings.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![
-        app_version,
-        app_ready,
-        spike::sample_list,
-        spike::drag_start,
-        spike::spike_window,
-    ])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            app_version,
+            app_ready,
+            spike::lab_folders,
+            spike::lab_list,
+            spike::drag_start,
+            spike::spike_window,
+            spike_drop::dnd_install,
+            spike_drop::dnd_answer,
+            spike_drop::dnd_choose,
+            spike_drop::lab_layout,
+        ])
+        .events(collect_events![
+            spike_drop::DndEnter,
+            spike_drop::DndOver,
+            spike_drop::DndLeave,
+            spike_drop::DndDrop,
+            spike_drop::DndDone,
+            spike_drop::DndStats,
+        ])
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -64,7 +79,8 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
-        .manage(spike::Samples::new())
+        .manage(spike::Lab::new())
+        .manage(spike_drop::Dnd::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

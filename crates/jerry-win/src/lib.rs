@@ -6,6 +6,7 @@
 //! timeouts.
 
 pub mod drag;
+pub mod drop;
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;

@@ -5,12 +5,17 @@ import { App } from "./App";
 
 test("shows the window and the version from the core", async () => {
   const calls: string[] = [];
-  mockIPC((cmd) => {
-    calls.push(cmd);
-    if (cmd === "app_version") return "1.2.3";
-    if (cmd === "sample_list") return [];
-    return undefined;
-  });
+  mockIPC(
+    (cmd) => {
+      calls.push(cmd);
+      if (cmd === "app_version") return "1.2.3";
+      if (cmd === "lab_folders") return [];
+      if (cmd === "dnd_install")
+        return { before: [], after: [], registered: 1, webviewDropOff: true };
+      return undefined;
+    },
+    { shouldMockEvents: true },
+  );
 
   render(<App />);
 

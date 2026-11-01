@@ -9,13 +9,16 @@ publish.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+windows-core = { workspace = true }
 windows = { workspace = true, features = [
     "Wdk_System_SystemServices",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_SystemInformation",
@@ -29,12 +32,14 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 tempfile = { workspace = true }
-# For examples/drop_probe.rs (spike #13): a test drop target and a mouse driver.
+# For examples/drop_probe.rs (spike #13) and drag_probe.rs (spike #14): test drop targets,
+# drag sources and a mouse driver.
 windows = { workspace = true, features = [
     "Win32_System_LibraryLoader",
+    "Win32_UI_Accessibility",
+    "Win32_System_Threading",
     "Win32_UI_HiDpi",
 ] }
-windows-core = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { SampleList } from "../features/spike-drag/SampleList";
+import { DropLab } from "../features/spike-drop/DropLab";
 import { commands } from "../ipc";
 import { strings } from "../strings";
 
-/** The window frame. Spike #13 fills it with the drag-out sample list. */
+/** The window frame. Spikes #13 and #14 fill it with the drag & drop lab. */
 export function App() {
   const [version, setVersion] = useState<string>();
 
@@ -36,7 +36,7 @@ export function App() {
         </button>
       </header>
       <main className="min-h-0 flex-1 bg-pane">
-        <SampleList />
+        <DropLab />
       </main>
     </div>
   );

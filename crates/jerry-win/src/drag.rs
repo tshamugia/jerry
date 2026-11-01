@@ -12,12 +12,15 @@
 use std::ffi::OsString;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows::Win32::Foundation::{DRAGDROP_S_DROP, HWND, S_OK};
+use windows::Win32::Foundation::{DRAGDROP_S_DROP, HWND, LPARAM, LRESULT, S_OK, WPARAM};
 use windows::Win32::System::Com::{
     CoTaskMemFree, DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IBindCtx, IDataObject, TYMED_HGLOBAL,
 };
 use windows::Win32::System::DataExchange::{GetClipboardFormatNameW, RegisterClipboardFormatW};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
@@ -33,7 +36,9 @@ use windows::Win32::UI::Shell::{
     HDROP, ILCreateFromPathW, ILFree, SHCreateShellItemArrayFromIDLists,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetSystemMetrics, GetWindowThreadProcessId, SM_SWAPBUTTON,
+    CreateWindowExW, DefWindowProcW, GetClassNameW, GetSystemMetrics, GetWindowThreadProcessId,
+    HWND_MESSAGE, PostMessageW, RegisterClassW, SM_SWAPBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WNDCLASSW,
 };
 use windows::core::{HRESULT, Interface, PCWSTR};
 
@@ -98,7 +103,98 @@ pub struct DragOutcome {
 /// the process.
 pub fn init_ole() -> windows::core::Result<()> {
     // SAFETY: no reserved pointer; a second call on the same thread just returns S_FALSE.
-    unsafe { OleInitialize(None) }
+    unsafe { OleInitialize(None) }?;
+    create_task_window()
+}
+
+/// A task for [`run_on_main`].
+pub type Task = Box<dyn FnOnce() + Send>;
+
+/// The message-only window that runs [`run_on_main`]'s tasks (an HWND, kept as an integer so
+/// it can be shared with other threads).
+static TASKS: OnceLock<isize> = OnceLock::new();
+const WM_RUN_TASK: u32 = WM_APP + 0x14;
+
+fn create_task_window() -> windows::core::Result<()> {
+    if TASKS.get().is_some() {
+        return Ok(());
+    }
+    let class = windows::core::w!("JerryMainTasks");
+    // SAFETY: the module handle of this process.
+    let instance = unsafe { GetModuleHandleW(None) }?;
+    let info = WNDCLASSW {
+        lpfnWndProc: Some(task_proc),
+        hInstance: instance.into(),
+        lpszClassName: class,
+        ..Default::default()
+    };
+    // SAFETY: a valid class description.
+    unsafe { RegisterClassW(&info) };
+    // SAFETY: a message-only window on this (the main) thread.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            class,
+            windows::core::w!(""),
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(instance.into()),
+            None,
+        )
+    }?;
+    let _ = TASKS.set(hwnd.0 as isize);
+    Ok(())
+}
+
+unsafe extern "system" fn task_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_RUN_TASK {
+        // SAFETY: `run_on_main` posted a pointer from `Box::into_raw`, and each message is
+        // delivered once, so the box is reclaimed exactly once.
+        let task = unsafe { Box::from_raw(lparam.0 as *mut Task) };
+        // A panicking task fails alone (CLAUDE.md: panics don't kill the app).
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(task));
+        return LRESULT(0);
+    }
+    // SAFETY: default handling for our own window.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Runs `task` on the main thread, from a message to Jerry's own window. Use it for anything
+/// that runs a modal loop (a drag, Windows' context menu) instead of Tauri's
+/// `run_on_main_thread`: that one runs the task inside tao's event callback, and tao holds back
+/// its own events while a callback runs, so Rust → page events (`emit`, which evaluates script
+/// through tao) would wait until the modal loop ends (spike #14). From here they don't.
+///
+/// Gives the task back if [`init_ole`] hasn't run or the post fails.
+pub fn run_on_main(task: Task) -> Result<(), Task> {
+    let Some(&hwnd) = TASKS.get() else {
+        return Err(task);
+    };
+    let raw = Box::into_raw(Box::new(task));
+    // SAFETY: posting to our own window; on success its procedure takes ownership of `raw`.
+    let posted = unsafe {
+        PostMessageW(
+            Some(HWND(hwnd as *mut core::ffi::c_void)),
+            WM_RUN_TASK,
+            WPARAM(0),
+            LPARAM(raw as isize),
+        )
+    };
+    match posted {
+        Ok(()) => Ok(()),
+        // SAFETY: the message wasn't posted, so the box is still ours.
+        Err(_) => Err(*unsafe { Box::from_raw(raw) }),
+    }
 }
 
 /// Drags `paths` out of Jerry and returns once the user drops or cancels.
@@ -133,6 +229,24 @@ pub fn data_object(paths: &[PathBuf]) -> Result<IDataObject, DragError> {
     Ok(data)
 }
 
+/// A drag out of Jerry is running (its modal loop is on the main thread). Jerry's own drop
+/// target reads it to tell an internal drag from one that comes from another app.
+static DRAGGING: AtomicBool = AtomicBool::new(false);
+
+/// Whether a drag started by [`drag`] is running.
+pub fn is_dragging() -> bool {
+    DRAGGING.load(Ordering::Acquire)
+}
+
+/// Clears [`DRAGGING`] however the drag ends.
+struct Dragging;
+
+impl Drop for Dragging {
+    fn drop(&mut self) {
+        DRAGGING.store(false, Ordering::Release);
+    }
+}
+
 /// Runs the modal drag loop for `data` and reports how it ended.
 pub fn drag(owner: isize, data: &IDataObject) -> Result<DragOutcome, DragError> {
     // The `windows` wrapper folds DRAGDROP_S_DROP and DRAGDROP_S_CANCEL into Ok, so call the
@@ -147,6 +261,10 @@ pub fn drag(owner: isize, data: &IDataObject) -> Result<DragOutcome, DragError> 
 
     let allowed = DROPEFFECT(DROPEFFECT_COPY.0 | DROPEFFECT_MOVE.0 | DROPEFFECT_LINK.0);
     let mut effect = DROPEFFECT_NONE;
+    DRAGGING.store(true, Ordering::Release);
+    let _dragging = Dragging;
+    // Show the drop overlay now: the modal drag loop may not run its timer.
+    crate::drop::sync_overlay();
     // SAFETY: `data` is a live IDataObject borrowed for the whole call; a null drop source makes
     // the Shell create its default one; `effect` is a valid out pointer.
     let hr = unsafe {
