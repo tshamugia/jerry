@@ -1,0 +1,3 @@
+# One pnpm workspace: the UI lives at the root. The Rust crates are a Cargo workspace (Cargo.toml).
+packages:
+  - "."
