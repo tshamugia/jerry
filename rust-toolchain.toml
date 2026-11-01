@@ -1,0 +1,6 @@
+# One Rust version for local builds and CI. Bump it on purpose, in its own PR.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]
+profile = "minimal"
