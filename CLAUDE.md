@@ -146,7 +146,9 @@ Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development w
 ## Workflow
 
 - One issue per session, in the order of the current epic's task list. Issues that don't depend on each other (no "დამოკიდებულია" link) and don't touch the same files may run in parallel sessions, each in its own worktree and branch. Spikes (#11–#18) live on `spike/*` branches and don't merge into `main`; their results go into the Tech PRD.
-- One branch per issue from `main`, named `<type>/<issue>-<slug>` (for example `chore/7-dev-env`). One PR per issue with `Closes #N`; merge only with green CI.
+- One branch per issue from `main`, named `<type>/<issue>-<slug>` (for example `chore/7-dev-env`). One PR per issue with `Closes #N`.
 - Conventional Commits in English: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `chore`, `ci`.
-- An issue is done when its "მზადაა, როცა" (acceptance) items are verified, not just when its checklist is ticked. Before opening a PR: `pnpm check` is green (rustfmt, clippy, Biome, `tsc`, Vitest, nextest) and `pnpm bindings` leaves no diff.
+- An issue is done when its "მზადაა, როცა" (acceptance) items are verified, not just when its checklist is ticked.
+- **A PR is opened only when the work is finished and tested locally:** `pnpm check` is green (rustfmt, clippy, Biome, `tsc`, Vitest, nextest), `pnpm bindings` leaves no diff, and the acceptance items are verified, including the manual ones the user confirmed. No draft or work-in-progress PRs.
+- **Once the PR is open, merge it right away** (merge commit, no review or CI wait) and delete the branch on GitHub and locally: `gh pr merge <n> --merge --delete-branch`. The local checks are the gate; CI still runs on the PR and on `main` as a safety net, and if it turns red, the fix comes next in its own PR.
 - If issues are added or reordered, update the epic's task list too.
