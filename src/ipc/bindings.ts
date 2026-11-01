@@ -11,5 +11,95 @@ export const commands = {
 	 *  only now, so it never flashes white.
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
+	/**  Lists the sample folder, creating it and its seed files first. */
+	sampleList: () => typedError<SampleEntry[], SpikeError>(__TAURI_INVOKE("sample_list")),
+	/**
+	 *  Starts an OLE drag of `ids`. Called by the UI once the pointer moves past the drag
+	 *  threshold with a button held; resolves when the user drops or cancels. `ui_time` is the
+	 *  UI's wall clock (ms since the epoch) at the threshold crossing.
+	 */
+	dragStart: (ids: number[], uiTime: number | null) => typedError<DragReport_Serialize, SpikeError>(__TAURI_INVOKE("drag_start", { ids, uiTime })),
+	/**  Moves (title bar drag) or closes the window. */
+	spikeWindow: (action: WindowAction) => __TAURI_INVOKE<void>("spike_window", { action }),
 };
+
+/* Types */
+/**  How a drag ended, with the spike's measurements. */
+export type DragReport = DragReport_Serialize | DragReport_Deserialize;
+
+/**  How a drag ended, with the spike's measurements. */
+export type DragReport_Deserialize = {
+	/**  False when no mouse button was down any more once the main thread got to the drag. */
+	started: boolean,
+	dropped: boolean,
+	effect: Effect,
+	/**  The target's "Performed DropEffect", if it wrote one. */
+	performed?: Effect | null,
+	/**  UI threshold crossing → command running in Rust (wall clock, both sides). */
+	uiToRustMs: number | null,
+	/**  Command → drag closure running on the main thread. */
+	queuedMs: number | null,
+	/**  Building the Shell data object. */
+	prepareMs: number | null,
+	/**  The modal drag loop, from start to drop or cancel. */
+	dragMs: number | null,
+	/**  The window that had the mouse capture when the drag started (class, and whose). */
+	capture?: string | null,
+};
+
+/**  How a drag ended, with the spike's measurements. */
+export type DragReport_Serialize = {
+	/**  False when no mouse button was down any more once the main thread got to the drag. */
+	started: boolean,
+	dropped: boolean,
+	effect: Effect,
+	/**  The target's "Performed DropEffect", if it wrote one. */
+	performed: Effect | null,
+	/**  UI threshold crossing → command running in Rust (wall clock, both sides). */
+	uiToRustMs: number | null,
+	/**  Command → drag closure running on the main thread. */
+	queuedMs: number | null,
+	/**  Building the Shell data object. */
+	prepareMs: number | null,
+	/**  The modal drag loop, from start to drop or cancel. */
+	dragMs: number | null,
+	/**  The window that had the mouse capture when the drag started (class, and whose). */
+	capture: string | null,
+};
+
+export type Effect = "none" | "copy" | "move" | "link";
+
+/**  One row of the sample folder. The UI refers to it by `id` only. */
+export type SampleEntry = {
+	id: number,
+	/**  Display text only, never used to build a path. */
+	name: string,
+	isDir: boolean,
+	size: number | null,
+};
+
+/**  Error codes for the spike's commands; the UI turns them into text. */
+export type SpikeError = 
+/**  The id isn't in the current listing (list again). */
+{ code: "UnknownId" } | 
+/**  A drag is already running. */
+{ code: "Busy" } | 
+/**  The Shell can't resolve a file (gone since the listing). */
+{ code: "NotFound" } | { code: "Io" } | { code: "Os" };
+
+/**
+ *  Window actions for the spike's bare title bar. The real one is #17's; these exist only so
+ *  the undecorated window can be moved next to a drop target and closed.
+ */
+export type WindowAction = "move" | "close";
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 
