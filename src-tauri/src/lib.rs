@@ -1,10 +1,12 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod spike;
+
 use std::time::Duration;
 
 use specta_typescript::Typescript;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
 use tauri_specta::{Builder, collect_commands};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
@@ -36,7 +38,16 @@ fn show(window: &WebviewWindow) {
 
 /// Every command the UI may call. The same list feeds the invoke handler and the bindings.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_version, app_ready])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        app_version,
+        app_ready,
+        spike::sample_list,
+        spike::clipboard_copy,
+        spike::clipboard_paste,
+        spike::clipboard_state,
+        spike::clipboard_watch,
+        spike::spike_window,
+    ])
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -46,6 +57,7 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 
 /// Builds and runs the app until its last window closes.
 pub fn run() -> tauri::Result<()> {
+    spike::init_logging();
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -55,6 +67,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .manage(spike::Spike::new())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -63,6 +76,12 @@ pub fn run() -> tauri::Result<()> {
                 os_build = jerry_win::os_build(),
                 "Jerry starting"
             );
+
+            // setup runs on the main thread, where the OLE clipboard and drag & drop live.
+            if let Err(error) = jerry_win::clipboard::init_ole() {
+                tracing::error!(%error, "OleInitialize failed; the clipboard won't work");
+            }
+            spike::listen(app.handle());
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
@@ -77,5 +96,13 @@ pub fn run() -> tauri::Result<()> {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?
+        .run(|_app, event| {
+            // The event loop's last event, on the main thread: Jerry's files stay on the
+            // clipboard after it exits.
+            if let RunEvent::Exit = event {
+                spike::flush_on_exit();
+            }
+        });
+    Ok(())
 }
