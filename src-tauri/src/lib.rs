@@ -1,6 +1,8 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod listing;
+
 use std::time::Duration;
 
 use specta_typescript::Typescript;
@@ -36,7 +38,14 @@ fn show(window: &WebviewWindow) {
 
 /// Every command the UI may call. The same list feeds the invoke handler and the bindings.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_version, app_ready])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        app_version,
+        app_ready,
+        listing::listing_open,
+        listing::listing_open_json,
+        listing::listing_sort,
+        listing::listing_close,
+    ])
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -55,6 +64,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .manage(listing::Listings::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

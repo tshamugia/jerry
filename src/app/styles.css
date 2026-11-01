@@ -84,6 +84,11 @@
   --spacing-statusbar: var(--jerry-statusbar-h);
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
+
+  /* Details view columns (design/README.md: Date modified 104, Type 84, Size 60). */
+  --spacing-col-date: 104px;
+  --spacing-col-type: 84px;
+  --spacing-col-size: 60px;
 }
 
 @layer base {
