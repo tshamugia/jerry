@@ -7,7 +7,9 @@ test("shows the window and the version from the core", async () => {
   const calls: string[] = [];
   mockIPC((cmd) => {
     calls.push(cmd);
-    return cmd === "app_version" ? "1.2.3" : undefined;
+    if (cmd === "app_version") return "1.2.3";
+    if (cmd === "sample_list") return [];
+    return undefined;
   });
 
   render(<App />);

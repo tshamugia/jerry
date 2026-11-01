@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { SampleList } from "../features/spike-drag/SampleList";
 import { commands } from "../ipc";
 import { strings } from "../strings";
 
-/** The window frame. For now an empty Jerry window; zones arrive with #22 and #23. */
+/** The window frame. Spike #13 fills it with the drag-out sample list. */
 export function App() {
   const [version, setVersion] = useState<string>();
 
@@ -14,11 +15,28 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col bg-mica text-fg">
-      <header className="flex h-titlebar shrink-0 items-center px-4 text-small text-fg-2">
+      {/* Spike only: a bare title bar to move and close the window. The real one is #17. */}
+      <header
+        className="flex h-titlebar shrink-0 items-center gap-3 pl-4 text-small text-fg-2"
+        onPointerDown={(event) => {
+          if (event.button === 0 && event.target === event.currentTarget) {
+            void commands.spikeWindow("move");
+          }
+        }}
+      >
         {strings.appName}
+        {version && <span className="text-fg-3 tabular-nums">{strings.version(version)}</span>}
+        <button
+          type="button"
+          aria-label={strings.close}
+          className="ml-auto h-full w-caption-btn hover:bg-red hover:text-on-accent"
+          onClick={() => void commands.spikeWindow("close")}
+        >
+          ✕
+        </button>
       </header>
-      <main className="flex flex-1 items-center justify-center bg-pane">
-        {version && <p className="text-fg-3 tabular-nums">{strings.version(version)}</p>}
+      <main className="min-h-0 flex-1 bg-pane">
+        <SampleList />
       </main>
     </div>
   );

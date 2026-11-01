@@ -1,6 +1,8 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod spike;
+
 use std::time::Duration;
 
 use specta_typescript::Typescript;
@@ -36,7 +38,13 @@ fn show(window: &WebviewWindow) {
 
 /// Every command the UI may call. The same list feeds the invoke handler and the bindings.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_version, app_ready])
+    Builder::<tauri::Wry>::new().commands(collect_commands![
+        app_version,
+        app_ready,
+        spike::sample_list,
+        spike::drag_start,
+        spike::spike_window,
+    ])
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -46,6 +54,7 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 
 /// Builds and runs the app until its last window closes.
 pub fn run() -> tauri::Result<()> {
+    spike::init_logging();
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -55,6 +64,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .manage(spike::Samples::new())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -63,6 +73,11 @@ pub fn run() -> tauri::Result<()> {
                 os_build = jerry_win::os_build(),
                 "Jerry starting"
             );
+
+            // setup runs on the main thread, where OLE drag & drop and the clipboard live.
+            if let Err(error) = jerry_win::drag::init_ole() {
+                tracing::error!(%error, "OleInitialize failed; drag & drop won't work");
+            }
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.

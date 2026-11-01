@@ -20,9 +20,14 @@ specta-typescript = "=0.0.13"
 tauri = "2.12.5"
 tauri-build = "2.7.4"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
+# Spike #13 logs to a file; the real log setup (tracing-appender, 14-day rotation) is its own issue.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 windows = "0.62"
+# Needed by the `windows` crate's #[implement] macro (COM objects such as IDropTarget).
+windows-core = "0.62"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
