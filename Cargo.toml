@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/jerry-core", "crates/jerry-win", "src-tauri"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace.dependencies]
+jerry-core = { path = "crates/jerry-core" }
+jerry-win = { path = "crates/jerry-win" }
+
+serde = { version = "1", features = ["derive"] }
+# tauri-specta v2 is a release candidate: keep these three `=`-pinned and bump them together.
+specta = { version = "=2.0.0-rc.26", features = ["derive"] }
+specta-typescript = "=0.0.13"
+tauri = "2.12.5"
+tauri-build = "2.7.4"
+tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+thiserror = "2"
+tracing = "0.1"
+windows = "0.62"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+# CLAUDE.md: no unwrap/expect outside tests, no println!/dbg!, SAFETY comment on every unsafe block.
+dbg_macro = "warn"
+expect_used = "warn"
+print_stderr = "warn"
+print_stdout = "warn"
+undocumented_unsafe_blocks = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "unwind" # workers catch panics with catch_unwind; never switch to "abort"
+strip = true

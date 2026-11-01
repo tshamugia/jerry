@@ -1,0 +1,16 @@
+[package]
+name = "jerry-win"
+description = "Jerry's Windows integration: the only crate that touches Shell, COM and OLE."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+windows = { workspace = true, features = [
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+] }
+
+[lints]
+workspace = true

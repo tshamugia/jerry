@@ -1,0 +1,28 @@
+[package]
+name = "jerry"
+description = "Jerry, a fast keyboard-first file manager for Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+default-run = "jerry"
+
+[lib]
+# Not "jerry": a lib and a bin with the same name clash on Windows (cargo#8519).
+name = "jerry_app"
+
+[build-dependencies]
+tauri-build = { workspace = true }
+
+[dependencies]
+jerry-core = { workspace = true }
+jerry-win = { workspace = true }
+serde = { workspace = true }
+specta = { workspace = true }
+specta-typescript = { workspace = true }
+tauri = { workspace = true }
+tauri-specta = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
