@@ -6,6 +6,11 @@
 /// Version of the core crate (the workspace version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Throwaway: proves CI fails on a clippy warning (#9). Reverted in the next commit.
+pub fn ci_red_probe() -> std::path::PathBuf {
+    std::env::current_dir().unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
