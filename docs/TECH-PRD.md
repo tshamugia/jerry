@@ -2,7 +2,7 @@
 
 ტექნიკური სპეციფიკაცია · Oct 31, 2026 · @Tengo
 
-> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 01.11.2026).
+> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 02.11.2026).
 
 ## მიმოხილვა
 
@@ -88,7 +88,7 @@ UI ბირთვს ბრძანებებს უგზავნის, �
 
 | Thread / pool | რას აკეთებს | რატომ აქ |
 | --- | --- | --- |
-| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება |
+| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება. `OleInitialize` `setup`-ში იძახება: wry მხოლოდ `CoInitializeEx`-ს იძახებს. Modal loop-ები (drag, context menu) `async` ბრძანებიდან `run_on_main_thread`-ით ეშვება: sync ბრძანება WebView2-ის IPC callback-ში სრულდება |
 | Shell pool (2–4 STA thread) | აიკონები, thumbnail-ები, `IFileOperation`, Shell თვისებები, OneDrive სტატუსი | Shell extension-ები STA-ს მოითხოვს; timeout იცავს, რომ ერთმა extension-მა არაფერი გაყინოს |
 | IO pool | listing, watcher, კოპირება, ZIP | ბლოკირებადი IO UI-ს და IPC-ს არ აჩერებს |
 | ტრანსფერის worker-ები | ერთი worker თითო ფიზიკურ დისკზე ან ქსელურ სერვერზე | ერთ დისკზე თანმიმდევრულად, სხვადასხვაზე პარალელურად (PRD) |
@@ -220,7 +220,7 @@ Windows-თან ყველა შეხება ერთ crate-შია, 
 
 ### Clipboard
 
-- Copy და Cut: Shell data object (`SHCreateDataObject`) CF\_HDROP-ით და Shell IDList Array-ით. Cut-ზე ემატება `Preferred DropEffect = MOVE`. Jerry-ს დახურვისას `OleFlushClipboard`, რომ შიგთავსი დარჩეს.
+- Copy და Cut: Explorer-ის Shell data object, CF\_HDROP-ით და Shell IDList Array-ით: `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)`, ანუ მშობელი საქაღალდის `GetUIObjectOf`. `SHCreateDataObject` ცარიელ ობიექტს აბრუნებს და არ გამოიყენება (spike #3). Cut-ზე ემატება `Preferred DropEffect = MOVE`. Jerry-ს დახურვისას `OleFlushClipboard`, რომ შიგთავსი დარჩეს.
 - Paste: CF\_HDROP + `Preferred DropEffect`. Explorer-იდან ამოჭრილის გადატანის შემდეგ იწერება `Paste Succeeded`.
 - Virtual files (`FileGroupDescriptorW` + `FileContents`): Outlook-ის attachment ინახება ფაილად.
 - Paste as: სურათი (PNG ან CF\_DIBV5) → .png, ტექსტი → .txt.
@@ -230,8 +230,8 @@ Windows-თან ყველა შეხება ერთ crate-შია, 
 
 Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შიგნითაც და გარეთაც. ამიტომ Jerry-დან გადათრეული ფაილი ყველა პროგრამისთვის Explorer-ის ფაილივია.
 
-- **გადათრევა Jerry-დან:** UI ამჩნევს მაუსის მოძრაობას ზღვარზე მეტად და იძახებს `drag_start(ids)`-ს. მთავარ thread-ზე ეშვება `SHDoDragDrop` Shell data object-ით; drag image და რაოდენობის ბეჯი Windows-ისაა.
-- **მიღება:** საკუთარი `IDropTarget` WebView2-ის ფანჯარაზე; Tauri-ს ჩაშენებული drop handler გამორთულია (`dragDropEnabled: false`).
+- **გადათრევა Jerry-დან:** UI ამჩნევს მაუსის მოძრაობას ზღვარზე მეტად და იძახებს `drag_start(ids)`-ს. ეს `async` ბრძანებაა: tokio pool-იდან `run_on_main_thread` drag-ს event loop-ში აგზავნის, ასე modal loop მთავარ thread-ზე ეშვება, WebView2-ის IPC callback-ის გარეთ. იქ ეშვება `SHDoDragDrop` Explorer-ის Shell data object-ით (იხ. Clipboard) და default drop source-ით; drag image და რაოდენობის ბეჯი Windows-ისაა. გვერდი drag-ის შემდეგ `pointerup`-ს არ იღებს, ამიტომ UI drag-ის მდგომარეობას `drag_start`-ის დასრულებისას ასუფთავებს. შემოწმებულია spike #3-ით: Explorer, Desktop, Outlook, Telegram, Chrome და AutoCAD ფაილს ისე იღებს, როგორც Explorer-იდან.
+- **მიღება:** საკუთარი `IDropTarget` WebView2-ის ფანჯარაზე; Tauri-ს ჩაშენებული drop handler გამორთულია (`dragDropEnabled: false`). ამ დროს WebView2-ის საკუთარი drop target ისევ ჩართულია (`AllowExternalDrop`), ამიტომ ისიც ითიშება. Drag image სამიზნეზე მხოლოდ `IDropTargetHelper`-ით ჩანს.
 - **სამიზნის პოვნა:** OLE drag-ის დროს WebView2 მაუსის მოვლენებს ვერ იღებს. ამიტომ Rust აგზავნის `dnd:over {x, y, keys}`-ს, UI კი `elementFromPoint`-ით პოულობს სამიზნეს (საქაღალდე, ტაბი, breadcrumb, sidebar) და აბრუნებს მოქმედებას.
 - **`DragOver`** სინქრონულად აბრუნებს UI-ს ბოლო პასუხს. ერთი კადრის დაგვიანება მისაღებია.
 - **Drop description** ("Move to Drawings"): `DROPDESCRIPTION` + `IDropTargetHelper`, ტექსტი UI-დან მოდის.
@@ -505,6 +505,8 @@ Jerry ვრცელდება NSIS ინსტალერით, მომ
 
 Spike-ის კოდი ცალკე branch-ზე რჩება. შედეგები და არჩეული ტექნიკები ამ დოკუმენტში ჩაიწერება.
 
+**#3 Drag & drop გარეთ:** გავლილია 02.11.2026 ([#13](https://github.com/tshamugia/jerry/issues/13#issuecomment-6563710057)). ექვსივე პროგრამა ფაილს ისე იღებს, როგორც Explorer-იდან; fallback (გამჭვირვალე ფანჯარა) საჭირო არ გახდა. ტექნიკა «Drag & drop», «Clipboard» და «Thread-ების მოდელი» სექციებშია.
+
 ### ეტაპები
 
 1. **v0.1 საფუძველი.** Scaffold (Tauri, React, workspace-ები, CI). ფანჯარა ორი პანელით (ნაგულისხმევი) და ტაბებით სათაურის ზოლში; F3 ერთ პანელზე გადართავს. Listing, watcher, დალაგება, Details ხედი, მონიშვნა. ბრძანებების რეესტრი და keymap. Breadcrumbs და მისამართის ზოლი. Sidebar (ფავორიტები, დისკები). ახალი საქაღალდე, გადარქმევა, Recycle Bin. Clipboard. სწრაფი ფილტრი. Status bar. SQLite (პარამეტრები, სესია). ერთი ეგზემპლარი. ლოგები. ინსტალერი და updater.
@@ -519,7 +521,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 | რისკი | რას აზიანებს | შემცირება |
 | --- | --- | --- |
-| OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3–4; საჭიროებისას გამჭვირვალე native ფანჯარა drag-ის დროს |
+| OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) დარჩა. საჭიროებისას გამჭვირვალე native ფანჯარა drag-ის დროს |
 | Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7; native hit-test |
 | მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
