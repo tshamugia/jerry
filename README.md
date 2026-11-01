@@ -43,3 +43,7 @@ Development follows the phases in the PRD. Each phase ends with a version that i
 | v1.0 Full | Batch rename, ZIP, command palette, Windows context menu, settings, global hotkey, Open in Jerry, OneDrive, Recycle Bin view, multiple windows |
 
 The ordered task list for each phase lives in its epic issue.
+
+## License
+
+Jerry is licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE). The license covers the code, not the name "Jerry" or its logo.
