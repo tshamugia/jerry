@@ -1,17 +1,43 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { render, screen } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { expect, test } from "vitest";
+import type { FrameState } from "../ipc";
 import { App } from "./App";
+import { CaptionButtons } from "./CaptionButtons";
 
-test("shows the window and the version from the core", async () => {
+test("attaches the frame before showing the window", async () => {
   const calls: string[] = [];
   mockIPC((cmd) => {
     calls.push(cmd);
-    return cmd === "app_version" ? "1.2.3" : undefined;
+    return cmd === "title_bar_attach" ? { mica: true, snapLayouts: true } : undefined;
   });
 
   render(<App />);
 
-  expect(await screen.findByText("Version 1.2.3")).toBeInTheDocument();
-  expect(calls).toContain("app_ready");
+  await waitFor(() => expect(calls).toContain("app_ready"));
+  expect(calls.indexOf("title_bar_attach")).toBeLessThan(calls.indexOf("app_ready"));
+  expect(calls).toContain("title_bar_set_buttons");
+  expect(document.documentElement.dataset.backdrop).toBe("mica");
 });
+
+test("draws caption buttons from the native state", () => {
+  mockIPC(() => undefined);
+  const state: FrameState = { hovered: "close", pressed: null, maximized: true, active: true };
+
+  const { container, rerender } = render(<CaptionButtons state={state} />);
+
+  expect(caption(container, "Close")).toHaveAttribute("data-look", "hover");
+  expect(caption(container, "Restore")).toHaveAttribute("data-look", "rest");
+
+  // Held on maximize but moved off it: nothing lights up.
+  rerender(<CaptionButtons state={{ ...state, hovered: "minimize", pressed: "maximize" }} />);
+  expect(caption(container, "Restore")).toHaveAttribute("data-look", "rest");
+  expect(caption(container, "Minimize")).toHaveAttribute("data-look", "rest");
+
+  rerender(<CaptionButtons state={{ ...state, hovered: null, active: false }} />);
+  expect(caption(container, "Minimize")).toHaveAttribute("data-look", "inactive");
+});
+
+function caption(container: HTMLElement, label: string): Element | null {
+  return container.querySelector(`[data-label="${label}"]`);
+}

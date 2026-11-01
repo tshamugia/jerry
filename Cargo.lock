@@ -1528,6 +1528,7 @@ version = "0.0.0"
 name = "jerry-win"
 version = "0.0.0"
 dependencies = [
+ "tracing",
  "windows",
 ]
 

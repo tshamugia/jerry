@@ -32,6 +32,11 @@
   --color-nav-sel: var(--jerry-nav-sel);
   --color-sel-inactive: var(--jerry-sel-inactive);
   --color-focus: var(--jerry-focus);
+  --color-subtle-hover: var(--jerry-subtle-hover);
+  --color-subtle-pressed: var(--jerry-subtle-pressed);
+  --color-caption-close: var(--jerry-caption-close);
+  --color-caption-close-pressed: var(--jerry-caption-close-pressed);
+  --color-on-caption-close: var(--jerry-on-caption-close);
   --color-track: var(--jerry-track);
   --color-red: var(--jerry-red);
   --color-green: var(--jerry-green);
@@ -73,6 +78,8 @@
   /* Fixed layout sizes and density-dependent row heights (h-titlebar, w-sidebar, h-row, ...). */
   --spacing-titlebar: var(--jerry-titlebar-h);
   --spacing-tab: var(--jerry-tab-h);
+  --spacing-tab-active: var(--jerry-tab-w-active);
+  --spacing-tab-inactive: var(--jerry-tab-w);
   --spacing-caption-btn: var(--jerry-caption-btn-w);
   --spacing-sidebar: var(--jerry-sidebar-w);
   --spacing-preview: var(--jerry-preview-w);
@@ -84,6 +91,36 @@
   --spacing-statusbar: var(--jerry-statusbar-h);
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
+}
+
+/*
+ * With Mica on (Windows 11, set by the frame), Mica surfaces stay transparent so the backdrop
+ * shows through. Unlayered, so it beats the token defaults; Windows 10 keeps the flat color.
+ */
+:root[data-backdrop="mica"] {
+  --jerry-mica: transparent;
+}
+
+/*
+ * WebView2 turns `app-region: drag` into a native caption: move, double-click to maximize,
+ * Aero Snap, system menu. Interactive elements inside a drag region opt out with `no-drag`.
+ */
+@utility drag-region {
+  app-region: drag;
+}
+
+@utility no-drag {
+  app-region: no-drag;
+}
+
+/*
+ * The window's columns, shared by the title bar and the body, so the tab strip splits exactly
+ * at the pane divider. --frame-left / --frame-right are the pane shares (`fr`), set by the UI.
+ */
+@utility frame-columns {
+  grid-template-columns:
+    var(--spacing-sidebar) minmax(0, var(--frame-left, 1fr)) 1px
+    minmax(0, var(--frame-right, 1fr)) var(--spacing-preview);
 }
 
 @layer base {

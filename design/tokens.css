@@ -42,6 +42,12 @@
   --jerry-nav-sel: #e1e4e8;       /* selected nav item, pressed segmented button */
   --jerry-sel-inactive: #ebebeb;  /* selection in the inactive pane */
   --jerry-focus: #1a1a1a;         /* 2px focus outline, offset -2px */
+  /* Translucent fills on Mica (caption buttons, inactive tabs). Windows 11 values, not in the canvas. */
+  --jerry-subtle-hover: rgb(0 0 0 / 0.06);
+  --jerry-subtle-pressed: rgb(0 0 0 / 0.04);
+  --jerry-caption-close: #c42b1c;  /* close button hover, both themes */
+  --jerry-caption-close-pressed: rgb(196 43 28 / 0.9);
+  --jerry-on-caption-close: #ffffff;
 
   /* Status */
   --jerry-track: #d7dade;         /* progress and drive-usage track */
@@ -142,6 +148,8 @@
   --jerry-nav-sel: #333333;
   --jerry-sel-inactive: #303030;
   --jerry-focus: #ffffff;
+  --jerry-subtle-hover: rgb(255 255 255 / 0.06);
+  --jerry-subtle-pressed: rgb(255 255 255 / 0.04);
 
   --jerry-track: #484848;
   --jerry-red: #ff99a4;
