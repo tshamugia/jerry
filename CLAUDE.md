@@ -47,15 +47,13 @@ jerry/
   docs/                 PRD, Tech PRD, assets/, adr/, checklists/ (manual test checklists per phase)
 ```
 
-Until the scaffold (#8) lands, only `docs/` and `design/` exist.
-
 Dependency direction: `src-tauri` → `jerry-core`, `jerry-win`. `jerry-core` depends on neither `jerry-win` nor Tauri. When core needs a Shell capability (for example, recycle a replaced file), it defines a trait, `jerry-win` implements it and `src-tauri` wires them together, so core stays testable with fakes.
 
 ## Architecture rules
 
 1. **The UI never touches the file system.** All IO runs in Rust on background threads: IO pool, Shell STA pool (2–4 threads, with timeouts), one transfer worker per physical disk or network server, rayon for search and sort. Never block the main thread or the tokio runtime with IO.
 2. **Tauri lockdown.** Capabilities expose only Jerry's own commands. Never add the `fs`, `shell` or `http` plugins. CSP allows only `self`, `icon:`, `thumb:` and the asset protocol: no `eval`, inline scripts or remote URLs. DevTools only in dev builds. `decorations: false`, `dragDropEnabled: false`.
-3. **IPC has four channels:** commands (`invoke`), streams (Tauri `Channel`) for listing and search, events (`emit`) to all windows, custom protocols (`icon://`, `thumb://`, asset) for binary data. All types come from Rust via tauri-specta into `src/ipc/bindings.ts`; regenerate with `pnpm bindings` and commit the result. Listing batches are columnar; sort orders go as binary `u32` arrays. Progress events at most 10 per second.
+3. **IPC has four channels:** commands (`invoke`), streams (Tauri `Channel`) for listing and search, events (`emit`) to all windows, custom protocols (`icon://`, `thumb://`, asset) for binary data. All types come from Rust via tauri-specta into `src/ipc/bindings.ts`; regenerate with `pnpm bindings` and commit the result. A new command gets `#[tauri::command]` + `#[specta::specta]` and goes into `collect_commands!` in `src-tauri/src/lib.rs`; the UI imports it from `src/ipc`, never from `bindings.ts`. tauri-specta v2 is a release candidate: `specta`, `specta-typescript` and `tauri-specta` stay `=`-pinned and are bumped together. Listing batches are columnar; sort orders go as binary `u32` arrays. Progress events at most 10 per second.
 4. **Paths stay in Rust.** Core keeps the exact `OsString` path; the UI refers to files by `entry_id` or a core-issued path token, and gets path text only for display. Never rebuild an operation's path from a JS string. Core uses `\\?\` long paths; the manifest is `longPathAware`.
 5. **Errors are codes, not text.** Rust returns one shape, `JerryError { code, path, params }` (`AccessDenied`, `NotFound`, `InUse`, `NoSpace`, `InvalidName`, `DeviceGone`, `NoRecycleBin`, `Cancelled`, `Os`). The UI turns the code into English text from `src/strings/` and always offers a next step (Retry, Skip, Show in Explorer).
 6. **COM rules live in `jerry-win`.** OLE, clipboard, drag & drop and the native context menu run on the main STA thread; other Shell calls run on the Shell pool with timeouts, so one bad shell extension can't freeze Jerry.
@@ -82,13 +80,13 @@ Also: never read the content of a cloud-only OneDrive file without a user action
 ## UI rules
 
 - Layout, sizes and colors match the design; behavior and shortcuts match the PRD.
-- Colors, sizes and density come from `design/tokens.css` (`--jerry-*`) mapped into Tailwind's `@theme`. No hard-coded colors or one-off sizes in components.
+- Colors, sizes and density come from `design/tokens.css` (`--jerry-*`) mapped into Tailwind's `@theme` in `src/app/styles.css`. Tailwind's default colors, type sizes, radii and shadows are removed, so only token names exist (`bg-mica`, `bg-pane`, `text-fg-2`, `text-small`, `h-row`, `h-titlebar`, `rounded-ctrl`, `shadow-flyout`). No hard-coded colors or one-off sizes in components; a missing size goes into `@theme` first.
 - The accent color is only for selection, progress, focus and the active-pane bar.
 - File lists are virtualized (TanStack Virtual) with fixed row heights per density (30 / 24 px); row components are memoized so a selection change repaints only changed rows.
 - One command registry (id, title, default shortcut, context, handler) feeds the palette, menus, toolbar, settings and the F1 table. Shortcuts match `KeyboardEvent.code`, so they work on the Georgian layout. WebView2 browser accelerators are off.
 - All user-visible text lives in `src/strings/`. Dates `DD.MM.YYYY HH:mm` by default, numbers and sizes through `Intl`, `tabular-nums` for numbers.
 - File content never runs script: SVG only through `<img>`, Markdown without raw HTML, pdf.js with `isEvalSupported: false`.
-- The window is created hidden and shown after the first render with the theme background (no white flash).
+- The window is created hidden and shown after the first render with the theme background (no white flash): `App` calls `commands.appReady()` once mounted; Rust shows the window anyway after 5 s if that never comes.
 
 ## Performance budgets
 
@@ -113,6 +111,8 @@ Formatting follows `.editorconfig` and `.gitattributes`: LF everywhere except `.
 - Errors through thiserror, logging through tracing. No `println!` or `dbg!` in committed code.
 - No `unwrap()`/`expect()` on IO, OS or IPC results outside tests; propagate a `JerryError`.
 - Every `unsafe` block has a `// SAFETY:` comment.
+- Workspace lints (`Cargo.toml` → `[workspace.lints]`, `clippy.toml`) enforce the above: `unwrap_used`, `expect_used`, `print_*`, `dbg_macro` and `undocumented_unsafe_blocks` warn outside tests and fail CI. Every crate has `[lints] workspace = true`.
+- `src-tauri/build.rs` embeds `jerry.exe.manifest` through the linker into every target, so tests and examples that link Tauri get Common Controls v6 too (without it they die with `STATUS_ENTRYPOINT_NOT_FOUND`).
 
 **TypeScript**
 - `strict` on, no `any`, Biome for lint and format, `tsc --noEmit` clean.
@@ -127,23 +127,24 @@ Formatting follows `.editorconfig` and `.gitattributes`: LF everywhere except `.
 
 ## Commands
 
-Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development with C++" (MSVC v143 + Windows 11 SDK), rustup with the toolchain pinned in `rust-toolchain.toml` (installed automatically on first use), cargo-nextest, Node 24, pnpm 10, WebView2. Check it with `npx @tauri-apps/cli@2 info` (`pnpm tauri info` after #8).
-
-These commands work once the scaffold (#8) lands.
+Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development with C++" (MSVC v143 + Windows 11 SDK), rustup with the toolchain pinned in `rust-toolchain.toml` (installed automatically on first use), cargo-nextest, Node 24, pnpm 10, WebView2. Check it with `pnpm tauri info`. After cloning: `pnpm install`.
 
 | Task | Command |
 | --- | --- |
 | Run the app (UI hot reload) | `pnpm tauri dev` |
-| Build | `pnpm build` |
+| Build (release exe + NSIS installer) | `pnpm build` (`pnpm tauri build --no-bundle` for the exe only) |
 | Lint (Biome, rustfmt, clippy) | `pnpm lint` |
+| Format (Biome, rustfmt) | `pnpm format` |
+| Type check | `pnpm typecheck` |
 | UI tests | `pnpm test` |
-| Rust tests | `cargo nextest run` |
-| Regenerate IPC bindings | `pnpm bindings` |
+| Rust tests | `cargo nextest run --workspace` |
+| Everything CI checks, before a PR | `pnpm check` |
+| Regenerate IPC bindings | `pnpm bindings` (debug runs of the app also refresh them) |
 
 ## Workflow
 
-- Work one issue at a time, in the order of the current epic's task list. Spikes (#11–#18) live on `spike/*` branches and don't merge into `main`; their results go into the Tech PRD.
+- One issue per session, in the order of the current epic's task list. Issues that don't depend on each other (no "დამოკიდებულია" link) and don't touch the same files may run in parallel sessions, each in its own worktree and branch. Spikes (#11–#18) live on `spike/*` branches and don't merge into `main`; their results go into the Tech PRD.
 - One branch per issue from `main`, named `<type>/<issue>-<slug>` (for example `chore/7-dev-env`). One PR per issue with `Closes #N`; merge only with green CI.
 - Conventional Commits in English: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `chore`, `ci`.
-- An issue is done when its "მზადაა, როცა" (acceptance) items are verified, not just when its checklist is ticked. Before opening a PR: rustfmt, clippy, nextest, Biome, `tsc` and Vitest are green and bindings are regenerated.
+- An issue is done when its "მზადაა, როცა" (acceptance) items are verified, not just when its checklist is ticked. Before opening a PR: `pnpm check` is green (rustfmt, clippy, Biome, `tsc`, Vitest, nextest) and `pnpm bindings` leaves no diff.
 - If issues are added or reordered, update the epic's task list too.

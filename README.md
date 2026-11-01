@@ -12,6 +12,16 @@ A fast, keyboard-first file manager for Windows 10/11. Jerry works on your real 
 - **Storage:** one local SQLite file (rusqlite, WAL)
 - **Platform:** Windows 10 22H2+ and Windows 11, x64 only. Runs with normal user rights, no admin, no telemetry.
 
+## Development
+
+Prerequisites: Visual Studio Build Tools 2022 ("Desktop development with C++"), rustup (the toolchain in `rust-toolchain.toml` installs itself), cargo-nextest, Node 24, pnpm 10 and WebView2.
+
+```bash
+pnpm install
+pnpm tauri dev   # run the app with UI hot reload
+pnpm check       # lint, type check, UI and Rust tests (what CI runs)
+```
+
 ## Documents
 
 The product documents are written in Georgian. The app's interface is English-only.

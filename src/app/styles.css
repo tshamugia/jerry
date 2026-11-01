@@ -1,0 +1,121 @@
+@import "tailwindcss";
+@import "../../design/tokens.css";
+
+/*
+ * Design tokens (design/tokens.css) mapped into Tailwind. Tailwind's default colors and type
+ * sizes are removed, so components can only use Jerry's. `inline` keeps the var() references,
+ * so theme, accent and density switch at runtime without a rebuild.
+ */
+@theme inline {
+  --color-*: initial;
+  --color-accent: var(--jerry-accent);
+  --color-accent-text: var(--jerry-accent-text);
+  --color-on-accent: var(--jerry-on-accent);
+  --color-sel: var(--jerry-sel);
+  --color-mica: var(--jerry-mica);
+  --color-bar: var(--jerry-bar);
+  --color-pane: var(--jerry-pane);
+  --color-ctrl: var(--jerry-ctrl);
+  --color-ctrl-border: var(--jerry-ctrl-border);
+  --color-stroke: var(--jerry-stroke);
+  --color-flyout: var(--jerry-flyout);
+  --color-flyout-border: var(--jerry-flyout-border);
+  --color-preview-well: var(--jerry-preview-well);
+  --color-kbd: var(--jerry-kbd);
+  --color-scrim: var(--jerry-scrim);
+  --color-tab-sep: var(--jerry-tab-sep);
+  --color-fg: var(--jerry-text);
+  --color-fg-2: var(--jerry-text-2);
+  --color-fg-3: var(--jerry-text-3);
+  --color-disabled: var(--jerry-disabled);
+  --color-hover: var(--jerry-hover);
+  --color-nav-sel: var(--jerry-nav-sel);
+  --color-sel-inactive: var(--jerry-sel-inactive);
+  --color-focus: var(--jerry-focus);
+  --color-track: var(--jerry-track);
+  --color-red: var(--jerry-red);
+  --color-green: var(--jerry-green);
+  --color-on-green: var(--jerry-on-green);
+  --color-onedrive: var(--jerry-onedrive);
+  --color-folder-back: var(--jerry-folder-back);
+  --color-folder-front: var(--jerry-folder-front);
+  --color-page-fill: var(--jerry-page-fill);
+  --color-page-stroke: var(--jerry-page-stroke);
+  --color-img-fill: var(--jerry-img-fill);
+  --color-img-stroke: var(--jerry-img-stroke);
+  --color-img-placeholder: var(--jerry-img-placeholder);
+  --color-badge-dwg: var(--jerry-badge-dwg);
+  --color-badge-pdf: var(--jerry-badge-pdf);
+  --color-badge-xlsx: var(--jerry-badge-xlsx);
+
+  --font-*: initial;
+  --font-sans: var(--jerry-font);
+
+  /* Type scale from design/README.md ("Look"). Body follows density (13 / 12 px). */
+  --text-*: initial;
+  --text-caption: 11px;
+  --text-small: 12px;
+  --text-body: var(--jerry-font-size);
+  --text-title: 14px;
+  --text-input: 15px;
+  --text-page: 28px;
+
+  --radius-*: initial;
+  --radius-ctrl: var(--jerry-radius-ctrl);
+  --radius-kbd: var(--jerry-radius-kbd);
+  --radius-tab: var(--jerry-radius-tab);
+  --radius-flyout: var(--jerry-radius-flyout);
+
+  --shadow-*: initial;
+  --shadow-flyout: var(--jerry-shadow);
+  --shadow-dialog: var(--jerry-shadow-lg);
+
+  /* Fixed layout sizes and density-dependent row heights (h-titlebar, w-sidebar, h-row, ...). */
+  --spacing-titlebar: var(--jerry-titlebar-h);
+  --spacing-tab: var(--jerry-tab-h);
+  --spacing-caption-btn: var(--jerry-caption-btn-w);
+  --spacing-sidebar: var(--jerry-sidebar-w);
+  --spacing-preview: var(--jerry-preview-w);
+  --spacing-toolbar-btn: var(--jerry-toolbar-btn);
+  --spacing-address: var(--jerry-address-h);
+  --spacing-filter: var(--jerry-filter-h);
+  --spacing-col-header: var(--jerry-col-header-h);
+  --spacing-transfer: var(--jerry-transfer-h);
+  --spacing-statusbar: var(--jerry-statusbar-h);
+  --spacing-row: var(--jerry-row-h);
+  --spacing-nav: var(--jerry-nav-h);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background-color: var(--color-mica);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--jerry-line-height);
+    /* A desktop app: text is selectable only in inputs. */
+    user-select: none;
+    cursor: default;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -2px;
+  }
+}
