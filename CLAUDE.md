@@ -45,6 +45,8 @@ jerry/
                         drag & drop, context menu, OneDrive, drives, registry, toast
   design/               UI spec, tokens.css, design canvas snapshot
   docs/                 PRD, Tech PRD, assets/, adr/, checklists/ (manual test checklists per phase)
+  .github/              CI (workflows/ci.yml: what `pnpm check` runs + bindings check, windows-latest),
+                        PR title check (workflows/pr-title.yml), PR template
 ```
 
 Dependency direction: `src-tauri` → `jerry-core`, `jerry-win`. `jerry-core` depends on neither `jerry-win` nor Tauri. When core needs a Shell capability (for example, recycle a replaced file), it defines a trait, `jerry-win` implements it and `src-tauri` wires them together, so core stays testable with fakes.
