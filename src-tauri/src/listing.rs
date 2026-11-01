@@ -123,6 +123,10 @@ pub struct ListingStats {
     pub bytes: f64,
     pub first_batch_ms: f64,
     pub list_ms: f64,
+    /// Time the listing thread spent in batch callbacks (encode + send).
+    pub sink_ms: f64,
+    /// Of that, time inside `Channel::send`.
+    pub send_ms: f64,
     pub keys_ms: f64,
     pub name_sort_ms: f64,
     pub ranks_ms: f64,
@@ -153,8 +157,8 @@ impl Listings {
 
 /// Where a listing job sends its results.
 trait Sink: Send + 'static {
-    /// Sends entries `range`; returns the bytes sent (0 if unknown).
-    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> usize;
+    /// Sends entries `range`; returns the bytes sent (0 if unknown) and the ms spent in `send`.
+    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> (usize, f64);
     fn order(&mut self, order: &[u32], rust_ms: f64);
     fn done(&mut self, stats: &ListingStats);
     fn error(&mut self, error: IpcError);
@@ -171,11 +175,12 @@ impl BinarySink {
 }
 
 impl Sink for BinarySink {
-    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> usize {
+    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> (usize, f64) {
         let bytes = encode_batch(entries, range);
         let len = bytes.len();
+        let started = Instant::now();
         self.send(bytes);
-        len
+        (len, ms(started))
     }
 
     fn order(&mut self, order: &[u32], rust_ms: f64) {
@@ -183,7 +188,7 @@ impl Sink for BinarySink {
     }
 
     fn done(&mut self, stats: &ListingStats) {
-        let mut out = Vec::with_capacity(16 + 8 * 8);
+        let mut out = Vec::with_capacity(16 + 10 * 8);
         for value in [MSG_DONE, stats.count, stats.batches, 0] {
             out.extend_from_slice(&value.to_le_bytes());
         }
@@ -191,6 +196,8 @@ impl Sink for BinarySink {
             stats.bytes,
             stats.first_batch_ms,
             stats.list_ms,
+            stats.sink_ms,
+            stats.send_ms,
             stats.keys_ms,
             stats.name_sort_ms,
             stats.ranks_ms,
@@ -298,8 +305,9 @@ impl JsonSink {
 }
 
 impl Sink for JsonSink {
-    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> usize {
-        self.send(JsonEvent::Batch(JsonBatch {
+    fn batch(&mut self, entries: &Entries, range: Range<usize>) -> (usize, f64) {
+        // Serialization to JSON happens inside `Channel::send`, so it counts as send time.
+        let event = JsonEvent::Batch(JsonBatch {
             first_id: range.start as u32,
             names: range
                 .clone()
@@ -311,8 +319,10 @@ impl Sink for JsonSink {
                 .map(|id| filetime_to_unix_ms(entries.modified[id]))
                 .collect(),
             attributes: range.map(|id| entries.attributes[id]).collect(),
-        }));
-        0
+        });
+        let started = Instant::now();
+        self.send(event);
+        (0, ms(started))
     }
 
     fn order(&mut self, order: &[u32], rust_ms: f64) {
@@ -335,6 +345,25 @@ fn ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1000.0
 }
 
+/// Spike experiment: `JERRY_SPIKE_HIGH_QOS=1` opts the listing thread and the rayon pool out of
+/// Windows power throttling.
+fn high_qos() -> bool {
+    std::env::var_os("JERRY_SPIKE_HIGH_QOS").is_some()
+}
+
+/// Sets up the rayon pool (with the QoS experiment if asked for). Call once at startup.
+pub fn init_pools() {
+    if !high_qos() {
+        return;
+    }
+    let built = rayon::ThreadPoolBuilder::new()
+        .start_handler(|_| {
+            jerry_win::high_qos_thread();
+        })
+        .build_global();
+    tracing::info!(ok = built.is_ok(), "rayon pool with high QoS");
+}
+
 /// Starts a listing of the synthetic folder for `count` on its own IO thread; returns its id.
 fn start(
     app: AppHandle,
@@ -352,6 +381,9 @@ fn start(
     std::thread::Builder::new()
         .name(format!("jerry-listing-{id}"))
         .spawn(move || {
+            if high_qos() {
+                jerry_win::high_qos_thread();
+            }
             let job = AssertUnwindSafe(|| run(&app, id, count, &cancel, sink));
             if catch_unwind(job).is_err() {
                 tracing::error!(id, "listing job panicked");
@@ -376,7 +408,11 @@ fn run(app: &AppHandle, id: u32, count: u32, cancel: &AtomicBool, mut sink: impl
             stats.first_batch_ms = ms(started);
         }
         stats.batches += 1;
-        stats.bytes += sink.batch(entries, range) as f64;
+        let in_sink = Instant::now();
+        let (bytes, send_ms) = sink.batch(entries, range);
+        stats.sink_ms += ms(in_sink);
+        stats.send_ms += send_ms;
+        stats.bytes += bytes as f64;
     });
     let entries = match listed {
         Ok(entries) => entries,

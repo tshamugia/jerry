@@ -55,6 +55,7 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 
 /// Builds and runs the app until its last window closes.
 pub fn run() -> tauri::Result<()> {
+    listing::init_pools();
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.

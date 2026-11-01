@@ -143,14 +143,14 @@ if (out) writeFileSync(out, JSON.stringify(results, null, 2));
 
 print(`\n${label}: median of ${RUNS} runs, ms`);
 print(
-  "entries  format | first batch  first rows  sorted paint | rust: list  index  order | batches   MB   js decode",
+  "entries  format | first batch  first rows  sorted paint | rust: list   sink    send   index  order | batches   MB   js decode",
 );
 for (const [count, r] of Object.entries(results.sizes)) {
   for (const format of ["binary", "json"]) {
     const runs = r[format];
     const m = (pick) => median(runs.map(pick));
     print(
-      `${count.padStart(7)}  ${format.padEnd(6)} | ${f(m((t) => t.firstBatchMs))}     ${f(m((t) => t.firstRowsMs))}      ${f(m((t) => t.sortedPaintMs))} | ${f(m((t) => t.rust.listMs))} ${f(m((t) => t.rust.keysMs + t.rust.nameSortMs + t.rust.ranksMs))} ${f(m((t) => t.rust.orderMs))} | ${String(m((t) => t.rust.batches)).padStart(7)} ${f(m((t) => t.rust.bytes) / 1e6, 2)} ${f(m((t) => t.decodeMs))}`,
+      `${count.padStart(7)}  ${format.padEnd(6)} | ${f(m((t) => t.firstBatchMs))}     ${f(m((t) => t.firstRowsMs))}      ${f(m((t) => t.sortedPaintMs))} | ${f(m((t) => t.rust.listMs))} ${f(m((t) => t.rust.sinkMs))} ${f(m((t) => t.rust.sendMs))} ${f(m((t) => t.rust.keysMs + t.rust.nameSortMs + t.rust.ranksMs))} ${f(m((t) => t.rust.orderMs))} | ${String(m((t) => t.rust.batches)).padStart(7)} ${f(m((t) => t.rust.bytes) / 1e6, 2)} ${f(m((t) => t.decodeMs))}`,
     );
   }
 }

@@ -60,7 +60,7 @@ export function decodeMessage(buffer: ArrayBuffer): ListingMessage {
         rustMs: new Float64Array(buffer, 8, 1)[0] ?? 0,
       };
     case MSG_DONE: {
-      const f = new Float64Array(buffer, 16, 8);
+      const f = new Float64Array(buffer, 16, 10);
       return {
         kind: "done",
         stats: {
@@ -69,11 +69,13 @@ export function decodeMessage(buffer: ArrayBuffer): ListingMessage {
           bytes: f[0] ?? 0,
           firstBatchMs: f[1] ?? 0,
           listMs: f[2] ?? 0,
-          keysMs: f[3] ?? 0,
-          nameSortMs: f[4] ?? 0,
-          ranksMs: f[5] ?? 0,
-          orderMs: f[6] ?? 0,
-          totalMs: f[7] ?? 0,
+          sinkMs: f[3] ?? 0,
+          sendMs: f[4] ?? 0,
+          keysMs: f[5] ?? 0,
+          nameSortMs: f[6] ?? 0,
+          ranksMs: f[7] ?? 0,
+          orderMs: f[8] ?? 0,
+          totalMs: f[9] ?? 0,
         },
       };
     }

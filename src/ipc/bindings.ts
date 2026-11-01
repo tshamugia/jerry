@@ -90,6 +90,10 @@ export type ListingStats = {
 	bytes: number | null,
 	firstBatchMs: number | null,
 	listMs: number | null,
+	/**  Time the listing thread spent in batch callbacks (encode + send). */
+	sinkMs: number | null,
+	/**  Of that, time inside `Channel::send`. */
+	sendMs: number | null,
 	keysMs: number | null,
 	nameSortMs: number | null,
 	ranksMs: number | null,
