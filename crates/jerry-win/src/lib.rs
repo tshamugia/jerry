@@ -5,11 +5,35 @@
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
 //! timeouts.
 
+pub mod process;
+
 use windows::Wdk::System::SystemServices::RtlGetVersion;
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
+use windows::core::w;
 
 /// First Windows 11 build. Snap Layouts and Mica need it.
 pub const WINDOWS_11_BUILD: u32 = 22_000;
+
+/// Whether Windows' app mode is dark ("Choose your app mode" in Settings → Colors), read from
+/// HKCU so a window can get its theme background before any web content loads.
+pub fn apps_use_dark_theme() -> bool {
+    let mut value = 1u32;
+    let mut size = size_of::<u32>() as u32;
+    // SAFETY: `value` is a writable u32 and `size` holds its size, as RRF_RT_REG_DWORD needs.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+            w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut value).cast()),
+            Some(&mut size),
+        )
+    };
+    status.is_ok() && value == 0
+}
 
 /// The Windows build number (for example 26100), read with `RtlGetVersion`, which unlike
 /// `GetVersionExW` doesn't depend on the calling executable's compatibility manifest.

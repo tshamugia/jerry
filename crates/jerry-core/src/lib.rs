@@ -3,6 +3,11 @@
 //! Plain Win32 file APIs only. No COM, no Tauri, no UI: everything here is testable on temp
 //! folders. Shell capabilities come in through traits that `jerry-win` implements.
 
+pub mod error;
+pub mod listing;
+pub mod sort;
+pub mod synth;
+
 /// Version of the core crate (the workspace version).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

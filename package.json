@@ -21,9 +21,11 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && cargo nextest run --workspace"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "3.14.25",
     "@tauri-apps/api": "2.12.4",
     "react": "19.3.1",
-    "react-dom": "19.3.1"
+    "react-dom": "19.3.1",
+    "zustand": "5.0.16"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",

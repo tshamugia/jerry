@@ -4,10 +4,20 @@ description = "Jerry's file core: listing, sorting, transfers, undo, search, sto
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
 publish.workspace = true
 
 [dependencies]
+rayon = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+windows = { workspace = true, features = ["Win32_System_Threading", "Win32_UI_Shell"] }
 
 [lints]
 workspace = true
