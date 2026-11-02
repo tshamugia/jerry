@@ -1,9 +1,13 @@
 //! Jerry's Windows integration: icons, thumbnails, Recycle Bin, clipboard, drag & drop,
-//! context menu, OneDrive, drives, registry and toast.
+//! context menu, OneDrive, drives, registry and toast, plus the native parts of the window frame
+//! (caption-button hit-testing, Mica).
 //!
 //! This is the only crate that touches Shell, COM or OLE. OLE, clipboard, drag & drop and the
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
 //! timeouts.
+
+pub mod backdrop;
+pub mod title_bar;
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
