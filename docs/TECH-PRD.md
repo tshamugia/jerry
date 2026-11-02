@@ -75,7 +75,7 @@ Spike-მა (02–03.11.2026) ხუთი ტექნიკა შეცვ�
 | პაკეტები | pnpm workspace + Cargo workspace ერთ repo-ში |
 | Lint და ფორმატი | Biome (TS), rustfmt + clippy (Rust) |
 | ტესტები | cargo-nextest, proptest, criterion, Vitest + Testing Library, WebdriverIO + tauri-driver |
-| CI და გამოშვება | GitHub Actions (windows-latest), tauri-action |
+| CI და გამოშვება | GitHub Actions (windows-latest), tauri-action, git-cliff (CHANGELOG) |
 | ინსტალერი | NSIS, მომხმარებლის დონეზე |
 
 ## არქიტექტურა
@@ -488,11 +488,11 @@ Jerry ვრცელდება NSIS ინსტალერით, მომ
 
 - **დეველოპმენტი:** `pnpm tauri dev`; UI-ზე hot reload, Rust-ის ცვლილებაზე ახალი build.
 - **Release profile:** `lto = "thin"`, `codegen-units = 1`, `strip = true`. `panic = "unwind"` რჩება, რომ worker-ების panic დაიჭიროს. ახალი exe-ს პირველი გაშვება ~2 წმ-ით ნელია: Defender მას გაშვებამდე ამოწმებს (spike #1), ამიტომ exe-ს ზომაც (ახლა 8.9 MB) მნიშვნელოვანია.
-- **ინსტალერი:** NSIS, `installMode: currentUser`, დაყენება `%LOCALAPPDATA%\Programs\Jerry`-ში. WebView2 იყენება `downloadBootstrapper`-ით, თუ Windows 10-ზე არ არის.
-- **რეესტრი:** "Open in Jerry" და autostart აპიდან ჩაირთვება პარამეტრებით. Uninstall შლის ყველა ჩანაწერს.
+- **ინსტალერი:** NSIS, `installMode: currentUser`, დაყენება `%LOCALAPPDATA%\Programs\Jerry`-ში, admin-ის გარეშე. Tauri-ს ნაგულისხმევ `%LOCALAPPDATA%\Jerry`-ში Jerry-ის ლოგებია, ამიტომ საქაღალდეს `src-tauri/windows/installer-hooks.nsh` ცვლის. WebView2 იყენება `downloadBootstrapper`-ით, თუ Windows 10-ზე არ არის. Start menu-ს shortcut-ის AUMID არის identifier, `io.github.tshamugia.jerry` (toast-ებისთვის). Publisher: TS.
+- **რეესტრი:** "Open in Jerry" და autostart აპიდან ჩაირთვება პარამეტრებით. Jerry და მისი ინსტალერი მხოლოდ HKCU-ში წერს: `Software\TS\Jerry` (ინსტალაციის საქაღალდე), `Software\Microsoft\Windows\CurrentVersion\Uninstall\Jerry`, `Jerry` მნიშვნელობა `…\CurrentVersion\Run`-სა და `…\Explorer\StartupApproved\Run`-ში, `Software\Classes\Directory\shell\Jerry`, `…\Directory\Background\shell\Jerry`, `…\Drive\shell\Jerry` და toast-ების პარამეტრები `…\Notifications\Settings\io.github.tshamugia.jerry`. Uninstall ყველას შლის, განახლებისას (`/UPDATE`) კი ინახავს. ხელით გაშვებული ახალი ინსტალერი ნაგულისხმევად ძველ ვერსიას ჯერ შლის ამ ჩანაწერებთან ერთად, ამიტომ Jerry მათ გაშვებისას პარამეტრებიდან აღადგენს. ახალი ჩანაწერი ამ სიასა და `installer-hooks.nsh`-ში ემატება. Uninstall-ის "Delete the application data" `%APPDATA%\Jerry`-სა და `%LOCALAPPDATA%\Jerry`-საც შლის.
 - **განახლება:** `tauri-plugin-updater`, პაკეტები ხელმოწერილია updater-ის გასაღებით. `latest.json` და ფაილები საჯარო repo-ს GitHub Releases-ზეა. შემოწმება გაშვებისას და დღეში ერთხელ; ახალი ვერსიისას ჩანს შეტყობინება ცვლილებების სიით და Update ღილაკით, როგორც სხვა აპებში. ინსტალაცია მხოლოდ მომხმარებლის თანხმობით; შემდეგ Jerry თავიდან იხსნება (tauri-plugin-process) და სესია აღდგება. შემოწმების გამორთვა პარამეტრებშია.
 - **Code signing:** Jerry საჯაროა, ამიტომ release build-ები და ინსტალერი ხელმოწერილია code signing სერტიფიკატით, რომ SmartScreen-მა არ გააფრთხილოს. იგივე სერტიფიკატი ხელს აწერს sparse package-ს. საჯარო გამოშვებამდე სახელი და აიკონი სავაჭრო ნიშანზე მოწმდება (PRD).
-- **ვერსიები:** SemVer, Conventional Commits, CHANGELOG ავტომატურად commit-ებიდან.
+- **ვერსიები:** SemVer, Conventional Commits. ერთადერთი ვერსია root `Cargo.toml`-ის `[workspace.package]`-შია. CHANGELOG.md-ს git-cliff ადგენს commit-ებიდან (`cliff.toml`): მხოლოდ breaking ცვლილებები, feat, fix და perf, რადგან იგივე ტექსტი Release-ის აღწერასა და განახლების შეტყობინებაში ჩანს. გამოშვება: PR `chore(release): vX.Y.Z` (ვერსია და `pnpm changelog --tag vX.Y.Z`), შემდეგ tag `vX.Y.Z` `main`-ზე. `.github/workflows/release.yml` ამოწმებს, რომ tag ვერსიასა და CHANGELOG-ს ემთხვევა, tauri-action-ით აგებს ინსტალერს და ქმნის GitHub Release-ს. Tag pre-release ნაწილით (`v0.1.0-rc.1`) pre-release-ს ქმნის: `/releases/latest` მასზე არ მიუთითებს, ამიტომ updater მას არ სთავაზობს.
 - **პლატფორმა:** მხოლოდ x64; ARM64 build არ იგეგმება.
 
 ## Spike და ეტაპები
