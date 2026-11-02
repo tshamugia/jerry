@@ -5,6 +5,9 @@
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
 //! timeouts.
 
+pub mod context_menu;
+pub mod main_thread;
+
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
@@ -22,6 +25,16 @@ pub fn os_build() -> Option<u32> {
     // SAFETY: `info` is a valid, writable OSVERSIONINFOW with its size field set, as required.
     let status = unsafe { RtlGetVersion(&mut info) };
     status.is_ok().then_some(info.dwBuildNumber)
+}
+
+/// Shows a window without activating it (`SW_SHOWNOACTIVATE`). Test runs use it, so a Jerry
+/// they launch doesn't take the keyboard focus from the user's app.
+pub fn show_inactive(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+    // SAFETY: a window handle; a stale one only fails the call. The result is the previous
+    // visibility, not an error.
+    let _ = unsafe { ShowWindow(HWND(hwnd as *mut core::ffi::c_void), SW_SHOWNOACTIVATE) };
 }
 
 #[cfg(test)]

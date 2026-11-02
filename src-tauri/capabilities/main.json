@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The main window. Jerry's own commands need no permission; no plugin (fs, shell, http) is ever granted.",
+  "description": "The main window. Jerry's own commands need no permission; no plugin (fs, shell, http) is ever granted. The page may listen to Jerry's events.",
   "windows": ["main"],
-  "permissions": []
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
 }

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { MenuLab } from "../features/spike-menu/MenuLab";
 import { commands } from "../ipc";
 import { strings } from "../strings";
 
-/** The window frame. For now an empty Jerry window; zones arrive with #22 and #23. */
+/** The window frame. For spike #16 it hosts the Windows-menu lab. */
 export function App() {
   const [version, setVersion] = useState<string>();
 
@@ -14,11 +15,12 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col bg-mica text-fg">
-      <header className="flex h-titlebar shrink-0 items-center px-4 text-small text-fg-2">
-        {strings.appName}
+      <header className="flex h-titlebar shrink-0 items-center justify-between px-4 text-small text-fg-2">
+        <span>{strings.appName}</span>
+        {version && <span className="text-fg-3 tabular-nums">{strings.version(version)}</span>}
       </header>
-      <main className="flex flex-1 items-center justify-center bg-pane">
-        {version && <p className="text-fg-3 tabular-nums">{strings.version(version)}</p>}
+      <main className="flex flex-1 flex-col bg-pane">
+        <MenuLab />
       </main>
     </div>
   );

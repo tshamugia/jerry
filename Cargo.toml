@@ -20,6 +20,7 @@ specta-typescript = "=0.0.13"
 tauri = "2.12.5"
 tauri-build = "2.7.4"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
+tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
 windows = "0.62"

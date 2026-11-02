@@ -5,10 +5,15 @@ import { App } from "./App";
 
 test("shows the window and the version from the core", async () => {
   const calls: string[] = [];
-  mockIPC((cmd) => {
-    calls.push(cmd);
-    return cmd === "app_version" ? "1.2.3" : undefined;
-  });
+  mockIPC(
+    (cmd) => {
+      calls.push(cmd);
+      if (cmd === "app_version") return "1.2.3";
+      if (cmd === "lab_items") return [];
+      return undefined;
+    },
+    { shouldMockEvents: true },
+  );
 
   render(<App />);
 

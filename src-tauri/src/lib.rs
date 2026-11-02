@@ -1,11 +1,13 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod spike;
+
 use std::time::Duration;
 
 use specta_typescript::Typescript;
 use tauri::{AppHandle, Manager, WebviewWindow};
-use tauri_specta::{Builder, collect_commands};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ipc/bindings.ts");
@@ -29,6 +31,13 @@ fn app_ready(window: WebviewWindow) {
 }
 
 fn show(window: &WebviewWindow) {
+    // Spike #16: the E2E script launches Jerry without taking the user's keyboard focus.
+    if std::env::var_os("JERRY_SPIKE_NOACTIVATE").is_some()
+        && let Ok(hwnd) = window.hwnd()
+    {
+        jerry_win::show_inactive(hwnd.0 as isize);
+        return;
+    }
     if let Err(error) = window.show() {
         tracing::error!(%error, "failed to show the window");
     }
@@ -36,7 +45,15 @@ fn show(window: &WebviewWindow) {
 
 /// Every command the UI may call. The same list feeds the invoke handler and the bindings.
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_version, app_ready])
+    Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            app_version,
+            app_ready,
+            spike::lab_items,
+            spike::windows_menu,
+            spike::menu_ack,
+        ])
+        .events(collect_events![spike::MenuOpened])
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -55,6 +72,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .manage(spike::Lab::new())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -63,6 +81,19 @@ pub fn run() -> tauri::Result<()> {
                 os_build = jerry_win::os_build(),
                 "Jerry starting"
             );
+
+            // setup runs on the main thread, where OLE and Windows' context menu live.
+            if let Err(error) = jerry_win::main_thread::init() {
+                tracing::error!(%error, "OleInitialize failed; Windows menus won't work");
+            }
+            app.state::<spike::Lab>().prewarm();
+            // Windows' menus are light unless the app opts into dark mode (spike #16).
+            if let Some(window) = app.get_webview_window("main")
+                && let Ok(hwnd) = window.hwnd()
+                && let Err(error) = jerry_win::context_menu::follow_system_theme(hwnd.0 as isize)
+            {
+                tracing::warn!(%error, "dark menus unavailable");
+            }
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
