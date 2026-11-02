@@ -38,6 +38,7 @@ jerry/
     strings/            every user-visible string and error message (English)
     ui/                 shared components (Radix, shadcn model)
   src-tauri/            Tauri app (jerry.exe): windows, IPC commands, events, protocols. Thin glue only.
+                        windows/installer-hooks.nsh: NSIS install folder and uninstall cleanup
   crates/
     jerry-core/         listing, sorting, watcher, transfers, undo, search, rename, ZIP, storage.
                         Plain Win32 file APIs allowed; no COM, no Tauri, no UI. Tested on temp folders.
@@ -46,7 +47,8 @@ jerry/
   design/               UI spec, tokens.css, design canvas snapshot
   docs/                 PRD, Tech PRD, assets/, adr/, checklists/ (manual test checklists per phase)
   .github/              CI (workflows/ci.yml: what `pnpm check` runs + bindings check, windows-latest),
-                        PR title check (workflows/pr-title.yml), PR template
+                        PR title check (workflows/pr-title.yml), release on `v*` tags
+                        (workflows/release.yml), PR template
 ```
 
 Dependency direction: `src-tauri` → `jerry-core`, `jerry-win`. `jerry-core` depends on neither `jerry-win` nor Tauri. When core needs a Shell capability (for example, recycle a replaced file), it defines a trait, `jerry-win` implements it and `src-tauri` wires them together, so core stays testable with fakes.
@@ -142,6 +144,7 @@ Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development w
 | Rust tests | `cargo nextest run --workspace` |
 | Everything CI checks, before a PR | `pnpm check` |
 | Regenerate IPC bindings | `pnpm bindings` (debug runs of the app also refresh them) |
+| Update CHANGELOG.md for a release | `pnpm changelog --tag vX.Y.Z` (git-cliff, `cliff.toml`) |
 
 ## Workflow
 
@@ -152,3 +155,10 @@ Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development w
 - **A PR is opened only when the work is finished and tested locally:** `pnpm check` is green (rustfmt, clippy, Biome, `tsc`, Vitest, nextest), `pnpm bindings` leaves no diff, and the acceptance items are verified, including the manual ones the user confirmed. No draft or work-in-progress PRs.
 - **Once the PR is open, merge it right away** (merge commit, no review or CI wait) and delete the branch on GitHub and locally: `gh pr merge <n> --merge --delete-branch`. The local checks are the gate; CI still runs on the PR and on `main` as a safety net, and if it turns red, the fix comes next in its own PR.
 - If issues are added or reordered, update the epic's task list too.
+
+## Releases
+
+- SemVer. The one version is `version` in `[workspace.package]` of the root `Cargo.toml`; Tauri and the installer take it from there.
+- To release `X.Y.Z` (or a pre-release such as `X.Y.Z-rc.1`): on a `chore/release-vX.Y.Z` branch, set the version, run `pnpm changelog --tag vX.Y.Z` and commit `Cargo.toml`, `Cargo.lock` and `CHANGELOG.md` as `chore(release): vX.Y.Z`. Open and merge the PR as usual, then tag the merge commit on `main` and push the tag (`git tag vX.Y.Z`, `git push origin vX.Y.Z`). The tag publishes a Release, so ask the user before pushing it.
+- `workflows/release.yml` checks the tag against `Cargo.toml` and `CHANGELOG.md`, builds the NSIS installer and publishes the Release with that version's changelog section as its notes. A tag with a pre-release part makes a GitHub pre-release, which the updater never offers.
+- A release that fails or turns out broken is fixed in a new PR and released as the next version (or the next `rc`). A pushed tag is never moved.
