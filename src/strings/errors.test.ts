@@ -50,10 +50,7 @@ describe("errorText", () => {
       { code: "Os", params: { os: 0x8027_0064 }, path: null },
       "Windows couldn't complete this (error 0x80270064).",
     ],
-    [
-      { code: "Internal", path: null },
-      "Something went wrong in Jerry. The details are in the log.",
-    ],
+    [{ code: "Internal", path: null }, "Something went wrong in Jerry. Details are in the log."],
   ])("%o", (error, text) => {
     expect(errorText(error)).toBe(text);
   });

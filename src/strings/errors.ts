@@ -42,7 +42,7 @@ export function errorText(error: JerryError): string {
         ? `Windows couldn't complete this for ${name} (${osCodeText(error.params.os)}).`
         : `Windows couldn't complete this (${osCodeText(error.params.os)}).`;
     case "Internal":
-      return "Something went wrong in Jerry. The details are in the log.";
+      return "Something went wrong in Jerry. Details are in the log.";
   }
 }
 

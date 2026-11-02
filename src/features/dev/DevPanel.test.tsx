@@ -25,6 +25,6 @@ test("a panicked job shows as an internal error", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Panic in a job" }));
 
   expect(await screen.findByRole("status")).toHaveTextContent(
-    "Something went wrong in Jerry. The details are in the log.",
+    "Something went wrong in Jerry. Details are in the log.",
   );
 });
