@@ -364,11 +364,18 @@ pub fn init_pools() {
     tracing::info!(ok = built.is_ok(), "rayon pool with high QoS");
 }
 
-/// Starts a listing of the synthetic folder for `count` on its own IO thread; returns its id.
+/// What a listing opens: a synthetic folder by size, or spike #18's Georgian folder.
+#[derive(Debug, Clone, Copy)]
+enum Source {
+    Synth(u32),
+    Georgian,
+}
+
+/// Starts a listing of a synthetic folder on its own IO thread; returns its id.
 fn start(
     app: AppHandle,
     listings: &Listings,
-    count: u32,
+    source: Source,
     sink: impl Sink,
 ) -> Result<u32, IpcError> {
     let id = listings.next_id.fetch_add(1, Ordering::Relaxed);
@@ -384,7 +391,7 @@ fn start(
             if high_qos() {
                 jerry_win::high_qos_thread();
             }
-            let job = AssertUnwindSafe(|| run(&app, id, count, &cancel, sink));
+            let job = AssertUnwindSafe(|| run(&app, id, source, &cancel, sink));
             if catch_unwind(job).is_err() {
                 tracing::error!(id, "listing job panicked");
             }
@@ -399,9 +406,18 @@ fn start(
     Ok(id)
 }
 
-fn run(app: &AppHandle, id: u32, count: u32, cancel: &AtomicBool, mut sink: impl Sink) {
+fn run(app: &AppHandle, id: u32, source: Source, cancel: &AtomicBool, mut sink: impl Sink) {
     let started = Instant::now();
-    let dir = synth::dataset_dir(count as usize);
+    let dir = match source {
+        Source::Synth(count) => synth::dataset_dir(count as usize),
+        Source::Georgian => match synth::georgian::ensure() {
+            Ok(dir) => dir,
+            Err(error) => {
+                sink.error(JerryError::from_io(&error, &synth::georgian::dir()).into());
+                return;
+            }
+        },
+    };
     let mut stats = ListingStats::default();
     let listed = list_dir(&dir, cancel, |entries, range| {
         if stats.batches == 0 {
@@ -453,7 +469,26 @@ pub async fn listing_open(
     count: u32,
     on_event: Channel<Bytes>,
 ) -> Result<u32, IpcError> {
-    start(app, &listings, count, BinarySink(on_event))
+    start(app, &listings, Source::Synth(count), BinarySink(on_event))
+}
+
+/// Spike #18: opens `%TEMP%jerry-synthქართული სახელები` (created on first use) as binary
+/// batches. Returns the listing id.
+#[tauri::command]
+#[specta::specta]
+pub async fn listing_open_georgian(
+    app: AppHandle,
+    listings: State<'_, Listings>,
+    on_event: Channel<Bytes>,
+) -> Result<u32, IpcError> {
+    start(app, &listings, Source::Georgian, BinarySink(on_event))
+}
+
+/// Spike #18: the Georgian folder's path, for display only (the breadcrumb).
+#[tauri::command]
+#[specta::specta]
+pub fn listing_georgian_path() -> String {
+    synth::georgian::dir().display().to_string()
 }
 
 /// Same as `listing_open`, as JSON events (format comparison).
@@ -465,7 +500,7 @@ pub async fn listing_open_json(
     count: u32,
     on_event: Channel<JsonEvent>,
 ) -> Result<u32, IpcError> {
-    start(app, &listings, count, JsonSink(on_event))
+    start(app, &listings, Source::Synth(count), JsonSink(on_event))
 }
 
 /// A new display order for listing `id`, as a binary order message (ids as `u32`).

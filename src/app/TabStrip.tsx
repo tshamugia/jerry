@@ -107,6 +107,7 @@ function Tab({ tab, active, activePane, separator, onActivate, onClose }: TabPro
     >
       <TabIcon icon={tab.icon} />
       <span
+        data-tab-label
         className={`min-w-0 flex-1 truncate text-small ${active && activePane ? "text-fg" : "text-fg-2"}`}
       >
         {tab.name}

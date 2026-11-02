@@ -13,6 +13,8 @@ use std::time::{Duration, SystemTime};
 
 use rayon::prelude::*;
 
+pub mod georgian;
+
 /// The standard sizes: spike #12 and the benchmarks (#44).
 pub const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 

@@ -23,5 +23,19 @@ export function formatType(name: string, isDir: boolean): string {
     return strings.fileList.folderType;
   }
   const dot = name.lastIndexOf(".");
-  return dot < 0 ? strings.fileList.fileType : strings.fileList.extType(name.slice(dot + 1));
+  return dot < 0
+    ? strings.fileList.fileType
+    : strings.fileList.extType(upperExtension(name.slice(dot + 1)));
+}
+
+const GEORGIAN = /[Ⴀ-ჿᲐ-Ჿⴀ-⴯]/u;
+
+/**
+ * Uppercases an extension as Explorer does ("pdf" → "PDF") but leaves Georgian alone: since
+ * Unicode 11 `toUpperCase` turns Mkhedruli into Mtavruli ("ფაილი" → "ᲤᲐᲘᲚᲘ"), Windows doesn't.
+ */
+export function upperExtension(extension: string): string {
+  return Array.from(extension, (char) => (GEORGIAN.test(char) ? char : char.toUpperCase())).join(
+    "",
+  );
 }

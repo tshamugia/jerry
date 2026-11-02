@@ -33,10 +33,15 @@ export function TitleBar({ frame, tabs, activePane, onActivate, onClose, onNew }
   );
 
   return (
-    <header className="drag-region frame-columns grid h-titlebar shrink-0 bg-mica">
+    <header
+      data-zone="titlebar"
+      className="drag-region frame-columns grid h-titlebar shrink-0 bg-mica"
+    >
       <div className="flex items-center gap-2.5 px-3.5">
         <AppMark />
-        <span className="text-small text-fg-2">{strings.appName}</span>
+        <span data-app-name className="text-small text-fg-2">
+          {strings.appName}
+        </span>
       </div>
       {strip("left")}
       <div className="mt-2.5 bg-stroke" />

@@ -1,6 +1,7 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod georgian;
 mod listing;
 mod title_bar;
 
@@ -46,6 +47,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
         title_bar::title_bar_set_buttons,
         listing::listing_open,
         listing::listing_open_json,
+        listing::listing_open_georgian,
+        listing::listing_georgian_path,
+        georgian::window_set_title,
         listing::listing_sort,
         listing::listing_close,
     ])

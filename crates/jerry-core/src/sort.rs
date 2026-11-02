@@ -400,6 +400,84 @@ mod tests {
         );
     }
 
+    /// Spike #18: numbered Georgian names sort as Explorer shows them.
+    #[test]
+    fn georgian_numbers_sort_naturally() {
+        let names = [
+            "ნახაზი 100.dwg",
+            "ნახაზი 10.dwg",
+            "ნახაზი 2.dwg",
+            "ნახაზი 007.dwg",
+            "ნახაზი 1.dwg",
+            "ნახაზი 11.dwg",
+            "ნახაზი 9.dwg",
+            "სართული 1 გეგმა v10.dwg",
+            "სართული 12 ჭრილი.dwg",
+            "სართული 1 გეგმა v2.dwg",
+        ];
+        let list = entries(&names.map(|name| (name, false, 0)));
+        let index = SortIndex::build(&list);
+        let order = index.order(&list, SortColumn::Name, false, true);
+        assert_eq!(
+            names_in(&list, &order),
+            [
+                "ნახაზი 1.dwg",
+                "ნახაზი 2.dwg",
+                "ნახაზი 007.dwg",
+                "ნახაზი 9.dwg",
+                "ნახაზი 10.dwg",
+                "ნახაზი 11.dwg",
+                "ნახაზი 100.dwg",
+                "სართული 1 გეგმა v2.dwg",
+                "სართული 1 გეგმა v10.dwg",
+                "სართული 12 ჭრილი.dwg",
+            ]
+        );
+    }
+
+    /// Spike #18: the Georgian corpus (mixed scripts, Mtavruli, historic letters, emoji, full-width
+    /// digits) against `StrCmpLogicalW`, in both directions of every pair.
+    #[test]
+    fn georgian_corpus_agrees_with_str_cmp_logical() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::UI::Shell::StrCmpLogicalW;
+        use windows::core::PCWSTR;
+
+        let names = crate::synth::georgian::names();
+        let mut list = Entries::default();
+        for name in &names {
+            let units: Vec<u16> = name.encode_wide().collect();
+            list.push(&units, 0, 0, 0);
+        }
+        let index = SortIndex::build(&list);
+        let order = index.order(&list, SortColumn::Name, false, false);
+        let wide = |id: u32| -> Vec<u16> {
+            let mut units = list.name_utf16(id as usize).to_vec();
+            units.push(0);
+            units
+        };
+        let mut disagreements = Vec::new();
+        for (i, &a) in order.iter().enumerate() {
+            for &b in &order[i + 1..] {
+                let (wa, wb) = (wide(a), wide(b));
+                // SAFETY: both buffers are NUL-terminated and live through the call.
+                let cmp = unsafe { StrCmpLogicalW(PCWSTR(wa.as_ptr()), PCWSTR(wb.as_ptr())) };
+                if cmp > 0 {
+                    disagreements.push(format!(
+                        "{:?} before {:?}",
+                        list.name(a as usize),
+                        list.name(b as usize)
+                    ));
+                }
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "{} pairs disagree: {disagreements:#?}",
+            disagreements.len()
+        );
+    }
+
     /// Our key order against `StrCmpLogicalW` on the synthetic names: every adjacent pair must be
     /// in order. Prints disagreements so the spike can report them.
     #[test]

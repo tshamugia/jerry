@@ -22,6 +22,18 @@ export const commands = {
 	listingOpen: (count: number, onEvent: Channel<ArrayBuffer>) => typedError<number, IpcError_Serialize>(__TAURI_INVOKE("listing_open", { count, onEvent })),
 	/**  Same as `listing_open`, as JSON events (format comparison). */
 	listingOpenJson: (count: number, onEvent: Channel<JsonEvent_Deserialize>) => typedError<number, IpcError_Serialize>(__TAURI_INVOKE("listing_open_json", { count, onEvent })),
+	/**
+	 *  Spike #18: opens `%TEMP%jerry-synthქართული სახელები` (created on first use) as binary
+	 *  batches. Returns the listing id.
+	 */
+	listingOpenGeorgian: (onEvent: Channel<ArrayBuffer>) => typedError<number, IpcError_Serialize>(__TAURI_INVOKE("listing_open_georgian", { onEvent })),
+	/**  Spike #18: the Georgian folder's path, for display only (the breadcrumb). */
+	listingGeorgianPath: () => __TAURI_INVOKE<string>("listing_georgian_path"),
+	/**
+	 *  Sets the window's native title and returns it as Windows reads it back (`GetWindowTextW`,
+	 *  through tao), or `None` if either call failed.
+	 */
+	windowSetTitle: (title: string) => __TAURI_INVOKE<string | null>("window_set_title", { title }),
 	/**  A new display order for listing `id`, as a binary order message (ids as `u32`). */
 	listingSort: (id: number, column: SortBy, descending: boolean) => typedError<ArrayBuffer, IpcError_Serialize>(__TAURI_INVOKE("listing_sort", { id, column, descending })),
 	/**  Forgets listing `id` (and stops it if it is still running). */

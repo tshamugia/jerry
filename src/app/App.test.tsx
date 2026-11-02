@@ -9,6 +9,7 @@ test("attaches the frame before showing the window", async () => {
   const calls: string[] = [];
   mockIPC((cmd) => {
     calls.push(cmd);
+    if (cmd === "listing_georgian_path") return "C:\\Temp\\jerry-synth\\ქართული სახელები";
     return cmd === "title_bar_attach" ? { mica: true, snapLayouts: true } : undefined;
   });
 

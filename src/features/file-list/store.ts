@@ -6,6 +6,9 @@ import { decodeMessage, type ListingMessage } from "./protocol";
 
 export type WireFormat = "binary" | "json";
 
+/** A synthetic folder by entry count, or spike #18's folder of Georgian names. */
+export type ListingSource = number | "georgian";
+
 /** Timings of one `open`, in ms from just before `listing_open` is invoked. */
 export interface OpenTimings {
   format: WireFormat;
@@ -52,7 +55,10 @@ interface ListingState {
   descending: boolean;
   lastOpen: OpenTimings | null;
   lastSort: SortTimings | null;
-  open: (count: number, format?: WireFormat) => Promise<OpenTimings>;
+  /** Quick filter text (Ctrl+F); empty shows everything. */
+  filter: string;
+  open: (source: ListingSource, format?: WireFormat) => Promise<OpenTimings>;
+  setFilter: (filter: string) => void;
   sortBy: (column: SortBy, descending?: boolean) => Promise<SortTimings | null>;
 }
 
@@ -77,8 +83,11 @@ export const useListing = create<ListingState>()((set, get) => {
     descending: false,
     lastOpen: null,
     lastSort: null,
+    filter: "",
 
-    open: (count, format = "binary") => {
+    setFilter: (filter) => bump({ filter }),
+
+    open: (source, format = "binary") => {
       const previous = get().listingId;
       if (previous !== null) {
         void commands.listingClose(previous);
@@ -159,14 +168,17 @@ export const useListing = create<ListingState>()((set, get) => {
             const receivedAt = performance.now();
             apply(decodeMessage(buffer), receivedAt);
           };
-          request = commands.listingOpen(count, channel);
+          request =
+            source === "georgian"
+              ? commands.listingOpenGeorgian(channel)
+              : commands.listingOpen(source, channel);
         } else {
           const channel = new Channel<JsonEvent>();
           channel.onmessage = (event) => {
             const receivedAt = performance.now();
             apply(fromJson(event), receivedAt);
           };
-          request = commands.listingOpenJson(count, channel);
+          request = commands.listingOpenJson(source === "georgian" ? 0 : source, channel);
         }
         invoked = request.then((result) => {
           if (token !== openToken) {

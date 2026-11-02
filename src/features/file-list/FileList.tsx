@@ -1,8 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SortBy } from "../../ipc";
 import { strings } from "../../strings";
-import { ATTRIBUTE_DIRECTORY } from "./columns";
+import { ATTRIBUTE_DIRECTORY, type Columns } from "./columns";
 import { formatDate, formatSize, formatType } from "./format";
 import { notifyCommitted } from "./measure";
 import { useListing } from "./store";
@@ -22,11 +22,19 @@ export function FileList() {
   const version = useListing((s) => s.version);
   const order = useListing((s) => s.order);
   const columns = useListing((s) => s.columns);
+  const filter = useListing((s) => s.filter);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [height] = useState(rowHeight);
 
+  // `columns` is mutated in place; `version` says when it changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version stands for the columns' content.
+  const shown = useMemo(
+    () => filtered(columns, order, count, filter),
+    [columns, order, count, filter, version],
+  );
+
   const virtualizer = useVirtualizer({
-    count,
+    count: shown ? shown.length : count,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => height,
     overscan: 8,
@@ -38,12 +46,12 @@ export function FileList() {
   useLayoutEffect(() => notifyCommitted(version), [version]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-pane">
+    <div data-zone="list" className="flex min-h-0 flex-1 flex-col bg-pane">
       <Header />
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualizer.getVirtualItems().map((item) => {
-            const id = order ? (order[item.index] ?? item.index) : item.index;
+            const id = shown ? (shown[item.index] ?? item.index) : item.index;
             return (
               <Row
                 key={item.index}
@@ -57,9 +65,29 @@ export function FileList() {
           })}
         </div>
       </div>
-      <StatusBar />
+      <StatusBar shown={shown?.length ?? count} />
     </div>
   );
+}
+
+/**
+ * The display order with the quick filter applied (case-insensitive substring). `toLowerCase`
+ * also folds Mtavruli to Mkhedruli, so "ნახაზი" finds "ᲜᲐᲮᲐᲖᲘ".
+ */
+export function filtered(
+  columns: Columns,
+  order: Uint32Array | null,
+  count: number,
+  filter: string,
+): Uint32Array | null {
+  if (!filter) return order;
+  const query = filter.toLowerCase();
+  const ids: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const id = order ? (order[i] ?? i) : i;
+    if ((columns.names[id] ?? "").toLowerCase().includes(query)) ids.push(id);
+  }
+  return Uint32Array.from(ids);
 }
 
 interface RowProps {
@@ -77,7 +105,9 @@ const Row = memo(function Row({ top, name, size, modified, attributes }: RowProp
       className="absolute inset-x-1 top-0 flex h-row items-center gap-2 rounded-ctrl px-2 hover:bg-hover"
       style={{ transform: `translateY(${top}px)` }}
     >
-      <span className="min-w-0 flex-1 truncate">{name}</span>
+      <span data-name className="min-w-0 flex-1 truncate">
+        {name}
+      </span>
       <span className="w-col-date shrink-0 text-fg-2 tabular-nums">{formatDate(modified)}</span>
       <span className="w-col-type shrink-0 truncate text-fg-2">{formatType(name, isDir)}</span>
       <span className="w-col-size shrink-0 text-right text-fg-2 tabular-nums">
@@ -115,13 +145,15 @@ function Header() {
   );
 }
 
-function StatusBar() {
+function StatusBar({ shown }: { shown: number }) {
   const count = useListing((s) => s.count);
   const loading = useListing((s) => s.loading);
   const error = useListing((s) => s.error);
   return (
     <div className="flex h-statusbar shrink-0 items-center gap-4 border-stroke border-t px-3 text-fg-2 text-small tabular-nums">
-      <span>{strings.fileList.items(count)}</span>
+      <span>
+        {shown === count ? strings.fileList.items(count) : strings.fileList.showing(shown, count)}
+      </span>
       {loading && <span>{strings.fileList.loading}</span>}
       {error && <span className="text-red">{strings.fileList.error(error)}</span>}
     </div>
