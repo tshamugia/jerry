@@ -88,7 +88,7 @@ UI ბირთვს ბრძანებებს უგზავნის, �
 
 | Thread / pool | რას აკეთებს | რატომ აქ |
 | --- | --- | --- |
-| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება. `OleInitialize` `setup`-ში იძახება: wry მხოლოდ `CoInitializeEx`-ს იძახებს. Modal loop-ები (drag, context menu) `async` ბრძანებიდან ეშვება და Jerry-ის საკუთარ message-only ფანჯარას ეგზავნება (`run_on_main`). Sync ბრძანება WebView2-ის IPC callback-ში სრულდება, Tauri-ს `run_on_main_thread` კი tao-ს callback-ში, სადაც tao Rust → გვერდი მოვლენებს loop-ის დასრულებამდე აჩერებს (spike #4) |
+| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება. `OleInitialize` `setup`-ში იძახება: wry მხოლოდ `CoInitializeEx`-ს იძახებს. Modal loop-ები (drag, context menu) `async` ბრძანებიდან ეშვება და Jerry-ის საკუთარ message-only ფანჯარას ეგზავნება (`run_on_main`). Sync ბრძანება WebView2-ის IPC callback-ში სრულდება, Tauri-ს `run_on_main_thread` კი tao-ს callback-ში, სადაც tao Rust → გვერდი მოვლენებს loop-ის დასრულებამდე აჩერებს, თუ ისინი სხვა thread-იდან მოდის, მაგ. ტრანსფერის პროგრესი (spike #4, #6) |
 | Shell pool (2–4 STA thread) | აიკონები, thumbnail-ები, `IFileOperation`, Shell თვისებები, OneDrive სტატუსი | Shell extension-ები STA-ს მოითხოვს; timeout იცავს, რომ ერთმა extension-მა არაფერი გაყინოს |
 | IO pool | listing, watcher, კოპირება, ZIP | ბლოკირებადი IO UI-ს და IPC-ს არ აჩერებს |
 | ტრანსფერის worker-ები | ერთი worker თითო ფიზიკურ დისკზე ან ქსელურ სერვერზე | ერთ დისკზე თანმიმდევრულად, სხვადასხვაზე პარალელურად (PRD) |
@@ -243,9 +243,13 @@ Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შ�
 ### Context menu
 
 - Jerry-ის საკუთარი მენიუ React-შია (Radix), ყოველ ბრძანებასთან shortcut-ით.
-- "Windows options…": `IShellFolder::GetUIObjectOf` → `IContextMenu` → `QueryContextMenu` → `TrackPopupMenuEx` მთავარ ფანჯარაზე.
-- ფანჯრის subclass გადასცემს `WM_INITMENUPOPUP`, `WM_DRAWITEM`, `WM_MEASUREITEM` და `WM_MENUCHAR`-ს `IContextMenu3`-ს. ასე მუშაობს 7-Zip-ის და "Send to"-ს ქვემენიუები.
-- ძებნის შედეგებში სხვადასხვა საქაღალდის ფაილების მონიშვნისას Windows-ის მენიუ მიუწვდომელია, განმარტებით.
+- "Windows options…" Explorer-ის კლასიკური მენიუა ("Show more options"), Windows 11-ის packaged handler-ებითაც (WinRAR, Notepad, Terminal): `IShellFolder::GetUIObjectOf` → `IContextMenu` → `QueryContextMenu` (`CMF_NORMAL | CMF_CANRENAME | CMF_ITEMMENU`, Shift-ით `CMF_EXTENDEDVERBS`) → `TrackPopupMenuEx(TPM_RETURNCMD)` მთავარ ფანჯარაზე. `async` ბრძანება მენიუს `run_on_main`-ით უშვებს (იხ. «Thread-ების მოდელი») და მისი დახურვისას ბრუნდება.
+- ფანჯრის subclass (`SetWindowSubclass`, მხოლოდ მენიუს დროს) გადასცემს `WM_INITMENUPOPUP`, `WM_DRAWITEM`, `WM_MEASUREITEM` და `WM_MENUCHAR`-ს `IContextMenu3::HandleMenuMsg2`-ს (ან `IContextMenu2`-ს). მის გარეშე ცარიელი რჩება ქვემენიუები, რომლებიც გახსნისას ივსება: WinRAR, "Open with", "Give access to". "Send to" Windows 11-ზე მენიუს message loop-იდან ივსება (spike #6).
+- არჩეული ბრძანება: `InvokeCommand` (`CMINVOKECOMMANDINFOEX`: Unicode, `PTINVOKE`, `ASYNCOK`, Shift და Ctrl, მშობელი საქაღალდე სამუშაო დირექტორიად). Jerry-ის საკუთარი verb-ები (`rename`, `delete`, `cut`, `copy`, `paste`, საქაღალდეზე `open`) Shell-ს არ ეგზავნება და Jerry-ის ბრძანებით სრულდება (Undo, ჟურნალი, ამოჭრის სტილი). Shell-ის `rename` Explorer-ის view-ს ითხოვს და Jerry-ში არაფერს აკეთებს.
+- `QueryContextMenu` ყველა handler-ს ტვირთავს და მთავარ thread-ს ბლოკავს, timeout-ის გარეშე (როგორც Explorer-ში): პროცესში პირველად ~0.5 წმ, შემდეგ 64–125 ms. პირველ მენიუს packaged handler-ები ზოგჯერ აკლია. ამიტომ გაშვების შემდეგ Shell pool-ის thread-ზე Jerry ერთხელ აგებს და აგდებს საკუთარი exe-სა და მისი საქაღალდის მენიუს (prewarm, ~1.3 წმ ფონზე, მომხმარებლის ფაილს არ ეხება): ამის შემდეგ პირველი მენიუც სწრაფი და სრულია.
+- მუქი რეჟიმი: Win32 მენიუ ღია რჩება, სანამ Jerry uxtheme-ის დოკუმენტაციის გარეშე ordinal-ებს არ გამოიძახებს: `SetPreferredAppMode(AllowDark)` #135, `AllowDarkModeForWindow` #133, `FlushMenuThemes` #136 (Windows 10 1903-დან უცვლელი, Explorer-იც ასე აკეთებს). ასე მენიუ Windows-ის რეჟიმს მიჰყვება.
+- MAX\_PATH-ზე გრძელი გზა: core-ის `\\?\` Shell-ისთვის იშლება, მაგრამ handler-ები ფაილს 8.3 მოკლე სახელით იღებენ ("Send to → Compressed" ქმნის `F808~1.zip`-ს). Jerry ასეთ ელემენტზე "Windows options…"-თან შენიშვნას აჩვენებს.
+- ძებნის შედეგებში სხვადასხვა საქაღალდის ფაილების მონიშვნისას Windows-ის მენიუ მიუწვდომელია, განმარტებით (`ILIsParent` ამოწმებს).
 
 ### გახსნა
 
@@ -518,6 +522,8 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 **#5 Clipboard:** Explorer-თან გავლილია 02.11.2026 ([#15](https://github.com/tshamugia/jerry/issues/15#issuecomment-6564949126)): Copy, Cut და Paste ორივე მიმართულებით მუშაობს ნამდვილ explorer.exe-სა და jerry.exe-ზე, ქართული სახელებით, MAX\_PATH-ზე გრძელი გზით და Jerry-ის დახურვის შემდეგაც; fallback არ დასჭირდა. ხელით ჯერ დარჩა: ნამდვილი Ctrl+C / X / V და ჩასმა Outlook-სა და Telegram-ში. ტექნიკა «Clipboard» სექციაშია.
 
+**#6 Windows options:** ტექნიკა შემოწმდა 03.11.2026 ([#16](https://github.com/tshamugia/jerry/issues/16#issuecomment-6587473737)): ნამდვილ jerry.exe-ში "Send to → Compressed (zipped) folder" და WinRAR-ის ქვემენიუ ერთ ფაილზე, რამდენიმე ფაილზე, საქაღალდეზე, ქართულ სახელსა და MAX\_PATH-ზე გრძელ გზაზე მუშაობს; Properties, Esc და Jerry-ის საკუთარი verb-ები სწორად იქცევა. 7-Zip ამ კომპიუტერზე დაყენებული არ არის: WinRAR-ის ქვემენიუც გახსნისას ივსება, 7-Zip-ის შემოწმება კი ხელით დარჩა, ნამდვილ მაუსთან და კლავიატურასთან ერთად. ტექნიკა «Context menu» და «Thread-ების მოდელი» სექციებშია.
+
 **#7 Title bar:** ტექნიკა არჩეულია და ავტომატურად შემოწმდა 02.11.2026 ([#17](https://github.com/tshamugia/jerry/issues/17#issuecomment-6586199502)): hit-test კოდები, ფანჯრის სტილები, Mica და maximize-ის ზუსტი ზომა (client = სამუშაო არე) probe-ით და unit test-ებით დადასტურდა, ზოლი პანელების საზღვარზე იყოფა. ხელით ჯერ დარჩა მთავარი კითხვა: აღწევს თუ არა რეალური თაგვი layered input ფანჯრამდე (hover, კლიკი, Snap Layouts flyout); ასევე Aero Snap, system menu, auto-hide taskbar და DPI-ის ცვლილება. Windows 10-ზე არ შემოწმებულა. ტექნიკა «ფანჯარა და ტაბები» სექციაშია.
 
 **#8 ქართული:** ავტომატურად გავლილია 02.11.2026 ([#18](https://github.com/tshamugia/jerry/issues/18#issuecomment-6587064115)): ქართული სუფთად ჩანს სიაში, ტაბზე, breadcrumb-ში, sidebar-სა და ფანჯრის სათაურში, ჩაშენებული შრიფტი არ დასჭირდა. Ctrl+C, Ctrl+V, Ctrl+F და Ctrl+Shift+N ქართულ განლაგებაზე ინგლისურის იდენტურად მუშაობს (სინთეტიკური კლავიშები ნამდვილი «Georgian (QWERTY)»-ის მნიშვნელობებით), ბუნებრივი დალაგება `StrCmpLogicalW`-ს ემთხვევა. ხელით ჯერ დარჩა თვალით შემოწმება 125–150 %-ზე და ნამდვილი კლავიატურა. ტექნიკა «გარეგნობა», «ტექსტები», «კლავიატურა და ბრძანებები» და «დალაგება» სექციებშია.
@@ -539,9 +545,9 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 | OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) გავლილია fallback-ით: გამჭვირვალე ფანჯარა drag-ის დროს. WebView2-ის განახლებამ ეს ქცევა შეიძლება შეცვალოს: E2E ტესტი CI-ში |
 | Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7: caption ღილაკებზე `jerry-win`-ის layered input ფანჯარა `HTMAXBUTTON`-ს აბრუნებს; რეალური თაგვით ჯერ შესამოწმებელია, სათადარიგოა ჩვეულებრივი child ფანჯარა (`JERRY_PLAIN_INPUT`) |
 | Hybrid GPU (Intel + NVIDIA ლეპტოპი) | გაშვება < 1 წმ | WebView2-ის GPU პროცესი მძინარე NVIDIA-ს აღვიძებს: +0.4–1.45 წმ (spike #1), ფლაგებით ვერ აიცილება. გადაწყვეტა ქვემოთ, ღია კითხვებშია |
-| მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში |
+| მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში. Context menu მთავარ thread-ზეა და timeout-ს ვერ იღებს (როგორც Explorer-ში); ცივ ჩატვირთვას prewarm ფონზე აკეთებს (spike #6) |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
-| Shell API-ები 260+ სიმბოლოიან გზებზე | Recycle Bin, context menu | საკუთარი ოპერაციები და წინასწარი გაფრთხილება |
+| Shell API-ები 260+ სიმბოლოიან გზებზე | Recycle Bin, context menu | საკუთარი ოპერაციები და წინასწარი გაფრთხილება; context menu-ის handler-ები ასეთ ფაილს 8.3 სახელით იღებენ (spike #6) |
 | WebView2 Evergreen-ის განახლებები | ქცევის შეცვლა ჩვენი release-ის გარეშე | E2E ტესტები CI-ში უახლეს runtime-ზე |
 | tauri-specta-ს სტაბილურობა | IPC ტიპები | ვერსია scaffold-ისას ფიქსირდება; ალტერნატივა ts-rs |
 
