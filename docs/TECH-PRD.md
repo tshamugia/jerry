@@ -30,6 +30,8 @@ Jerry იწყობა Tauri 2-ზე: ბირთვი Rust-ზეა, ი�
 | ორპანელიანი რეჟიმი ნაგულისხმევია და v0.1-ში იწყობა; ტაბების ზოლი პანელების საზღვარზე ორად იყოფა | PRD: ნაგულისხმევად ორი პანელია |
 | განახლება: შეტყობინება ახალ ვერსიაზე და Update ღილაკი | PRD: როგორც სხვა აპებში, მომხმარებლის თანხმობით |
 
+Spike-მა (02–03.11.2026) ხუთი ტექნიკა შეცვალა: ბინარული listing, modal loop-ები Jerry-ის საკუთარი ფანჯრით, drop target-ის overlay, title bar-ის input ფანჯარა და ფონზე დარჩენა. მათი მიზეზები და უარყოფილი ალტერნატივები [ADR-ებშია](https://github.com/tshamugia/jerry/blob/main/docs/adr/README.md) (ADR-0001–0005).
+
 ## სტეკი
 
 სტეკი ორ ნაწილად იყოფა: Rust აკეთებს ყველაფერს, რაც ფაილებსა და Windows-ს ეხება, React კი მხოლოდ აჩვენებს და მართავს. ზუსტი ვერსიები scaffold-ისას lockfile-ებში (`Cargo.lock`, `pnpm-lock.yaml`) ფიქსირდება.
@@ -431,7 +433,7 @@ PRD-ის ყოველ სიჩქარის მიზანს აქვ
 | ინტერფეისი არასოდეს იყინება | IO არასოდეს UI-ში; პროგრესის მოვლენები შეზღუდულია | dev რეჟიმში 50 ms-ზე გრძელი task-ები ლოგში იწერება |
 
 - ბირთვის benchmark-ები (criterion): listing, დალაგება, ძებნა სინთეზურ საქაღალდეებზე (1 000, 10 000, 100 000 ფაილი). 20%-ზე მეტი გაუარესება CI-ში გაფრთხილებას იძლევა.
-- მეხსიერების ბიუჯეტი: ერთი ფანჯარა 10 ტაბით < 300 MB WebView2-ის ჩათვლით. Spike #1-ში (private working set): ერთი ტაბი 110 MB, 10 × 1 000 — 119 MB, 8 × 1 000 + 10 000 + 100 000 — 149 MB; აქედან `jerry.exe` 5–14 MB-ია.
+- მეხსიერების ბიუჯეტი (private working set, WebView2-ის ჩათვლით, დაზუსტდა 03.11.2026): ერთი ფანჯარა 10 ტაბით < 250 MB, ფონზე დამალული Jerry < 150 MB. Spike #1-ში: ერთი ტაბი 110 MB, 10 × 1 000 — 119 MB, 8 × 1 000 + 10 000 + 100 000 — 149 MB, დამალული 119 MB; აქედან `jerry.exe` 5–14 MB-ია. აიკონები და thumbnail-ები ჯერ არ ითვლებოდა, ~100 MB-ის მარაგი მათთვისაა.
 
 ## საიმედოობა და უსაფრთხოება
 
@@ -499,16 +501,16 @@ Jerry ვრცელდება NSIS ინსტალერით, მომ
 
 ### Spike (კვირა 0)
 
-| # | შემოწმება | წარმატების კრიტერიუმი |
-| --- | --- | --- |
-| 1 | ცივი გაშვება | 1 000 ელემენტიანი საქაღალდე ჩანს < 1 წმ-ში process start-იდან |
-| 2 | 100 000 ელემენტი | პირველი რიგები < 0.3 წმ, scroll 60 fps, დალაგება < 100 ms |
-| 3 | Drag & drop გარეთ | Explorer, Desktop, Outlook (attachment), Telegram, Chrome (upload) და AutoCAD ფაილს იღებს |
-| 4 | Drag & drop შიგნით | Explorer-იდან მუშაობს; Outlook-ის attachment ფაილად ინახება; ტაბი, breadcrumb და sidebar სწორად ინათება |
-| 5 | Clipboard | Jerry ↔ Explorer copy, cut, paste ორივე მიმართულებით; ჩასმა Outlook-სა და Telegram-ში |
-| 6 | Windows options | 7-Zip-ისა და "Send to"-ს ქვემენიუები მუშაობს |
-| 7 | Title bar | ორად გაყოფილი ტაბების ზოლი, ფანჯრის გადათრევა, ორმაგი კლიკი, Snap Layouts, Aero Snap, სწორი maximize ზომები |
-| 8 | ქართული | ქართული ფაილის სახელების რენდერი სუფთაა; shortcut-ები ქართულ განლაგებაზე მუშაობს |
+| # | შემოწმება | წარმატების კრიტერიუმი | შედეგი (03.11.2026) |
+| --- | --- | --- | --- |
+| 1 | ცივი გაშვება | 1 000 ელემენტიანი საქაღალდე ჩანს < 1 წმ-ში process start-იდან | **ნაწილობრივ.** Jerry-ის ნაწილი ~0.5 წმ; hybrid GPU-ზე ~1.9 წმ, ამიტომ Jerry ფონზე რჩება და ჩვენება 19–56 ms-ია ([ADR-0005](https://github.com/tshamugia/jerry/blob/main/docs/adr/0005-keep-running-in-background.md)) |
+| 2 | 100 000 ელემენტი | პირველი რიგები < 0.3 წმ, scroll 60 fps, დალაგება < 100 ms | **გავლილია.** პირველი რიგები ~15 ms, დალაგება ~30 ms, scroll 60 fps; ბინარული batch-ები ([ADR-0001](https://github.com/tshamugia/jerry/blob/main/docs/adr/0001-binary-listing-batches.md)) |
+| 3 | Drag & drop გარეთ | Explorer, Desktop, Outlook (attachment), Telegram, Chrome (upload) და AutoCAD ფაილს იღებს | **გავლილია** fallback-ის გარეშე, ექვსივე პროგრამაში; modal loop Jerry-ის საკუთარი ფანჯრით ([ADR-0002](https://github.com/tshamugia/jerry/blob/main/docs/adr/0002-modal-loops-on-own-window.md)) |
+| 4 | Drag & drop შიგნით | Explorer-იდან მუშაობს; Outlook-ის attachment ფაილად ინახება; ტაბი, breadcrumb და sidebar სწორად ინათება | **გავლილია fallback-ით:** drop target გამჭვირვალე ფანჯარაზე ([ADR-0003](https://github.com/tshamugia/jerry/blob/main/docs/adr/0003-drop-target-overlay.md)), round trip 4–5 ms |
+| 5 | Clipboard | Jerry ↔ Explorer copy, cut, paste ორივე მიმართულებით; ჩასმა Outlook-სა და Telegram-ში | **გავლილია** Explorer-თან ორივე მიმართულებით; Outlook, Telegram და ნამდვილი კლავიატურა v0.1-ში მოწმდება (#47) |
+| 6 | Windows options | 7-Zip-ისა და "Send to"-ს ქვემენიუები მუშაობს | **გავლილია** Send to-თი და WinRAR-ით; 7-Zip v0.1-ში მოწმდება (#47); მენიუ prewarm-ის შემდეგ 64–125 ms |
+| 7 | Title bar | ორად გაყოფილი ტაბების ზოლი, ფანჯრის გადათრევა, ორმაგი კლიკი, Snap Layouts, Aero Snap, სწორი maximize ზომები | **ტექნიკა არჩეულია** ([ADR-0004](https://github.com/tshamugia/jerry/blob/main/docs/adr/0004-title-bar-input-window.md)), ავტომატურად შემოწმებულია; ნამდვილი თაგვით შემოწმება #23-ის დასაწყისშია |
+| 8 | ქართული | ქართული ფაილის სახელების რენდერი სუფთაა; shortcut-ები ქართულ განლაგებაზე მუშაობს | **გავლილია** ავტომატურად: ჩაშენებული შრიფტი არ სჭირდება, shortcut-ები `KeyboardEvent.code`-ით; თვალით და ნამდვილი კლავიატურით v0.1-ში (#47) |
 
 Spike-ის კოდი ცალკე branch-ზე რჩება. შედეგები და არჩეული ტექნიკები ამ დოკუმენტში ჩაიწერება. ხელით შესამოწმებელი პუნქტები, რომლებიც spike-ში არ ჩატარდა (#1, #5–#8), 03.11.2026-ს v0.1-ის გამოშვების ჩეკლისტში გადავიდა ([#47](https://github.com/tshamugia/jerry/issues/47)): ისინი ერთხელ, ნამდვილ ფუნქციაზე შემოწმდება.
 
