@@ -32,4 +32,23 @@ export const strings = {
     no: "no",
     hint: "Hover and click the caption buttons; the readout follows the native hit-test.",
   },
+
+  fileList: {
+    name: "Name",
+    modified: "Date modified",
+    type: "Type",
+    size: "Size",
+    folderType: "File folder",
+    fileType: "File",
+    extType: (ext: string) => `${ext.toUpperCase()} File`,
+    sizeKb: (kb: string) => `${kb} KB`,
+    items: (count: number) => `${new Intl.NumberFormat("en-US").format(count)} items`,
+    loading: "Loading…",
+    error: (code: string) => `Couldn't open the folder (${code}).`,
+  },
+  spikeList: {
+    open: (count: number) => `Open ${new Intl.NumberFormat("en-US").format(count)}`,
+    json: "JSON",
+    scroll: "Scroll test",
+  },
 } as const;

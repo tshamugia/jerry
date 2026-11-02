@@ -1,6 +1,7 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+mod listing;
 mod title_bar;
 
 use std::time::Duration;
@@ -43,6 +44,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
         app_ready,
         title_bar::title_bar_attach,
         title_bar::title_bar_set_buttons,
+        listing::listing_open,
+        listing::listing_open_json,
+        listing::listing_sort,
+        listing::listing_close,
     ])
 }
 
@@ -53,6 +58,7 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 
 /// Builds and runs the app until its last window closes.
 pub fn run() -> tauri::Result<()> {
+    listing::init_pools();
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -62,6 +68,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     tauri::Builder::default()
+        .manage(listing::Listings::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

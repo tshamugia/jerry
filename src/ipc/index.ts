@@ -10,5 +10,10 @@ export type {
   // tauri-specta types a Channel argument with the Deserialize shape (optional `Option`s).
   FrameState_Deserialize as FrameStateUpdate,
   FrameState_Serialize as FrameState,
+  IpcErrorCode,
+  JsonBatch,
+  JsonEvent_Deserialize as JsonEvent,
+  ListingStats,
+  SortBy,
 } from "./bindings";
 export { commands } from "./bindings";

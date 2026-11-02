@@ -28,6 +28,32 @@ pub fn os_build() -> Option<u32> {
     status.is_ok().then_some(info.dwBuildNumber)
 }
 
+/// Opts the calling thread out of execution-speed throttling (EcoQoS), so Windows keeps it on fast
+/// cores at full clock even while Jerry's window is in the background. Spike #12 measures whether
+/// the IO and CPU pools need this.
+pub fn high_qos_thread() -> bool {
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadInformation, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
+        ThreadPowerThrottling,
+    };
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // SAFETY: `state` is a valid THREAD_POWER_THROTTLING_STATE and the size passed matches it.
+    unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&raw const state).cast(),
+            size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+        )
+    }
+    .is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

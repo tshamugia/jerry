@@ -18,11 +18,13 @@ tauri-build = { workspace = true }
 [dependencies]
 jerry-core = { workspace = true }
 jerry-win = { workspace = true }
+rayon = { workspace = true }
 serde = { workspace = true }
 specta = { workspace = true }
 specta-typescript = { workspace = true }
 tauri = { workspace = true }
 tauri-specta = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

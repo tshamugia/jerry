@@ -15,6 +15,17 @@ export const commands = {
 	titleBarAttach: (updates: Channel<FrameState_Deserialize>) => __TAURI_INVOKE<FrameInfo>("title_bar_attach", { updates }),
 	/**  Tells the native hit-test where the UI drew the caption buttons. */
 	titleBarSetButtons: (buttons: CaptionButtonRect[]) => __TAURI_INVOKE<void>("title_bar_set_buttons", { buttons }),
+	/**
+	 *  Opens the synthetic folder for `count` entries (1000, 10000 or 100000) and streams it as
+	 *  binary batches. Returns the listing id.
+	 */
+	listingOpen: (count: number, onEvent: Channel<ArrayBuffer>) => typedError<number, IpcError_Serialize>(__TAURI_INVOKE("listing_open", { count, onEvent })),
+	/**  Same as `listing_open`, as JSON events (format comparison). */
+	listingOpenJson: (count: number, onEvent: Channel<JsonEvent_Deserialize>) => typedError<number, IpcError_Serialize>(__TAURI_INVOKE("listing_open_json", { count, onEvent })),
+	/**  A new display order for listing `id`, as a binary order message (ids as `u32`). */
+	listingSort: (id: number, column: SortBy, descending: boolean) => typedError<ArrayBuffer, IpcError_Serialize>(__TAURI_INVOKE("listing_sort", { id, column, descending })),
+	/**  Forgets listing `id` (and stops it if it is still running). */
+	listingClose: (id: number) => typedError<null, IpcError_Serialize>(__TAURI_INVOKE("listing_close", { id })),
 };
 
 /* Types */
@@ -57,4 +68,93 @@ export type FrameState_Serialize = {
 	maximized: boolean,
 	active: boolean,
 };
+
+/**  An error as the UI gets it: a code, never text. */
+export type IpcError = IpcError_Serialize | IpcError_Deserialize;
+
+export type IpcErrorCode = "AccessDenied" | "NotFound" | "Cancelled" | "Os";
+
+/**  An error as the UI gets it: a code, never text. */
+export type IpcError_Deserialize = {
+	code: IpcErrorCode,
+	path?: string | null,
+	os?: number | null,
+};
+
+/**  An error as the UI gets it: a code, never text. */
+export type IpcError_Serialize = {
+	code: IpcErrorCode,
+	path: string | null,
+	os: number | null,
+};
+
+export type JsonBatch = {
+	firstId: number,
+	names: string[],
+	sizes: (number | null)[],
+	modified: (number | null)[],
+	attributes: number[],
+};
+
+/**  The JSON format, for comparison with the binary one. */
+export type JsonEvent = JsonEvent_Serialize | JsonEvent_Deserialize;
+
+/**  The JSON format, for comparison with the binary one. */
+export type JsonEvent_Deserialize = {
+	kind: "batch",
+} & JsonBatch | {
+	kind: "order",
+} & JsonOrder | {
+	kind: "done",
+} & ListingStats | {
+	kind: "error",
+} & IpcError_Deserialize;
+
+/**  The JSON format, for comparison with the binary one. */
+export type JsonEvent_Serialize = {
+	kind: "batch",
+} & JsonBatch | {
+	kind: "order",
+} & JsonOrder | {
+	kind: "done",
+} & ListingStats | {
+	kind: "error",
+} & IpcError_Serialize;
+
+export type JsonOrder = {
+	ids: number[],
+	rustMs: number | null,
+};
+
+/**  Where the time went in one listing (Rust side), in ms from the start of the job. */
+export type ListingStats = {
+	count: number,
+	batches: number,
+	/**  Bytes sent over the channel (binary format only). */
+	bytes: number | null,
+	firstBatchMs: number | null,
+	listMs: number | null,
+	/**  Time the listing thread spent in batch callbacks (encode + send). */
+	sinkMs: number | null,
+	/**  Of that, time inside `Channel::send`. */
+	sendMs: number | null,
+	keysMs: number | null,
+	nameSortMs: number | null,
+	ranksMs: number | null,
+	orderMs: number | null,
+	totalMs: number | null,
+};
+
+/**  A column to sort by. */
+export type SortBy = "name" | "size" | "modified" | "type";
+
+/* Tauri Specta runtime */
+async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (e instanceof Error) throw e;
+        return { status: "error", error: e as any };
+    }
+}
 

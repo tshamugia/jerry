@@ -13,6 +13,7 @@ publish = false
 jerry-core = { path = "crates/jerry-core" }
 jerry-win = { path = "crates/jerry-win" }
 
+rayon = "1"
 serde = { version = "1", features = ["derive"] }
 # tauri-specta v2 is a release candidate: keep these three `=`-pinned and bump them together.
 specta = { version = "=2.0.0-rc.26", features = ["derive"] }
@@ -21,6 +22,7 @@ tauri = "2.12.5"
 tauri-build = "2.7.4"
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 thiserror = "2"
+tokio = { version = "1", features = ["sync"] }
 tracing = "0.1"
 windows = "0.62"
 
