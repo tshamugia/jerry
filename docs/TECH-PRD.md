@@ -88,7 +88,7 @@ UI ბირთვს ბრძანებებს უგზავნის, �
 
 | Thread / pool | რას აკეთებს | რატომ აქ |
 | --- | --- | --- |
-| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება. `OleInitialize` `setup`-ში იძახება: wry მხოლოდ `CoInitializeEx`-ს იძახებს. Modal loop-ები (drag, context menu) `async` ბრძანებიდან `run_on_main_thread`-ით ეშვება: sync ბრძანება WebView2-ის IPC callback-ში სრულდება |
+| მთავარი (UI) thread | ფანჯრები, WebView2, clipboard, drag & drop, Windows-ის context menu | OLE-ს STA და ფანჯრის message loop სჭირდება. `OleInitialize` `setup`-ში იძახება: wry მხოლოდ `CoInitializeEx`-ს იძახებს. Modal loop-ები (drag, context menu) `async` ბრძანებიდან ეშვება და Jerry-ის საკუთარ message-only ფანჯარას ეგზავნება (`run_on_main`). Sync ბრძანება WebView2-ის IPC callback-ში სრულდება, Tauri-ს `run_on_main_thread` კი tao-ს callback-ში, სადაც tao Rust → გვერდი მოვლენებს loop-ის დასრულებამდე აჩერებს (spike #4) |
 | Shell pool (2–4 STA thread) | აიკონები, thumbnail-ები, `IFileOperation`, Shell თვისებები, OneDrive სტატუსი | Shell extension-ები STA-ს მოითხოვს; timeout იცავს, რომ ერთმა extension-მა არაფერი გაყინოს |
 | IO pool | listing, watcher, კოპირება, ZIP | ბლოკირებადი IO UI-ს და IPC-ს არ აჩერებს |
 | ტრანსფერის worker-ები | ერთი worker თითო ფიზიკურ დისკზე ან ქსელურ სერვერზე | ერთ დისკზე თანმიმდევრულად, სხვადასხვაზე პარალელურად (PRD) |
@@ -230,14 +230,14 @@ Windows-თან ყველა შეხება ერთ crate-შია, 
 
 Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შიგნითაც და გარეთაც. ამიტომ Jerry-დან გადათრეული ფაილი ყველა პროგრამისთვის Explorer-ის ფაილივია.
 
-- **გადათრევა Jerry-დან:** UI ამჩნევს მაუსის მოძრაობას ზღვარზე მეტად და იძახებს `drag_start(ids)`-ს. ეს `async` ბრძანებაა: tokio pool-იდან `run_on_main_thread` drag-ს event loop-ში აგზავნის, ასე modal loop მთავარ thread-ზე ეშვება, WebView2-ის IPC callback-ის გარეთ. იქ ეშვება `SHDoDragDrop` Explorer-ის Shell data object-ით (იხ. Clipboard) და default drop source-ით; drag image და რაოდენობის ბეჯი Windows-ისაა. გვერდი drag-ის შემდეგ `pointerup`-ს არ იღებს, ამიტომ UI drag-ის მდგომარეობას `drag_start`-ის დასრულებისას ასუფთავებს. შემოწმებულია spike #3-ით: Explorer, Desktop, Outlook, Telegram, Chrome და AutoCAD ფაილს ისე იღებს, როგორც Explorer-იდან.
-- **მიღება:** საკუთარი `IDropTarget` WebView2-ის ფანჯარაზე; Tauri-ს ჩაშენებული drop handler გამორთულია (`dragDropEnabled: false`). ამ დროს WebView2-ის საკუთარი drop target ისევ ჩართულია (`AllowExternalDrop`), ამიტომ ისიც ითიშება. Drag image სამიზნეზე მხოლოდ `IDropTargetHelper`-ით ჩანს.
-- **სამიზნის პოვნა:** OLE drag-ის დროს WebView2 მაუსის მოვლენებს ვერ იღებს. ამიტომ Rust აგზავნის `dnd:over {x, y, keys}`-ს, UI კი `elementFromPoint`-ით პოულობს სამიზნეს (საქაღალდე, ტაბი, breadcrumb, sidebar) და აბრუნებს მოქმედებას.
-- **`DragOver`** სინქრონულად აბრუნებს UI-ს ბოლო პასუხს. ერთი კადრის დაგვიანება მისაღებია.
-- **Drop description** ("Move to Drawings"): `DROPDESCRIPTION` + `IDropTargetHelper`, ტექსტი UI-დან მოდის.
+- **გადათრევა Jerry-დან:** UI ამჩნევს მაუსის მოძრაობას ზღვარზე მეტად და იძახებს `drag_start(ids)`-ს. ეს `async` ბრძანებაა: tokio pool-იდან drag Jerry-ის საკუთარ ფანჯარას ეგზავნება (`run_on_main`, იხ. «Thread-ების მოდელი»), ასე modal loop მთავარ thread-ზე ეშვება, WebView2-ისა და tao-ს callback-ების გარეთ. იქ ეშვება `SHDoDragDrop` Explorer-ის Shell data object-ით (იხ. Clipboard) და default drop source-ით; drag image და რაოდენობის ბეჯი Windows-ისაა. გვერდი drag-ის შემდეგ `pointerup`-ს არ იღებს, ამიტომ UI drag-ის მდგომარეობას `drag_start`-ის დასრულებისას ასუფთავებს. შემოწმებულია spike #3-ით: Explorer, Desktop, Outlook, Telegram, Chrome და AutoCAD ფაილს ისე იღებს, როგორც Explorer-იდან.
+- **მიღება:** საკუთარი `IDropTarget`, მაგრამ არა WebView2-ის ფანჯარაზე. კურსორის ქვეშ ყოველთვის WebView2-ის browser პროცესის ფანჯარაა (`Chrome_WidgetWin_1`, `Chrome_RenderWidgetHostHWND`), და OLE მისგან Jerry-ის ფანჯრებამდე ზემოთ არ ადის: Jerry-ის ფანჯარაზე რეგისტრირებული target გვერდის თავზე არასოდეს გამოიძახება, Tauri-ს ჩაშენებული drop handler-იც არა (spike #4). ამიტომ target გამჭვირვალე owned popup-ზეა (layered, alpha 1/255, არ აქტიურდება), რომელიც გვერდის თავზე მხოლოდ drag-ის დროს ჩნდება. ტაიმერი (50 ms, დაჭერილი ღილაკისას 16 ms) მას აჩენს, როცა Jerry-ს გარეთ დაჭერილი ღილაკით კურსორი Jerry-ზეა ან Jerry-ის საკუთარი drag მიდის. Tauri-ს drop handler გამორთულია (`dragDropEnabled: false`), WebView2-ის `AllowExternalDrop` კი ითიშება, რომ გვერდმა ჩაგდებული ფაილი არ მიიღოს და არ გახსნას. Drag image სამიზნეზე მხოლოდ `IDropTargetHelper`-ით ჩანს.
+- **სამიზნის პოვნა:** OLE drag-ის დროს WebView2 მაუსის მოვლენებს ვერ იღებს. ამიტომ Rust აგზავნის `dnd:over {seq, x, y, keys}`-ს (client პიქსელებში, COM გამოძახების გარეთ), UI კი `elementFromPoint`-ით პოულობს სამიზნეს (საქაღალდე, ტაბი, breadcrumb, sidebar) და `dnd_answer`-ით აბრუნებს. მოქმედებას Rust ითვლის. Round trip: მედიანა 4–5 ms (spike #4).
+- **`DragOver`** სინქრონულად აბრუნებს მოქმედებას UI-ს ბოლო პასუხით და მიმდინარე ღილაკებით: სამიზნე ერთი კადრით აგვიანებს, Ctrl, Shift და Alt კი მაშინვე მოქმედებს.
+- **Drop description** ("Move to Drawings"): `DROPDESCRIPTION` + `IDropTargetHelper`, ტექსტი UI-დან მოდის. სადაც Jerry ჩაგდებას არ იღებს, `DROPIMAGE_NONE` უტექსტოდ, თორემ Windows თავის "+ Copy"-ს წერს.
 - **UI-ს ლოგიკა იმავე მოვლენებზე:** spring-loaded folders, ტაბზე 0.7 წმ გაჩერება, კიდესთან auto-scroll.
-- **მოქმედება:** იმავე volume → move, სხვა → copy; Ctrl, Shift და Alt აიძულებს მოქმედებას; მარჯვენა ღილაკით გადათრევა მენიუს აჩვენებს.
-- **ჩაგდების შემდეგ:** CF\_HDROP → ტრანსფერების რიგი; virtual files (Outlook, ბრაუზერი) → ფაილად შენახვა.
+- **მოქმედება:** იმავე volume → move, სხვა → copy; Ctrl → copy, Shift → move, Alt ან Ctrl+Shift → link. იძულებითი მოქმედება, რომელსაც წყარო არ უშვებს, უარყოფილია; ნაგულისხმევი კი დაშვებულზე გადადის (Outlook და ბრაუზერი მხოლოდ copy-ს უშვებს). მარჯვენა ღილაკით გადათრევა მენიუს აჩვენებს: `Drop` მაშინვე ბრუნდება, მენიუ Jerry-ისაა.
+- **ჩაგდების შემდეგ:** CF\_HDROP → ტრანსფერების რიგი. გადატანას Jerry თვითონ აკეთებს (optimized move): `Drop` აბრუნებს NONE-ს ან COPY-ს და წერს `Performed DropEffect = NONE`-ს, რომ წყარომ არაფერი წაშალოს. Virtual files (Outlook, ბრაუზერი): `Drop`-ში მხოლოდ `FileContents`-ის reference-ები აიღება (`AgileReference`), ფაილი worker thread-ზე იწერება `.jerrypart`-ით; IStorage → `.msg`, async წყაროს `StartOperation`/`EndOperation`. სახელი ZIP-ის წესით მოწმდება: `..` და აბსოლუტური გზა იბლოკება.
 - **შიდა გადალაგება** (ტაბები, ფავორიტები, რიგი) dnd-kit-ით კეთდება, OLE-ს გარეშე. ტაბის ფანჯრიდან გატანისას კურსორს ფანჯრის გარეთ Rust ადევნებს თვალს.
 
 ### Context menu
@@ -449,7 +449,7 @@ Jerry-ს შეცდომამ ფაილი არასოდეს უ�
 
 ### უსაფრთხოება
 
-- Tauri capabilities: WebView-ს მხოლოდ Jerry-ის ბრძანებები აქვს. `fs`, `shell` და `http` plugin-ები არ გამოიყენება.
+- Tauri capabilities: WebView-ს მხოლოდ Jerry-ის ბრძანებები აქვს. `fs`, `shell` და `http` plugin-ები არ გამოიყენება. Jerry-ის მოვლენების მოსასმენად გვერდს `core:event:allow-listen` და `core:event:allow-unlisten` აქვს.
 - CSP: მხოლოდ `self`, `icon:`, `thumb:` და asset protocol. `eval`, inline script და გარე მისამართები აკრძალულია.
 - DevTools მხოლოდ dev build-შია.
 - ფაილის შიგთავსი script-ს ვერ გაუშვებს: SVG მხოლოდ `<img>`-ით, Markdown raw HTML-ის გარეშე, pdf.js `isEvalSupported: false`-ით.
@@ -507,6 +507,8 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 **#3 Drag & drop გარეთ:** გავლილია 02.11.2026 ([#13](https://github.com/tshamugia/jerry/issues/13#issuecomment-6563710057)). ექვსივე პროგრამა ფაილს ისე იღებს, როგორც Explorer-იდან; fallback (გამჭვირვალე ფანჯარა) საჭირო არ გახდა. ტექნიკა «Drag & drop», «Clipboard» და «Thread-ების მოდელი» სექციებშია.
 
+**#4 Drag & drop შიგნით:** გავლილია 02.11.2026 ([#14](https://github.com/tshamugia/jerry/issues/14#issuecomment-6565149046)) fallback-ით: OLE target-ს WebView2-ის ფანჯრების ქვეშ ვერ პოულობს, ამიტომ drag-ის დროს გვერდის თავზე გამჭვირვალე ფანჯარა ჩნდება. Explorer, Desktop, Outlook (attachment და `.msg`), Chrome, Edge და Jerry-ის შიგნით გადათრევა მუშაობს; ტაბი, breadcrumb და sidebar ინათება. ტექნიკა «Drag & drop» და «Thread-ების მოდელი» სექციებშია.
+
 ### ეტაპები
 
 1. **v0.1 საფუძველი.** Scaffold (Tauri, React, workspace-ები, CI). ფანჯარა ორი პანელით (ნაგულისხმევი) და ტაბებით სათაურის ზოლში; F3 ერთ პანელზე გადართავს. Listing, watcher, დალაგება, Details ხედი, მონიშვნა. ბრძანებების რეესტრი და keymap. Breadcrumbs და მისამართის ზოლი. Sidebar (ფავორიტები, დისკები). ახალი საქაღალდე, გადარქმევა, Recycle Bin. Clipboard. სწრაფი ფილტრი. Status bar. SQLite (პარამეტრები, სესია). ერთი ეგზემპლარი. ლოგები. ინსტალერი და updater.
@@ -521,7 +523,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 | რისკი | რას აზიანებს | შემცირება |
 | --- | --- | --- |
-| OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) დარჩა. საჭიროებისას გამჭვირვალე native ფანჯარა drag-ის დროს |
+| OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) გავლილია fallback-ით: გამჭვირვალე ფანჯარა drag-ის დროს. WebView2-ის განახლებამ ეს ქცევა შეიძლება შეცვალოს: E2E ტესტი CI-ში |
 | Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7; native hit-test |
 | მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
