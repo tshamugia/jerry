@@ -114,7 +114,7 @@ jerry/
 ### მონაცემთა ნაკადი: საქაღალდის გახსნა
 
 1. UI იძახებს `listing_open(tab, path)`-ს და იღებს ნაკადს (Channel).
-2. ბირთვი IO pool-ზე კითხულობს საქაღალდეს და აგზავნის batch-ებს: პირველს მაშინვე, შემდეგებს 50 ms-ში ერთხელ.
+2. ბირთვი IO pool-ზე კითხულობს საქაღალდეს და აგზავნის batch-ებს: პირველს 256 ელემენტზე (100 000-იან საქაღალდეში ~1 ms-ში), შემდეგებს 50 ms-ში ერთხელ, დანარჩენს ბოლოს (spike #2). გაშვებისას სესიის საქაღალდეების listing პროცესის დაწყებისთანავე იწყება, Tauri-მდე: Rust შეტყობინებებს აგროვებს და UI-ს channel-ის მიბმისთანავე უგზავნის (spike #1).
 3. ბირთვი ალაგებს და UI-ს უგზავნის ელემენტებს და მათ თანმიმდევრობას.
 4. UI ხატავს მხოლოდ ხილულ რიგებს; მათი აიკონები და thumbnail-ები იტვირთება `icon://` და `thumb://` მისამართებით.
 5. Watcher აგროვებს ცვლილებებს 100 ms-ის განმავლობაში და იმავე ნაკადში აგზავნის diff-ს.
@@ -134,8 +134,8 @@ jerry/
 ### დალაგება
 
 - ბუნებრივი დალაგება Explorer-ის წესით (`StrCmpLogicalW`-ის სემანტიკა): file2 დგას file10-მდე.
-- სახელს ერთხელ ექმნება sort key, რომ დალაგების შეცვლა სწრაფი იყოს. სამიზნე: 100 000 ელემენტი 100 ms-ზე ნაკლებში.
-- დალაგების შეცვლისას UI-ს ეგზავნება მხოლოდ ახალი თანმიმდევრობა (`u32` ინდექსების ბინარული მასივი), ელემენტები არა.
+- სახელს ერთხელ ექმნება sort key, რომ დალაგების შეცვლა სწრაფი იყოს. სამიზნე: 100 000 ელემენტი 100 ms-ზე ნაკლებში. Spike #2-ში 100 000-ზე Rust-ის sort 2.9 ms-ია, დალაგების შეცვლა კლიკიდან paint-მდე ~30 ms.
+- დალაგების შეცვლისას (`listing_sort(id, column, descending)`) UI-ს ეგზავნება მხოლოდ ახალი თანმიმდევრობა (`u32` ინდექსების ბინარული მასივი `tauri::ipc::Response`-ით; 100 000-ზე 400 KB), ელემენტები არა. თარიღით დალაგება ზუსტ `u64` FILETIME-ზე ხდება.
 - საქაღალდეები ფაილებზე წინ (პარამეტრი).
 
 ### Watcher
@@ -220,11 +220,11 @@ Windows-თან ყველა შეხება ერთ crate-შია, 
 
 ### Clipboard
 
-- Copy და Cut: Explorer-ის Shell data object, CF\_HDROP-ით და Shell IDList Array-ით: `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)`, ანუ მშობელი საქაღალდის `GetUIObjectOf`. `SHCreateDataObject` ცარიელ ობიექტს აბრუნებს და არ გამოიყენება (spike #3). Cut-ზე ემატება `Preferred DropEffect = MOVE`. Jerry-ს დახურვისას `OleFlushClipboard`, რომ შიგთავსი დარჩეს.
-- Paste: CF\_HDROP + `Preferred DropEffect`. Explorer-იდან ამოჭრილის გადატანის შემდეგ იწერება `Paste Succeeded`.
+- Copy და Cut: Explorer-ის Shell data object, CF\_HDROP-ით და Shell IDList Array-ით: `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)`, ანუ მშობელი საქაღალდის `GetUIObjectOf`. `SHCreateDataObject` ცარიელ ობიექტს აბრუნებს და არ გამოიყენება (spike #3). `Preferred DropEffect` Explorer-ივით იწერება: Copy = COPY | LINK (5), Cut = MOVE (2). Clipboard-ზე დადებული `IDataObject` მთავარი thread-ის COM ობიექტია და main-thread `thread_local`-ში ინახება. Core-ის `\\?\` პრეფიქსი Shell-ისთვის და CF\_HDROP-ისთვის იშლება: Shell MAX\_PATH-ზე გრძელ ჩვეულებრივ გზას ამუშავებს, `\\?\` გზას კი ვერა. Jerry-ს დახურვისას `OleFlushClipboard`, რომ შიგთავსი დარჩეს: მის გარეშე CF\_HDROP ქრება, flush-ის შემდეგ კი Cut ისევ Cut რჩება (spike #5).
+- Paste: CF\_HDROP + `Preferred DropEffect`: MOVE COPY-ის გარეშე = Cut, დანარჩენი Copy. Explorer-იდან ამოჭრილის გადატანის შემდეგ Jerry წერს `Paste Succeeded = MOVE`-ს (`Performed DropEffect`-ის გარეშე) და clipboard-ს თავად ასუფთავებს, თუ `GetClipboardSequenceNumber` არ შეცვლილა: Explorer, როგორც წყარო, `Paste Succeeded`-ზე არ რეაგირებს. Explorer-ში ჩასმული Cut-ის შემდეგ Explorer წერს `Performed DropEffect = MOVE`-ს; Jerry ამაზე არაფერს შლის (ფაილები Explorer-მა უკვე გადაიტანა), მხოლოდ ამოჭრის სტილს აქრობს.
 - Virtual files (`FileGroupDescriptorW` + `FileContents`): Outlook-ის attachment ინახება ფაილად.
 - Paste as: სურათი (PNG ან CF\_DIBV5) → .png, ტექსტი → .txt.
-- `AddClipboardFormatListener`: clipboard-ის შეცვლისას ამოჭრილი ფაილების ნახევრად გამჭვირვალე სტილი ქრება.
+- `AddClipboardFormatListener` Jerry-ის message-only ფანჯარაზე, მთავარ thread-ზე. ცვლილებისას Jerry ამოწმებს `OleIsCurrentClipboard`-ს (export პირდაპირ იძახება: `windows` crate `S_FALSE`-ს `Ok`-ად აქცევს) და, თუ clipboard მისი აღარ არის, `clipboard:changed`-ით ამოჭრილი ფაილების ნახევრად გამჭვირვალე სტილი ქრება. `WM_CLIPBOARDUPDATE` Jerry-ის საკუთარ ცვლილებაზეც მოდის, ამიტომ ამოჭრის მდგომარეობა `OleSetClipboard`-მდე იწერება.
 
 ### Drag & drop
 
@@ -317,7 +317,7 @@ src/
 - `decorations: false`. ტაბები და Windows-ის ღილაკები React-შია (ტაბების ზოლი პანელების საზღვარზე ორად იყოფა: თითოეული პანელის ტაბები და მისამართის ზოლი მის ზემოთაა), ცარიელი ადგილი კი `data-tauri-drag-region`.
 - Windows 11-ის Snap Layouts maximize ღილაკზე მოითხოვს native hit-test-ს (`HTMAXBUTTON`). ეს spike-ში მოწმდება.
 - ყოველი ფანჯარა ცალკე WebView2-ია საერთო browser process-ით.
-- ფანჯარა ჩნდება პირველი რენდერის შემდეგ, თემის ფონით, რომ თეთრი ციმციმი არ იყოს.
+- ფანჯარა ჩნდება პირველი რენდერის შემდეგ. ფანჯარასა და WebView2-ს თემის ფონი აქვს (`background_color` = `--jerry-mica`): თემა Rust-ში Windows-იდან ფანჯრის შექმნამდე იკითხება. მხოლოდ დამალვა ჩვენებამდე ციმციმს ვერ აცილებს, რადგან `show`-ის მომენტში Chromium-ს კადრი ჯერ არ აქვს: ფონის გარეშე ფანჯარა 8 გაშვებიდან 8-ში თეთრი ჩანდა, ფონით 11-დან 0-ში (spike #1).
 - WebView2-ის პარამეტრები: `AreBrowserAcceleratorKeysEnabled = false` (Ctrl+P, Ctrl+F, Ctrl+R და F5 Jerry-ს ეკუთვნის), ნაგულისხმევი context menu და zoom გამორთულია.
 
 ### კლავიატურა და ბრძანებები
@@ -383,7 +383,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 ### ფორმატი და შეცდომები
 
 - ოპერაციები ფაილებს `entry_id`-ით ან ბირთვის მიერ გაცემული path token-ით მიმართავს. საჩვენებლად გზა ტექსტად მოდის.
-- Listing-ის batch კომპაქტურია: სვეტების მასივები (სახელი, ზომა, თარიღები, ატრიბუტები, აიკონის გასაღები). თანმიმდევრობა ბინარულად იგზავნება (`tauri::ipc::Response`).
+- Listing-ის batch ბინარულია (spike #2): ერთი `ArrayBuffer` თითო batch-ზე, `Channel`-ით, little-endian სვეტებად. ჯერ 16-ბაიტიანი header `[kind, count, firstId, nameUnits]`, შემდეგ `f64 size[]`, `f64 modified[]`, `u32 attributes[]`, `u32 nameEnd[]` და სახელები UTF-16-ად; აიკონის გასაღები სვეტად დაემატება. სვეტები გასწორებულია, ამიტომ JS-ში typed array view-ები კოპირების გარეშე იქმნება, სახელებს კი ერთი `TextDecoder("utf-16le")` შიფრავს. ზომა `f64`-ია (ზუსტია 2^53 ბაიტამდე), თარიღი `f64` ms Unix epoch-იდან, ასე BigInt არ სჭირდება. ერთ ნაკადში ოთხი შეტყობინებაა (პირველი `u32` = kind): batch, order, done, error. Rust-ის `Bytes` ტიპი bindings-ში `ArrayBuffer`-ად ჩანს. 100 000 ელემენტის encode + send 4.9 ms-ია, JSON-ით 51.7 ms.
 - შეცდომა ერთი ფორმით ბრუნდება: `JerryError { code, path, params }`. კოდები: `AccessDenied`, `NotFound`, `InUse` (პროგრამის სახელით), `NoSpace` (საჭირო და არსებული), `InvalidName`, `DeviceGone`, `NoRecycleBin`, `Cancelled`, `Os` (Windows-ის კოდი).
 - UI კოდს ადამიანურ ტექსტად აქცევს და აჩვენებს შემდეგ ნაბიჯს: Retry, Skip, Show in Explorer.
 - ტრანსფერის პროგრესი წამში მაქსიმუმ 10-ჯერ იგზავნება; `dnd:over` — კადრში ერთხელ.
@@ -416,7 +416,7 @@ PRD-ის ყოველ სიჩქარის მიზანს აქვ
 
 | PRD-ის მიზანი | ტექნიკა | როგორ ვზომავთ |
 | --- | --- | --- |
-| გაშვება < 1 წმ | სესია იკითხება ფანჯრამდე; ორივე პანელის listing იწყება WebView2-ის ჩატვირთვის პარალელურად; საწყისი JS მცირეა, დანარჩენი lazy | process start → პირველი რიგის paint, ლოგში; ცივი და თბილი გაშვება |
+| გაშვება < 1 წმ | სესია იკითხება ფანჯრამდე; ორივე პანელის listing იწყება პროცესის დაწყებისთანავე, WebView2-ის ჩატვირთვის პარალელურად; ფანჯრისა და WebView2-ის ფონი თემიდან; საწყისი JS ≤ ~300 KB (+100 KB ≈ +3.6 ms), palette, rename, settings, preview და dnd-kit lazy | `CreateProcess` → პირველი რიგის Element Timing `renderTime` (`startup_probe`), NVIDIA-ს მდგომარეობისა და კვების ჩაწერით; ცივი და თბილი გაშვება |
 | 1 000 ელემენტი < 0.2 წმ | `FindFirstFileExW` large fetch, პირველი batch მაშინვე | `listing_open` → paint |
 | 10 000+ სიაში scroll შეფერხების გარეშე | ვირტუალიზაცია, ფიქსირებული სიმაღლე, აიკონები ქეშიდან, thumbnail-ები lazy | DevTools Performance, 60 fps |
 | 100 000+ ეტაპობრივად | batch-ები, დალაგება Rust-ში, თანმიმდევრობა ბინარულად | პირველი რიგები < 0.3 წმ, დალაგება < 100 ms |
@@ -424,7 +424,7 @@ PRD-ის ყოველ სიჩქარის მიზანს აქვ
 | ინტერფეისი არასოდეს იყინება | IO არასოდეს UI-ში; პროგრესის მოვლენები შეზღუდულია | dev რეჟიმში 50 ms-ზე გრძელი task-ები ლოგში იწერება |
 
 - ბირთვის benchmark-ები (criterion): listing, დალაგება, ძებნა სინთეზურ საქაღალდეებზე (1 000, 10 000, 100 000 ფაილი). 20%-ზე მეტი გაუარესება CI-ში გაფრთხილებას იძლევა.
-- მეხსიერების ბიუჯეტი (შემოთავაზება): ერთი ფანჯარა 10 ტაბით < 300 MB WebView2-ის ჩათვლით. ზუსტდება spike-ის შემდეგ.
+- მეხსიერების ბიუჯეტი: ერთი ფანჯარა 10 ტაბით < 300 MB WebView2-ის ჩათვლით. Spike #1-ში (private working set): ერთი ტაბი 110 MB, 10 × 1 000 — 119 MB, 8 × 1 000 + 10 000 + 100 000 — 149 MB; აქედან `jerry.exe` 5–14 MB-ია.
 
 ## საიმედოობა და უსაფრთხოება
 
@@ -478,7 +478,7 @@ CI (GitHub Actions, windows-latest) ყოველ push-ზე ამოწმ�
 Jerry ვრცელდება NSIS ინსტალერით, მომხმარებლის დონეზე და admin-ის გარეშე. განახლებები v0.1-დან Tauri updater-ით მოდის, რომ ყოველდღიური გამოყენების დროს ახალი ვერსია თავისით დაყენდეს.
 
 - **დეველოპმენტი:** `pnpm tauri dev`; UI-ზე hot reload, Rust-ის ცვლილებაზე ახალი build.
-- **Release profile:** `lto = "thin"`, `codegen-units = 1`, `strip = true`. `panic = "unwind"` რჩება, რომ worker-ების panic დაიჭიროს.
+- **Release profile:** `lto = "thin"`, `codegen-units = 1`, `strip = true`. `panic = "unwind"` რჩება, რომ worker-ების panic დაიჭიროს. ახალი exe-ს პირველი გაშვება ~2 წმ-ით ნელია: Defender მას გაშვებამდე ამოწმებს (spike #1), ამიტომ exe-ს ზომაც (ახლა 8.9 MB) მნიშვნელოვანია.
 - **ინსტალერი:** NSIS, `installMode: currentUser`, დაყენება `%LOCALAPPDATA%\Programs\Jerry`-ში. WebView2 იყენება `downloadBootstrapper`-ით, თუ Windows 10-ზე არ არის.
 - **რეესტრი:** "Open in Jerry" და autostart აპიდან ჩაირთვება პარამეტრებით. Uninstall შლის ყველა ჩანაწერს.
 - **განახლება:** `tauri-plugin-updater`, პაკეტები ხელმოწერილია updater-ის გასაღებით. `latest.json` და ფაილები საჯარო repo-ს GitHub Releases-ზეა. შემოწმება გაშვებისას და დღეში ერთხელ; ახალი ვერსიისას ჩანს შეტყობინება ცვლილებების სიით და Update ღილაკით, როგორც სხვა აპებში. ინსტალაცია მხოლოდ მომხმარებლის თანხმობით; შემდეგ Jerry თავიდან იხსნება (tauri-plugin-process) და სესია აღდგება. შემოწმების გამორთვა პარამეტრებშია.
@@ -505,9 +505,15 @@ Jerry ვრცელდება NSIS ინსტალერით, მომ
 
 Spike-ის კოდი ცალკე branch-ზე რჩება. შედეგები და არჩეული ტექნიკები ამ დოკუმენტში ჩაიწერება.
 
+**#1 ცივი გაშვება:** გაზომილია 02.11.2026 ([#11](https://github.com/tshamugia/jerry/issues/11#issuecomment-6565323519)); ცივი გაშვება (ცარიელი ქეში) და თეთრი ციმციმის შემოწმება თვალით ჯერ დარჩა. Jerry-ის საკუთარი ნაწილი თბილ გაშვებაზე ~0.5 წმ-ია (1 000 ელემენტი), აქედან ~70 % WebView2-ის დაყენებაა. Hybrid GPU-იან ლეპტოპზე მძინარე NVIDIA-ს გაღვიძება პირველ კადრს +0.4–1.45 წმ-ს უმატებს (~1.9 წმ) და Jerry-ის კოდიდან ვერ იცილება; ბიუჯეტს სანდოდ მხოლოდ ფონზე დარჩენილი Jerry აკმაყოფილებს (ჩვენება 19–56 ms). გადაწყვეტა «რისკები და კითხვები»-შია.
+
+**#2 100 000 ელემენტი:** გავლილია 02.11.2026 ([#12](https://github.com/tshamugia/jerry/issues/12#issuecomment-6563704652)). პირველი რიგები ~15 ms-ში ჩანს (ბიუჯეტი 300), დალაგების შეცვლა 100 000-ზე ~30 ms-ია (ბიუჯეტი 100), scroll 60 fps-ია release-შიც და debug-შიც. ტექნიკა «მონაცემთა ნაკადი», «დალაგება» და «ფორმატი და შეცდომები» სექციებშია.
+
 **#3 Drag & drop გარეთ:** გავლილია 02.11.2026 ([#13](https://github.com/tshamugia/jerry/issues/13#issuecomment-6563710057)). ექვსივე პროგრამა ფაილს ისე იღებს, როგორც Explorer-იდან; fallback (გამჭვირვალე ფანჯარა) საჭირო არ გახდა. ტექნიკა «Drag & drop», «Clipboard» და «Thread-ების მოდელი» სექციებშია.
 
 **#4 Drag & drop შიგნით:** გავლილია 02.11.2026 ([#14](https://github.com/tshamugia/jerry/issues/14#issuecomment-6565149046)) fallback-ით: OLE target-ს WebView2-ის ფანჯრების ქვეშ ვერ პოულობს, ამიტომ drag-ის დროს გვერდის თავზე გამჭვირვალე ფანჯარა ჩნდება. Explorer, Desktop, Outlook (attachment და `.msg`), Chrome, Edge და Jerry-ის შიგნით გადათრევა მუშაობს; ტაბი, breadcrumb და sidebar ინათება. ტექნიკა «Drag & drop» და «Thread-ების მოდელი» სექციებშია.
+
+**#5 Clipboard:** Explorer-თან გავლილია 02.11.2026 ([#15](https://github.com/tshamugia/jerry/issues/15#issuecomment-6564949126)): Copy, Cut და Paste ორივე მიმართულებით მუშაობს ნამდვილ explorer.exe-სა და jerry.exe-ზე, ქართული სახელებით, MAX\_PATH-ზე გრძელი გზით და Jerry-ის დახურვის შემდეგაც; fallback არ დასჭირდა. ხელით ჯერ დარჩა: ნამდვილი Ctrl+C / X / V და ჩასმა Outlook-სა და Telegram-ში. ტექნიკა «Clipboard» სექციაშია.
 
 ### ეტაპები
 
@@ -525,6 +531,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 | --- | --- | --- |
 | OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) გავლილია fallback-ით: გამჭვირვალე ფანჯარა drag-ის დროს. WebView2-ის განახლებამ ეს ქცევა შეიძლება შეცვალოს: E2E ტესტი CI-ში |
 | Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7; native hit-test |
+| Hybrid GPU (Intel + NVIDIA ლეპტოპი) | გაშვება < 1 წმ | WebView2-ის GPU პროცესი მძინარე NVIDIA-ს აღვიძებს: +0.4–1.45 წმ (spike #1), ფლაგებით ვერ აიცილება. გადაწყვეტა ქვემოთ, ღია კითხვებშია |
 | მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
 | Shell API-ები 260+ სიმბოლოიან გზებზე | Recycle Bin, context menu | საკუთარი ოპერაციები და წინასწარი გაფრთხილება |
@@ -538,4 +545,8 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 - [x] Replace-ით ჩანაცვლებული ფაილი Recycle Bin-ში იგზავნება: ვეთანხმებით? PRD-ში ეს ქცევა აღწერილი არ არის. კი ვეთანხმები
 - [x] DWG preview: საკმარისია Windows-ის thumbnail (AutoCAD ან DWG TrueView დაყენებულია?), თუ 1.0-ის შემდეგ ფაილში ჩაშენებული preview-ს თავად ამოვიღებთ? DWG preview არ არის აუცილებელი, დატოვე windows thumbnail
 - [x] რამდენიმე ფანჯარა და ტაბის გატანა v1.0-ში დავტოვოთ? PRD-ში ეტაპი მითითებული არ არის. კი ვერსია ერთში იყო.
+
+### ღია კითხვები (02.11.2026)
+
+- [ ] გაშვება hybrid GPU-ზე (spike #1): NVIDIA-ს გაღვიძების გამო პირველი რიგი ~1.9 წმ-ში ჩანს. (ა) ბიუჯეტში გამონაკლისად ჩავწეროთ (desktop-ზე და მხოლოდ ინტეგრირებულ GPU-ზე ~0.5 წმ), თუ (ბ) Jerry ფონზე დარჩეს: Windows-ში შესვლისას დამალულად ეშვება, ბოლო ფანჯრის დახურვა მას მალავს, გაშვება კი მზა ფანჯარას 19–56 ms-ში აჩენს (~120 MB მუდმივად)? Spike-ის რეკომენდაცია: (ბ) პარამეტრად, ნაგულისხმევად ჩართული; v0.1-ში საკმარისია "დახურვა = დამალვა" და single instance.
 - [x] ARM64 build საჭიროა თუ არა? არა არ არის საჭირო
