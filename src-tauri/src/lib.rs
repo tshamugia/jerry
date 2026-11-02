@@ -1,10 +1,16 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+#[cfg(debug_assertions)]
+mod dev;
+pub mod ipc;
+pub mod jobs;
+pub mod logging;
+
 use std::time::Duration;
 
-use specta_typescript::Typescript;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use specta_typescript::{Typescript, semantic};
+use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
 use tauri_specta::{Builder, collect_commands};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
@@ -12,6 +18,23 @@ const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ipc/bin
 
 /// How long to wait for the UI's `app_ready` before showing the window anyway.
 const SHOW_FALLBACK: Duration = Duration::from_secs(5);
+
+/// The bindings' `typedError`: a command's rejection becomes `{ status: "error", error }` only
+/// when it is a `JerryError`. Anything else (an unknown command, a bad argument) is a bug and
+/// stays thrown, so the error type in the bindings never lies.
+///
+/// tauri-specta follows it with `_assertTypedErrorFollowsContract`, a constant nothing reads, which
+/// fails our `noUnusedLocals`; the trailing `@ts-ignore` covers that next line.
+const TYPED_ERROR: &str = r#"async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
+    try {
+        return { status: "ok", data: await result };
+    } catch (e) {
+        if (typeof e === "object" && e !== null && "code" in e) return { status: "error", error: e as E };
+        throw e instanceof Error ? e : new Error(String(e));
+    }
+}
+
+// @ts-ignore: tauri-specta's unused contract check below fails noUnusedLocals."#;
 
 /// The app version, from the workspace `Cargo.toml`.
 #[tauri::command]
@@ -34,9 +57,34 @@ fn show(window: &WebviewWindow) {
     }
 }
 
-/// Every command the UI may call. The same list feeds the invoke handler and the bindings.
+/// Every command the UI may call; dev builds add the dev panel's (`dev.rs`). The same list
+/// feeds the invoke handler and the bindings.
+macro_rules! commands {
+    ($($dev:tt)*) => {
+        collect_commands![app_version, app_ready, $($dev)*]
+    };
+}
+
 fn specta_builder() -> Builder<tauri::Wry> {
-    Builder::<tauri::Wry>::new().commands(collect_commands![app_version, app_ready])
+    #[cfg(debug_assertions)]
+    let commands = commands![
+        dev::dev_sample_error,
+        dev::dev_panic_in_job,
+        dev::dev_block_main_thread,
+        dev::dev_long_task,
+        dev::dev_stream,
+    ];
+    #[cfg(not(debug_assertions))]
+    let commands = commands![];
+
+    Builder::<tauri::Wry>::new()
+        .commands(commands)
+        // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
+        // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
+        .disable_serde_phases()
+        // `f64` as `number`, not `number | null`: Jerry never sends NaN or infinity.
+        .semantic_types(semantic::Configuration::empty().enable_lossless_floats())
+        .typed_error_impl(TYPED_ERROR)
 }
 
 /// Writes the IPC types to `src/ipc/bindings.ts` (`pnpm bindings`).
@@ -44,8 +92,9 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
     specta_builder().export(Typescript::default(), BINDINGS_PATH)
 }
 
-/// Builds and runs the app until its last window closes.
+/// Builds and runs the app until it exits.
 pub fn run() -> tauri::Result<()> {
+    logging::init();
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -54,15 +103,18 @@ pub fn run() -> tauri::Result<()> {
         tracing::error!(%error, "failed to export IPC bindings");
     }
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
             tracing::info!(
-                core = jerry_core::VERSION,
+                version = %app.package_info().version,
                 os_build = jerry_win::os_build(),
                 "Jerry starting"
             );
+            if let Err(error) = jerry_win::main_thread::init() {
+                tracing::error!(%error, "main thread setup failed: OLE and run_on_main won't work");
+            }
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
@@ -77,5 +129,13 @@ pub fn run() -> tauri::Result<()> {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())?;
+
+    app.run(|_, event| {
+        if let RunEvent::Exit = event {
+            tracing::info!("Jerry exiting");
+            logging::flush();
+        }
+    });
+    Ok(())
 }

@@ -5,6 +5,9 @@
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
 //! timeouts.
 
+pub mod folders;
+pub mod main_thread;
+
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 
