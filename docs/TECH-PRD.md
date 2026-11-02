@@ -393,7 +393,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 
 - ოპერაციები ფაილებს `entry_id`-ით ან ბირთვის მიერ გაცემული path token-ით მიმართავს. საჩვენებლად გზა ტექსტად მოდის.
 - Listing-ის batch ბინარულია (spike #2): ერთი `ArrayBuffer` თითო batch-ზე, `Channel`-ით, little-endian სვეტებად. ჯერ 16-ბაიტიანი header `[kind, count, firstId, nameUnits]`, შემდეგ `f64 size[]`, `f64 modified[]`, `u32 attributes[]`, `u32 nameEnd[]` და სახელები UTF-16-ად; აიკონის გასაღები სვეტად დაემატება. სვეტები გასწორებულია, ამიტომ JS-ში typed array view-ები კოპირების გარეშე იქმნება, სახელებს კი ერთი `TextDecoder("utf-16le")` შიფრავს. ზომა `f64`-ია (ზუსტია 2^53 ბაიტამდე), თარიღი `f64` ms Unix epoch-იდან, ასე BigInt არ სჭირდება. ერთ ნაკადში ოთხი შეტყობინებაა (პირველი `u32` = kind): batch, order, done, error. Rust-ის `Bytes` ტიპი bindings-ში `ArrayBuffer`-ად ჩანს. 100 000 ელემენტის encode + send 4.9 ms-ია, JSON-ით 51.7 ms.
-- შეცდომა ერთი ფორმით ბრუნდება: `JerryError { code, path, params }`. კოდები: `AccessDenied`, `NotFound`, `InUse` (პროგრამის სახელით), `NoSpace` (საჭირო და არსებული), `InvalidName`, `DeviceGone`, `NoRecycleBin`, `Cancelled`, `Os` (Windows-ის კოდი).
+- შეცდომა ერთი ფორმით ბრუნდება: `JerryError { code, path, params }`. კოდები: `AccessDenied`, `NotFound`, `InUse` (პროგრამის სახელით), `NoSpace` (საჭირო და არსებული), `InvalidName`, `DeviceGone`, `NoRecycleBin`, `Cancelled`, `Os` (Windows-ის კოდი), `Internal` (Jerry-ის საკუთარი შეცდომა, მაგ. panic job-ში; დეტალები ლოგშია).
 - UI კოდს ადამიანურ ტექსტად აქცევს და აჩვენებს შემდეგ ნაბიჯს: Retry, Skip, Show in Explorer.
 - ტრანსფერის პროგრესი წამში მაქსიმუმ 10-ჯერ იგზავნება; `dnd:over` — კადრში ერთხელ.
 
@@ -453,7 +453,7 @@ Jerry-ს შეცდომამ ფაილი არასოდეს უ�
 
 - Job ჟურნალში იწერება დაწყებამდე, მისი მდგომარეობა კი ფაილების ჯგუფებად ახლდება.
 - გაშვებისას დაუსრულებელი job-ები ჩანს: რა დასრულდა და რა არა. მომხმარებელი ირჩევს Resume-ს ან Discard-ს; დარჩენილი `.jerrypart` ფაილები იშლება.
-- ფონური worker-ის panic აპს არ აჩერებს: იჭერს `catch_unwind`, იწერება ლოგში და job შეცდომით სრულდება.
+- ფონური worker-ის panic აპს არ აჩერებს: იჭერს `catch_unwind`, იწერება ლოგში და job `Internal` შეცდომით სრულდება.
 - ჩამოკიდებული Shell extension: Shell pool-ში timeout-ის შემდეგ worker ახალით იცვლება.
 
 ### უსაფრთხოება
