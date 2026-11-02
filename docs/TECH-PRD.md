@@ -314,8 +314,8 @@ src/
 
 ### ფანჯარა და ტაბები
 
-- `decorations: false`. ტაბები და Windows-ის ღილაკები React-შია (ტაბების ზოლი პანელების საზღვარზე ორად იყოფა: თითოეული პანელის ტაბები და მისამართის ზოლი მის ზემოთაა), ცარიელი ადგილი კი `data-tauri-drag-region`.
-- Windows 11-ის Snap Layouts maximize ღილაკზე მოითხოვს native hit-test-ს (`HTMAXBUTTON`). ეს spike-ში მოწმდება.
+- `decorations: false`. ტაბები და Windows-ის ღილაკები React-შია (ტაბების ზოლი პანელების საზღვარზე ორად იყოფა: თითოეული პანელის ტაბები და მისამართის ზოლი მის ზემოთაა; title bar-სა და body-ს საერთო grid სვეტები აქვს, ამიტომ ზოლი გამყოფის გადაწევას მიჰყვება). ცარიელი ადგილი CSS `app-region: drag`-ია (ტაბებსა და ღილაკებზე `no-drag`): WebView2-ის `IsNonClientRegionSupportEnabled`-ით (wry რთავს) გადათრევას, Aero Snap-ს, ორმაგ კლიკს და system menu-ს WebView2 native-ად აკეთებს, ამიტომ `data-tauri-drag-region` და `core:window:*` permission არ სჭირდება (spike #7).
+- Caption ღილაკებს (46×40) React ხატავს, თაგვს კი `jerry-win`-ის უხილავი input ფანჯარა იღებს ღილაკების თავზე (`WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` child, Windows Terminal-ის მოდელი): top-level ფანჯრის `WM_NCHITTEST` გვერდის თავზე არ მოდის, რადგან WebView2-ის ფანჯრები browser process-ს ეკუთვნის. Input ფანჯარა აბრუნებს `HTMINBUTTON` / `HTMAXBUTTON` / `HTCLOSE`-ს (Windows 11-ის Snap Layouts ამას ითხოვს), კლიკზე parent-ს `WM_SYSCOMMAND`-ს უგზავნის, hover / pressed / maximized / active მდგომარეობას კი `Channel`-ით React-ს. Maximize-ის ზომას tao-ს `WM_NCCALCSIZE` სამუშაო არით ზღუდავს. Mica: `transparent: true` + `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_MAINWINDOW` build 22621+-ზე; Windows 10-ზე `--jerry-mica` ერთფეროვანი ფერია (spike #7).
 - ყოველი ფანჯარა ცალკე WebView2-ია საერთო browser process-ით.
 - ფანჯარა ჩნდება პირველი რენდერის შემდეგ. ფანჯარასა და WebView2-ს თემის ფონი აქვს (`background_color` = `--jerry-mica`): თემა Rust-ში Windows-იდან ფანჯრის შექმნამდე იკითხება. მხოლოდ დამალვა ჩვენებამდე ციმციმს ვერ აცილებს, რადგან `show`-ის მომენტში Chromium-ს კადრი ჯერ არ აქვს: ფონის გარეშე ფანჯარა 8 გაშვებიდან 8-ში თეთრი ჩანდა, ფონით 11-დან 0-ში (spike #1).
 - WebView2-ის პარამეტრები: `AreBrowserAcceleratorKeysEnabled = false` (Ctrl+P, Ctrl+F, Ctrl+R და F5 Jerry-ს ეკუთვნის), ნაგულისხმევი context menu და zoom გამორთულია.
@@ -515,6 +515,8 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 **#5 Clipboard:** Explorer-თან გავლილია 02.11.2026 ([#15](https://github.com/tshamugia/jerry/issues/15#issuecomment-6564949126)): Copy, Cut და Paste ორივე მიმართულებით მუშაობს ნამდვილ explorer.exe-სა და jerry.exe-ზე, ქართული სახელებით, MAX\_PATH-ზე გრძელი გზით და Jerry-ის დახურვის შემდეგაც; fallback არ დასჭირდა. ხელით ჯერ დარჩა: ნამდვილი Ctrl+C / X / V და ჩასმა Outlook-სა და Telegram-ში. ტექნიკა «Clipboard» სექციაშია.
 
+**#7 Title bar:** ტექნიკა არჩეულია და ავტომატურად შემოწმდა 02.11.2026 ([#17](https://github.com/tshamugia/jerry/issues/17#issuecomment-6586199502)): hit-test კოდები, ფანჯრის სტილები, Mica და maximize-ის ზუსტი ზომა (client = სამუშაო არე) probe-ით და unit test-ებით დადასტურდა, ზოლი პანელების საზღვარზე იყოფა. ხელით ჯერ დარჩა მთავარი კითხვა: აღწევს თუ არა რეალური თაგვი layered input ფანჯრამდე (hover, კლიკი, Snap Layouts flyout); ასევე Aero Snap, system menu, auto-hide taskbar და DPI-ის ცვლილება. Windows 10-ზე არ შემოწმებულა. ტექნიკა «ფანჯარა და ტაბები» სექციაშია.
+
 ### ეტაპები
 
 1. **v0.1 საფუძველი.** Scaffold (Tauri, React, workspace-ები, CI). ფანჯარა ორი პანელით (ნაგულისხმევი) და ტაბებით სათაურის ზოლში; F3 ერთ პანელზე გადართავს. Listing, watcher, დალაგება, Details ხედი, მონიშვნა. ბრძანებების რეესტრი და keymap. Breadcrumbs და მისამართის ზოლი. Sidebar (ფავორიტები, დისკები). ახალი საქაღალდე, გადარქმევა, Recycle Bin. Clipboard. სწრაფი ფილტრი. Status bar. SQLite (პარამეტრები, სესია). ერთი ეგზემპლარი. ლოგები. ინსტალერი და updater.
@@ -530,7 +532,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 | რისკი | რას აზიანებს | შემცირება |
 | --- | --- | --- |
 | OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) გავლილია fallback-ით: გამჭვირვალე ფანჯარა drag-ის დროს. WebView2-ის განახლებამ ეს ქცევა შეიძლება შეცვალოს: E2E ტესტი CI-ში |
-| Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7; native hit-test |
+| Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7: caption ღილაკებზე `jerry-win`-ის layered input ფანჯარა `HTMAXBUTTON`-ს აბრუნებს; რეალური თაგვით ჯერ შესამოწმებელია, სათადარიგოა ჩვეულებრივი child ფანჯარა (`JERRY_PLAIN_INPUT`) |
 | Hybrid GPU (Intel + NVIDIA ლეპტოპი) | გაშვება < 1 წმ | WebView2-ის GPU პროცესი მძინარე NVIDIA-ს აღვიძებს: +0.4–1.45 წმ (spike #1), ფლაგებით ვერ აიცილება. გადაწყვეტა ქვემოთ, ღია კითხვებშია |
 | მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
