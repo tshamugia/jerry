@@ -3,8 +3,12 @@
 // round as a criterion baseline. A side's value is its fastest round, so one noisy round can't
 // fake a slowdown. A round's value is criterion's estimate, the middle number its log prints.
 //
-// Writes a Markdown table to the job summary and a warning annotation for every benchmark more
-// than the threshold slower. A slowdown never fails the job; missing head results do.
+// A benchmark is slower when its head is more than the threshold slower than its base AND every
+// head round is slower than every base round. A bigger change inside the rounds' spread is noise:
+// shown in the table, without a warning (short IO benchmarks on a busy machine spread 60%).
+//
+// Writes a Markdown table to the job summary and a warning annotation for every slower benchmark.
+// A slowdown never fails the job; missing head results do.
 //
 //   node .github/scripts/bench-compare.mjs <criterion dir> [--threshold 0.2] [--base <label>]
 //       [--head <label>]
@@ -41,7 +45,8 @@ if (hasBase) {
     `### Benchmarks: ${args.head} vs ${args.base}`,
     "",
     `Fastest of ${roundsText} per side, base and head in turns on one runner. A benchmark more`,
-    `than ${percent}% slower than the base gets a warning. Noise: how far each side's rounds spread.`,
+    `than ${percent}% slower than the base, with every head round slower than every base round, gets`,
+    "a warning. Noise: how far each side's rounds spread.",
     "",
     "| Benchmark | Base | Head | Change | Noise (base / head) |",
     "| --- | --: | --: | --: | --: |",
@@ -58,8 +63,13 @@ if (hasBase) {
     }
     const change = best(head) / best(base) - 1;
     const over = change > args.threshold;
-    if (over) slower.push({ id, base: best(base), head: best(head), change });
-    const shown = over ? `**${signed(change)}** ⚠️` : signed(change);
+    const clear = best(head) > Math.max(...base);
+    if (over && clear) slower.push({ id, base: best(base), head: best(head), change });
+    const shown = !over
+      ? signed(change)
+      : clear
+        ? `**${signed(change)}** ⚠️`
+        : `${signed(change)} (noise)`;
     lines.push(
       `| \`${id}\` | ${duration(best(base))} | ${duration(best(head))} | ${shown} | ${spread(base)} / ${spread(head)} |`,
     );

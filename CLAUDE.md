@@ -47,7 +47,7 @@ jerry/
   design/               UI spec, tokens.css, design canvas snapshot
   docs/                 PRD, Tech PRD, assets/, adr/, checklists/ (manual test checklists per phase)
   .github/              CI (workflows/ci.yml: what `pnpm check` runs + bindings check, windows-latest),
-                        core benchmarks on PRs, base vs head (workflows/bench.yml +
+                        core benchmarks on PRs, base vs head (workflows/bench.yml, scripts/bench.sh,
                         scripts/bench-compare.mjs), PR title check (workflows/pr-title.yml),
                         release on `v*` tags (workflows/release.yml), PR template
 ```
