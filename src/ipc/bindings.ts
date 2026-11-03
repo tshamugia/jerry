@@ -12,6 +12,18 @@ export const commands = {
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
 	/**
+	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then a
+	 *  done or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
+	 *  folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come
+	 *  as the stream's error message. Opening a folder for a tab closes the tab's previous listing.
+	 */
+	listingOpen: (tab: number, target: ListingTarget, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, onMessage })),
+	/**
+	 *  Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
+	 *  that is already closed does nothing.
+	 */
+	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
+	/**
 	 *  Fails with a real Windows error: a background job reads a file that doesn't exist, so the
 	 *  UI gets `NotFound` with the path.
 	 */
@@ -33,6 +45,11 @@ export const commands = {
 	 *  `on_message`.
 	 */
 	devStream: (onMessage: Channel<ArrayBuffer>) => typedError<null, JerryError>(__TAURI_INVOKE("dev_stream", { onMessage })),
+	/**
+	 *  Builds the synthetic folder with `count` entries under `%TEMP%\jerry-synth` unless it is
+	 *  there already, and returns its path as display text, for timing listings in the dev panel.
+	 */
+	devSynthFolder: (count: number) => typedError<string, JerryError>(__TAURI_INVOKE("dev_synth_folder", { count })),
 };
 
 /* Types */
@@ -75,6 +92,22 @@ export type JerryError = {
 	/**  The file or folder it happened on. Exact here; the UI gets display text only. */
 	path: string | null,
 } & ErrorCode;
+
+/**  An opened listing: its id, and its folder as display text. */
+export type ListingOpened = {
+	id: number,
+	path: string,
+};
+
+/**  The folder to list. */
+export type ListingTarget = 
+/**  A folder the user named: typed in the address bar, a favorite, a drive. Must be absolute. */
+{ kind: "path"; path: string } | 
+/**
+ *  Subfolder `entry` of the open listing `listing`, opened by its exact path in core, so
+ *  names that aren't valid Unicode open too.
+ */
+{ kind: "entry"; listing: number; entry: number };
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {
