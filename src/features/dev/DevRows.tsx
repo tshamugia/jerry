@@ -1,6 +1,6 @@
 import { memo, type RefObject, useState } from "react";
 import { entryIconUrl } from "../../ipc";
-import { sizeText } from "../../strings";
+import { sizeText, strings } from "../../strings";
 
 /** Icons are 16 px (design: «Icons»). */
 const ICON_PX = 16;
@@ -17,6 +17,8 @@ export interface DevEntries {
   modified: number[];
   folders: boolean[];
   iconKeys: number[];
+  /** Entry ids in display order, once the core has sorted them; until then, listing order. */
+  order?: Uint32Array;
 }
 
 export function emptyEntries(): DevEntries {
@@ -43,11 +45,12 @@ export function DevRows({
   const first = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN);
   const last = Math.min(count, Math.ceil(scrollTop / rowHeight) + VIEW_ROWS + OVERSCAN);
   const rows = [];
-  for (let id = first; id < last; id++) {
+  for (let position = first; position < last; position++) {
+    const id = entries.order?.[position] ?? position;
     rows.push(
       <DevRow
         key={id}
-        top={id * rowHeight}
+        top={position * rowHeight}
         name={entries.names[id] ?? ""}
         size={entries.folders[id] ? undefined : (entries.sizes[id] ?? 0)}
         icon={iconFor(entries, id)}
@@ -61,9 +64,13 @@ export function DevRows({
       className="overflow-y-auto rounded-ctrl border border-ctrl-border"
       style={{ height: VIEW_ROWS * rowHeight }}
     >
-      <div className="relative" style={{ height: count * rowHeight }}>
+      <ul
+        aria-label={strings.dev.entries}
+        className="relative"
+        style={{ height: count * rowHeight }}
+      >
         {rows}
-      </div>
+      </ul>
     </div>
   );
 }
@@ -89,7 +96,8 @@ const DevRow = memo(function DevRow({
   icon: string | undefined;
 }) {
   return (
-    <div
+    <li
+      aria-label={name}
       className="absolute inset-x-0 flex h-row items-center gap-2 px-2"
       style={{ transform: `translateY(${top}px)` }}
     >
@@ -100,6 +108,6 @@ const DevRow = memo(function DevRow({
       )}
       <span className="min-w-0 flex-1 truncate">{name}</span>
       <span className="text-fg-2 tabular-nums">{size === undefined ? "" : sizeText(size)}</span>
-    </div>
+    </li>
   );
 });

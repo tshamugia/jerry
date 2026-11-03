@@ -71,6 +71,20 @@ test("subscribe delivers payloads until it is stopped", async () => {
   expect(stop).toHaveBeenCalledOnce();
 });
 
+test("subscribe reports when it is listening", async () => {
+  const { event, register } = fakeEvent<string>();
+  const listening = vi.fn();
+
+  const unsubscribe = subscribe(event, () => {}, listening);
+  await settle();
+  expect(listening).not.toHaveBeenCalled();
+  register();
+  await settle();
+  unsubscribe();
+
+  expect(listening).toHaveBeenCalledOnce();
+});
+
 test("subscribe stops a listener that registers after it was stopped", async () => {
   const { event, emit, stop, register } = fakeEvent<string>();
   const seen: string[] = [];

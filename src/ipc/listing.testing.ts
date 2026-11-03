@@ -42,6 +42,18 @@ export function batchMessage(firstId: number, entries: TestEntry[]): ArrayBuffer
   return buffer;
 }
 
+/** An order message; `column` is the column's code (0 name … 5 extension). */
+export function orderMessage(
+  ids: number[],
+  { column = 0, descending = false, foldersFirst = true } = {},
+): ArrayBuffer {
+  const buffer = new ArrayBuffer(HEADER_BYTES + ids.length * 4);
+  const flags = (descending ? 1 : 0) | (foldersFirst ? 2 : 0);
+  new Uint32Array(buffer, 0, 4).set([2, ids.length, column, flags]);
+  new Uint32Array(buffer, HEADER_BYTES, ids.length).set(ids);
+  return buffer;
+}
+
 export function doneMessage(count: number, batches: number, rustMs: number): ArrayBuffer {
   const buffer = new ArrayBuffer(HEADER_BYTES + 8);
   new Uint32Array(buffer, 0, 3).set([3, count, batches]);

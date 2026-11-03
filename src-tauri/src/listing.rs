@@ -1,6 +1,6 @@
 //! Folder listings for the UI. `listing_open` streams a folder through a `Channel` as binary
-//! messages (ADR-0001) and `listing_close` stops and forgets it. Every listing is its own
-//! background job, so a slow disk holds up only its own tab.
+//! messages (ADR-0001), `listing_sort` re-sorts it and `listing_close` stops and forgets it.
+//! Every listing is its own background job, so a slow disk holds up only its own tab.
 //!
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then `f64 size[count]` (bytes),
@@ -9,7 +9,10 @@
 //!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this batch's
 //!   names, in UTF-16 units) and the names as UTF-16 code units. The entries' ids are
 //!   `firstId + i`.
-//! - Order (2): a display order, from sorting (#26).
+//! - Order (2): `[2, count, column, flags]`, then `u32 id[count]`: the entries in display order,
+//!   sorted by `column` (0 name, 1 modified, 2 type, 3 size, 4 created, 5 extension), descending
+//!   if `flags` bit 0 is set, folders first if bit 1 is. Once the whole folder is in, one comes
+//!   for the listing's sort, right before Done; `listing_sort` returns one for a new sort.
 //! - Done (3): `[3, count, batches, 0]`, then the `f64` ms the listing took in Rust. Last message.
 //! - Error (4): `[4, jsonBytes, 0, 0]`, then the `JerryError` as UTF-8 JSON. Last message.
 //!
@@ -24,6 +27,7 @@ use std::time::Instant;
 use jerry_core::error::display_path;
 use jerry_core::listing::{Entries, Listing, filetime_to_unix_ms, list};
 use jerry_core::path::long_path;
+use jerry_core::sort::{PlainTypeNames, Sort, SortColumn, SortIndex};
 use jerry_core::{ErrorCode, JerryError};
 use jerry_win::icons::keys::keys as icon_keys;
 use serde::{Deserialize, Serialize};
@@ -35,6 +39,7 @@ use crate::ipc::{Bytes, message_buffer};
 use crate::jobs;
 
 const BATCH: u32 = 1;
+const ORDER: u32 = 2;
 const DONE: u32 = 3;
 const ERROR: u32 = 4;
 
@@ -70,16 +75,24 @@ struct Shared {
 struct Open {
     tab: u32,
     listing: Arc<RwLock<Listing>>,
+    sorting: Arc<Mutex<Sorting>>,
     cancel: Arc<AtomicBool>,
     outbox: Outbox,
 }
 
+/// A listing's sort and, once the whole folder is in, its sort index.
+struct Sorting {
+    sort: Sort,
+    index: Option<Arc<SortIndex>>,
+}
+
 impl Listings {
-    /// Starts listing `folder` for `tab` before the UI has a channel for it: at process start,
-    /// before Tauri, for the session's folders (spike #11, session restore #42). Messages are
-    /// kept until `listing_open` for the same tab and folder attaches its channel.
-    pub fn prestart(&self, tab: u32, folder: &Path) -> Result<u32, JerryError> {
-        Ok(self.start(tab, long_path(folder)?, None))
+    /// Starts listing `folder` for `tab`, sorted by `sort`, before the UI has a channel for it:
+    /// at process start, before Tauri, for the session's folders (spike #11, session restore
+    /// #42). Messages are kept until `listing_open` for the same tab, folder and sort attaches
+    /// its channel.
+    pub fn prestart(&self, tab: u32, folder: &Path, sort: Sort) -> Result<u32, JerryError> {
+        Ok(self.start(tab, long_path(folder)?, sort, None))
     }
 
     /// The folder `target` names, as a long path.
@@ -101,12 +114,13 @@ impl Listings {
         }
     }
 
-    /// Opens `folder` for `tab` with its messages going to `channel`: a listing started for it
-    /// with [`Listings::prestart`] if there is one, a new one otherwise.
-    fn open_folder(&self, tab: u32, folder: PathBuf, channel: Channel<Bytes>) -> u32 {
+    /// Opens `folder` for `tab`, sorted by `sort`, with its messages going to `channel`: a
+    /// listing started for it with [`Listings::prestart`] if there is one, a new one otherwise.
+    fn open_folder(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Channel<Bytes>) -> u32 {
         let prestarted = self.open().iter().find_map(|(&id, open)| {
             let waiting = open.tab == tab
                 && !open.outbox.is_attached()
+                && lock(&open.sorting).sort == sort
                 && read(&open.listing).folder() == folder;
             waiting.then(|| (id, open.outbox.clone()))
         });
@@ -115,15 +129,16 @@ impl Listings {
                 outbox.attach(channel);
                 id
             }
-            None => self.start(tab, folder, Some(channel)),
+            None => self.start(tab, folder, sort, Some(channel)),
         }
     }
 
     /// Starts listing `folder` for `tab` on a background job and returns the listing's id.
-    fn start(&self, tab: u32, folder: PathBuf, channel: Option<Channel<Bytes>>) -> u32 {
+    fn start(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Option<Channel<Bytes>>) -> u32 {
         self.close_tab(tab);
         let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
         let listing = Arc::new(RwLock::new(Listing::new(folder.clone())));
+        let sorting = Arc::new(Mutex::new(Sorting { sort, index: None }));
         let cancel = Arc::new(AtomicBool::new(false));
         let outbox = Outbox::new(channel);
         self.open().insert(
@@ -131,13 +146,14 @@ impl Listings {
             Open {
                 tab,
                 listing: listing.clone(),
+                sorting: sorting.clone(),
                 cancel: cancel.clone(),
                 outbox: outbox.clone(),
             },
         );
         let job_outbox = outbox.clone();
         tauri::async_runtime::spawn(async move {
-            let job = move || run(&folder, &listing, &cancel, &job_outbox);
+            let job = move || run(&folder, &listing, &sorting, &cancel, &job_outbox);
             match jobs::background("listing", job).await {
                 Ok(()) => {}
                 Err(error) if error.code == ErrorCode::Cancelled => {}
@@ -148,6 +164,33 @@ impl Listings {
             }
         });
         id
+    }
+
+    /// Sorts listing `id` by `sort` from now on and returns its order message. While the folder
+    /// is still being read the order is empty: the stream's own Order, sent once the whole
+    /// folder is in, uses the new sort. CPU work: call it on a background thread.
+    fn sort(&self, id: u32, sort: Sort) -> Result<Bytes, JerryError> {
+        let (listing, sorting) = self
+            .open()
+            .get(&id)
+            .map(|open| (open.listing.clone(), open.sorting.clone()))
+            .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
+        let index = {
+            let mut sorting = lock(&sorting);
+            sorting.sort = sort;
+            sorting.index.clone()
+        };
+        let started = Instant::now();
+        let order = index.map_or_else(Vec::new, |index| {
+            index.order(read(&listing).entries(), sort)
+        });
+        tracing::debug!(
+            id,
+            entries = order.len(),
+            ms = started.elapsed().as_secs_f64() * 1000.0,
+            "listing sorted"
+        );
+        Ok(order_message(sort, &order))
     }
 
     /// Stops listing `id` if it still runs and forgets it. No message follows.
@@ -192,10 +235,12 @@ impl Open {
     }
 }
 
-/// The listing job: reads `folder` into `listing` and sends each batch, then the done message.
+/// The listing job: reads `folder` into `listing` and sends each batch, then builds the sort
+/// index and sends the order and the done message.
 fn run(
     folder: &Path,
     listing: &RwLock<Listing>,
+    sorting: &Mutex<Sorting>,
     cancel: &AtomicBool,
     outbox: &Outbox,
 ) -> Result<(), JerryError> {
@@ -209,6 +254,18 @@ fn run(
         count += batch.len();
         batches += 1;
     })?;
+    {
+        let listing = read(listing);
+        let index = Arc::new(SortIndex::build(listing.entries(), &PlainTypeNames));
+        // Under the lock, so a `listing_sort` meanwhile either set the sort used here or sees
+        // the index and sorts by itself.
+        let mut sorting = lock(sorting);
+        outbox.send(order_message(
+            sorting.sort,
+            &index.order(listing.entries(), sorting.sort),
+        ));
+        sorting.index = Some(index);
+    }
     outbox.send(done_message(
         count,
         batches,
@@ -241,6 +298,24 @@ fn batch_message(first_id: usize, batch: &Entries) -> Bytes {
     }
     for &unit in units {
         out.extend_from_slice(&unit.to_le_bytes());
+    }
+    Bytes(out)
+}
+
+/// Entry ids in display order as one order message (see the module docs).
+fn order_message(sort: Sort, order: &[u32]) -> Bytes {
+    let column = match sort.column {
+        SortColumn::Name => 0,
+        SortColumn::Modified => 1,
+        SortColumn::Type => 2,
+        SortColumn::Size => 3,
+        SortColumn::Created => 4,
+        SortColumn::Extension => 5,
+    };
+    let flags = u32::from(sort.descending) | u32::from(sort.folders_first) << 1;
+    let mut out = message_buffer([ORDER, order.len() as u32, column, flags], order.len() * 4);
+    for &id in order {
+        out.extend_from_slice(&id.to_le_bytes());
     }
     Bytes(out)
 }
@@ -327,6 +402,10 @@ fn deliver(channel: &Channel<Bytes>, message: Bytes) {
     }
 }
 
+fn lock(sorting: &Mutex<Sorting>) -> MutexGuard<'_, Sorting> {
+    sorting.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 fn read(listing: &RwLock<Listing>) -> std::sync::RwLockReadGuard<'_, Listing> {
     listing.read().unwrap_or_else(PoisonError::into_inner)
 }
@@ -335,22 +414,35 @@ fn write(listing: &RwLock<Listing>) -> std::sync::RwLockWriteGuard<'_, Listing> 
     listing.write().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then a
-/// done or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
-/// folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come
-/// as the stream's error message. Opening a folder for a tab closes the tab's previous listing.
+/// Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
+/// their order by `sort` and a done message, or an error message (decoded by
+/// `src/ipc/listing.ts`). Returns at once, before the folder is read: errors reading it, such
+/// as `AccessDenied`, `NotFound` or `DeviceGone`, come as the stream's error message. Opening a
+/// folder for a tab closes the tab's previous listing.
 #[tauri::command]
 #[specta::specta]
 pub async fn listing_open(
     listings: State<'_, Listings>,
     tab: u32,
     target: ListingTarget,
+    sort: Sort,
     on_message: Channel<Bytes>,
 ) -> Result<ListingOpened, JerryError> {
     let folder = listings.resolve(target)?;
     let path = display_path(&folder);
-    let id = listings.open_folder(tab, folder, on_message);
+    let id = listings.open_folder(tab, folder, sort, on_message);
     Ok(ListingOpened { id, path })
+}
+
+/// Sorts listing `id` by `sort` from now on and returns the new order as one order message
+/// (only entry ids, as `u32`s). While the folder is still being read the order is empty and the
+/// stream's own order message, sent once the whole folder is in, follows the new sort. Fails
+/// with `NotFound` for a closed listing.
+#[tauri::command]
+#[specta::specta]
+pub async fn listing_sort(app: AppHandle, id: u32, sort: Sort) -> Result<Bytes, JerryError> {
+    let listings = app.state::<Listings>().inner().clone();
+    jobs::background("sort", move || listings.sort(id, sort)).await
 }
 
 /// Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
@@ -418,6 +510,37 @@ mod tests {
     }
 
     #[test]
+    fn orders_are_ids_after_the_sort_they_follow() {
+        let sort = Sort {
+            column: SortColumn::Created,
+            descending: true,
+            folders_first: true,
+        };
+        let Bytes(bytes) = order_message(sort, &[2, 0, 70_000]);
+        assert_eq!(
+            [
+                word(&bytes, 0),
+                word(&bytes, 4),
+                word(&bytes, 8),
+                word(&bytes, 12)
+            ],
+            [ORDER, 3, 4, 0b11]
+        );
+        assert_eq!(
+            [word(&bytes, 16), word(&bytes, 20), word(&bytes, 24)],
+            [2, 0, 70_000]
+        );
+        assert_eq!(bytes.len(), 28);
+
+        let Bytes(empty) = order_message(Sort::default(), &[]);
+        assert_eq!(
+            [word(&empty, 4), word(&empty, 8), word(&empty, 12)],
+            [0, 0, 0b10]
+        );
+        assert_eq!(empty.len(), 16);
+    }
+
+    #[test]
     fn done_and_error_messages() {
         let Bytes(done) = done_message(1_000, 2, 4.5);
         assert_eq!(
@@ -479,22 +602,48 @@ mod tests {
         }
     }
 
+    /// The names of an order message's entries, in its order.
+    fn ordered_names(listings: &Listings, id: u32, message: &[u8]) -> Vec<String> {
+        assert_eq!(word(message, 0), ORDER);
+        let entries = read(&listings.open()[&id].listing).entries().clone();
+        let count = word(message, 4) as usize;
+        assert_eq!(message.len(), 16 + count * 4);
+        (0..count)
+            .map(|i| word(message, 16 + i * 4) as usize)
+            .map(|entry| entries.name(entry).to_string_lossy().into_owned())
+            .collect()
+    }
+
+    const BY_SIZE: Sort = Sort {
+        column: SortColumn::Size,
+        descending: true,
+        folders_first: true,
+    };
+
     #[test]
     fn opens_a_folder_and_streams_it() {
-        let dir = folder_with(&["ა.txt", "ბ.txt", "c.txt"]);
+        let dir = folder_with(&["file10.txt", "ნახაზი.dwg", "file2.txt"]);
         std::fs::create_dir(dir.path().join("ქვესაქაღალდე")).expect("mkdir");
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
 
         let folder = listings.resolve(path_target(dir.path())).expect("resolves");
-        let id = listings.open_folder(1, folder, channel);
+        let id = listings.open_folder(1, folder, Sort::default(), channel);
         let messages = until_end(&receiver);
 
-        let (batches, done) = messages.split_at(messages.len() - 1);
-        assert_eq!(word(&done[0], 0), DONE);
-        assert_eq!(word(&done[0], 4), 4, "four entries");
-        assert_eq!(word(&done[0], 8) as usize, batches.len());
+        let (batches, end) = messages.split_at(messages.len() - 2);
+        let [order, done] = end else {
+            unreachable!("split at two from the end")
+        };
+        assert_eq!(word(done, 0), DONE);
+        assert_eq!(word(done, 4), 4, "four entries");
+        assert_eq!(word(done, 8) as usize, batches.len());
         assert!(batches.iter().all(|batch| word(batch, 0) == BATCH));
+        assert_eq!([word(order, 8), word(order, 12)], [0, 0b10], "by name");
+        assert_eq!(
+            ordered_names(&listings, id, order),
+            ["ქვესაქაღალდე", "file2.txt", "file10.txt", "ნახაზი.dwg"]
+        );
 
         // Every id the stream gave has its exact path in core, and a subfolder opens by its id.
         let entries = read(&listings.open()[&id].listing).entries().clone();
@@ -527,7 +676,7 @@ mod tests {
         let missing = listings
             .resolve(path_target(&dir.path().join("აღარ არის")))
             .expect("resolves");
-        listings.open_folder(1, missing, channel);
+        listings.open_folder(1, missing, Sort::default(), channel);
         let messages = until_end(&receiver);
 
         assert_eq!(messages.len(), 1);
@@ -559,9 +708,9 @@ mod tests {
         let (second_channel, second) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
 
-        let old = listings.open_folder(1, folder.clone(), first_channel);
+        let old = listings.open_folder(1, folder.clone(), Sort::default(), first_channel);
         until_end(&first);
-        let new = listings.open_folder(1, folder.clone(), second_channel);
+        let new = listings.open_folder(1, folder.clone(), Sort::default(), second_channel);
         until_end(&second);
 
         assert_ne!(old, new);
@@ -571,23 +720,91 @@ mod tests {
         listings.close(new);
         listings.close(new);
         assert!(listings.resolve(entry(new)).is_err(), "closed");
+        let error = listings.sort(new, BY_SIZE).expect_err("closed");
+        assert_eq!(error.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn sorting_a_listed_folder_returns_only_the_new_order() {
+        // Each file holds its own name, so the longer name is the bigger file.
+        let dir = folder_with(&["a.txt", "ccc.txt", "bb.txt"]);
+        std::fs::create_dir(dir.path().join("ფოლდერი")).expect("mkdir");
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(dir.path()).expect("long path");
+        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        until_end(&receiver);
+
+        let Bytes(order) = listings.sort(id, BY_SIZE).expect("sorts");
+        assert_eq!([word(&order, 8), word(&order, 12)], [3, 0b11]);
+        assert_eq!(
+            ordered_names(&listings, id, &order),
+            ["ფოლდერი", "ccc.txt", "bb.txt", "a.txt"]
+        );
+        assert!(receiver.try_recv().is_err(), "nothing more on the stream");
+    }
+
+    #[test]
+    fn a_sort_while_reading_goes_into_the_streams_order() {
+        let dir = folder_with(&["a.txt", "ccc.txt", "bb.txt"]);
+        let folder = long_path(dir.path()).expect("long path");
+        // A listing whose job hasn't run yet, as `start` makes it.
+        let listings = Listings::default();
+        let listing = Arc::new(RwLock::new(Listing::new(folder.clone())));
+        let sorting = Arc::new(Mutex::new(Sorting {
+            sort: Sort::default(),
+            index: None,
+        }));
+        let (channel, receiver) = test_channel();
+        let outbox = Outbox::new(Some(channel));
+        listings.open().insert(
+            7,
+            Open {
+                tab: 1,
+                listing: listing.clone(),
+                sorting: sorting.clone(),
+                cancel: Arc::new(AtomicBool::new(false)),
+                outbox: outbox.clone(),
+            },
+        );
+
+        let Bytes(pending) = listings.sort(7, BY_SIZE).expect("sorts");
+        assert_eq!(word(&pending, 4), 0, "no order before the folder is in");
+        run(
+            &folder,
+            &listing,
+            &sorting,
+            &AtomicBool::new(false),
+            &outbox,
+        )
+        .expect("lists");
+        let messages = until_end(&receiver);
+
+        let order = &messages[messages.len() - 2];
+        assert_eq!([word(order, 8), word(order, 12)], [3, 0b11]);
+        assert_eq!(
+            ordered_names(&listings, 7, order),
+            ["ccc.txt", "bb.txt", "a.txt"]
+        );
     }
 
     #[test]
     fn a_prestarted_listing_keeps_its_messages_for_the_ui() {
         let dir = folder_with(&["ნახაზი 1.dwg", "ნახაზი 2.dwg"]);
         let listings = Listings::default();
-        let id = listings.prestart(3, dir.path()).expect("starts");
+        let id = listings
+            .prestart(3, dir.path(), Sort::default())
+            .expect("starts");
 
         // Let it finish with nobody listening.
         let wait = Instant::now();
-        while read(&listings.open()[&id].listing).entries().len() < 2 {
+        while lock(&listings.open()[&id].sorting).index.is_none() {
             assert!(wait.elapsed() < Duration::from_secs(10), "the listing ends");
             std::thread::sleep(Duration::from_millis(5));
         }
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        let attached = listings.open_folder(3, folder, channel);
+        let attached = listings.open_folder(3, folder.clone(), Sort::default(), channel);
         let messages = until_end(&receiver);
 
         assert_eq!(
@@ -595,7 +812,15 @@ mod tests {
             "the UI gets the listing that was already running"
         );
         assert_eq!(word(&messages[0], 0), BATCH);
+        assert_eq!(word(&messages[messages.len() - 2], 0), ORDER);
         assert_eq!(word(messages.last().expect("done"), 4), 2);
+
+        // A tab sorted otherwise gets a listing of its own.
+        let again = listings
+            .prestart(4, dir.path(), Sort::default())
+            .expect("starts");
+        let other = listings.open_folder(4, folder, BY_SIZE, test_channel().0);
+        assert_ne!(other, again);
     }
 
     #[test]

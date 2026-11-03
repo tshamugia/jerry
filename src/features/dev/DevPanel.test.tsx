@@ -1,6 +1,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, test } from "vitest";
+import type { Settings } from "../../ipc";
+import { useSettings } from "../../stores/settings";
 import { DevPanel } from "./DevPanel";
 
 test("shows a command's JerryError as text", async () => {
@@ -27,4 +29,25 @@ test("a panicked job shows as an internal error", async () => {
   expect(await screen.findByRole("status")).toHaveTextContent(
     "Something went wrong in Jerry. Details are in the log.",
   );
+});
+
+test("shows the settings from the store and changes them through the core", async () => {
+  const sent: unknown[] = [];
+  mockIPC((cmd, args) => {
+    if (cmd === "settings_set") sent.push(args);
+  });
+  useSettings.setState({ settings: { theme: "dark", showHidden: true } as Settings });
+  render(<DevPanel />);
+
+  expect(screen.getByText("Settings: hidden files shown, theme dark.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Toggle hidden files" }));
+  fireEvent.click(screen.getByRole("button", { name: "Next theme" }));
+
+  await waitFor(() =>
+    expect(sent).toEqual([
+      { key: "showHidden", value: false },
+      { key: "theme", value: "system" },
+    ]),
+  );
+  useSettings.setState({ settings: undefined });
 });

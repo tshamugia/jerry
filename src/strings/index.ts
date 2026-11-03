@@ -1,7 +1,19 @@
 /** Every user-visible string lives here. English only, no i18n library (PRD). */
 
+import type { SortColumn } from "../ipc";
+
 const integer = new Intl.NumberFormat("en-US");
 const decimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+
+/** Column titles, as the Details view's header shows them. */
+const sortColumns: Record<SortColumn, string> = {
+  name: "Name",
+  modified: "Date modified",
+  type: "Type",
+  size: "Size",
+  created: "Date created",
+  extension: "Extension",
+};
 
 export const strings = {
   appName: "Jerry",
@@ -20,8 +32,15 @@ export const strings = {
     streamed: (messages: number, values: string) =>
       `Received ${messages} binary messages: ${values}.`,
     streamIncomplete: (messages: number) => `Only ${messages} of 3 messages arrived.`,
+    toggleHidden: "Toggle hidden files",
+    nextTheme: "Next theme",
+    openWindow: "Open another window",
+    settingsLoading: "Settings: loading…",
+    settings: (showHidden: boolean, theme: string) =>
+      `Settings: hidden files ${showHidden ? "shown" : "hidden"}, theme ${theme}.`,
     listingTitle: "Listing",
     listingPath: "Folder path",
+    entries: "Entries",
     listFolder: "List",
     listSynth: (count: number) => `List ${integer.format(count)}`,
     buildingSynth: (count: number) => `Building a folder with ${integer.format(count)} items…`,
@@ -72,6 +91,22 @@ export const strings = {
       `95th percentile ${decimal.format(result.p95Ms)} ms, longest ${decimal.format(result.maxMs)} ms, ` +
       `${result.janky} janky, ${result.longTasks} long tasks. Icons: ${integer.format(result.fromMemory)} from memory, ` +
       `${integer.format(result.fromShell)} from the Shell, ${integer.format(result.rendered)} rendered, ${result.failed} failed.`,
+    sortBy: "Sort by",
+    /** A sort button; `descending` is set on the column the list is sorted by. */
+    sortColumn: (column: SortColumn, descending?: boolean) =>
+      `${sortColumns[column]}${descending === undefined ? "" : descending ? " ↓" : " ↑"}`,
+    sorted: (timings: {
+      count: number;
+      sort: { column: SortColumn; descending: boolean };
+      orderMs: number;
+      paintMs: number;
+    }) =>
+      `Sorted ${integer.format(timings.count)} items by ${sortColumns[timings.sort.column].toLowerCase()}, ` +
+      `${timings.sort.descending ? "descending" : "ascending"}: painted ${decimal.format(timings.paintMs)} ms ` +
+      `(order in JS ${decimal.format(timings.orderMs)} ms).`,
+    nothingToSort: "List a folder first.",
+    sortPending:
+      "No new order yet: the folder is still being read, or a later sort overtook this one.",
   },
 } as const;
 

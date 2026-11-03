@@ -8,14 +8,29 @@
  *   with (an unknown command, a bad argument) is a bug and is thrown. Show the error with
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
- *   listings: `openListing`.
- * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
+ *   listings: `openListing`, re-sorted with its `sort`.
+ * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
+ *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
  *   `entryIconUrl`, `typeIconUrl`, `driveIconUrl` and `placeIconUrl`.
  */
 
-export type { ErrorCode, JerryError, ListingTarget } from "./bindings";
-export { commands } from "./bindings";
+export type {
+  Accent,
+  ClickToOpen,
+  Density,
+  DragAction,
+  ErrorCode,
+  JerryError,
+  ListingTarget,
+  Settings,
+  Sort,
+  SortColumn,
+  Startup,
+  Theme,
+  View,
+} from "./bindings";
+export { commands, events } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
 export {
@@ -35,6 +50,7 @@ export {
   type ListingFailed,
   ListingKind,
   type ListingMessage,
+  type ListingOrder,
   type OpenListing,
   openListing,
 } from "./listing";

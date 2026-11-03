@@ -1,5 +1,13 @@
 import { useState } from "react";
-import { commands, HEADER_BYTES, messageHeader, stream } from "../../ipc";
+import {
+  commands,
+  HEADER_BYTES,
+  type JerryError,
+  messageHeader,
+  stream,
+  type Theme,
+} from "../../ipc";
+import { setSetting, useSettings } from "../../stores/settings";
 import { errorText, strings } from "../../strings";
 import { DevButton } from "./DevButton";
 import { DevListing } from "./DevListing";
@@ -7,14 +15,17 @@ import { DevListing } from "./DevListing";
 const FREEZE_MS = 200;
 const STREAM_MESSAGES = 3;
 const STREAM_TIMEOUT_MS = 2000;
+const THEMES: readonly Theme[] = ["system", "light", "dark"];
 
 /**
- * Dev builds only: buttons that exercise the IPC and error foundation in the running app. Each
- * shows what came back; freezes and panics also land in the log.
+ * Dev builds only: buttons that exercise the IPC, error and settings foundation in the running
+ * app. Each shows what came back; freezes and panics also land in the log. The settings line
+ * follows the store, so a change made in another window shows here at once.
  */
 export function DevPanel() {
   const [result, setResult] = useState<string>();
-  const run = (check: () => Promise<string>) => () => {
+  const settings = useSettings((state) => state.settings);
+  const run = (check: () => Promise<string | undefined>) => () => {
     void check().then(setResult);
   };
 
@@ -27,6 +38,24 @@ export function DevPanel() {
         <DevButton onClick={run(freezePage)}>{strings.dev.blockPage}</DevButton>
         <DevButton onClick={run(binaryStream)}>{strings.dev.stream}</DevButton>
       </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        <DevButton
+          onClick={run(() => saved(setSetting("showHidden", !(settings?.showHidden ?? false))))}
+        >
+          {strings.dev.toggleHidden}
+        </DevButton>
+        <DevButton onClick={run(() => saved(setSetting("theme", nextTheme(settings?.theme))))}>
+          {strings.dev.nextTheme}
+        </DevButton>
+        <DevButton onClick={run(() => saved(commands.devOpenWindow()))}>
+          {strings.dev.openWindow}
+        </DevButton>
+      </div>
+      <p className="text-small text-fg-2">
+        {settings
+          ? strings.dev.settings(settings.showHidden, settings.theme)
+          : strings.dev.settingsLoading}
+      </p>
       {result && (
         <p role="status" className="text-small text-fg-2">
           {result}
@@ -35,6 +64,19 @@ export function DevPanel() {
       <DevListing />
     </section>
   );
+}
+
+function nextTheme(theme: Theme | undefined): Theme {
+  const index = THEMES.indexOf(theme ?? "system");
+  return THEMES[(index + 1) % THEMES.length] ?? "system";
+}
+
+/** The error text if the command failed; nothing otherwise (the settings line shows the rest). */
+async function saved(
+  command: Promise<{ status: "ok" } | { status: "error"; error: JerryError }>,
+): Promise<string | undefined> {
+  const result = await command;
+  return result.status === "error" ? errorText(result.error) : undefined;
 }
 
 async function sampleError(): Promise<string> {
