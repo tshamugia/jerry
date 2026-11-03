@@ -8,6 +8,7 @@
 
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::Once;
 
 use jerry_core::{ErrorCode, JerryError};
 use windows::Win32::Foundation::{ERROR_CONNECTION_UNAVAIL, MAX_PATH};
@@ -22,12 +23,14 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 use windows::Win32::System::Registry::{RegCloseKey, RegQueryValueExW};
 use windows::Win32::System::WindowsProgramming::GetPrivateProfileStringW;
+use windows::Win32::UI::Controls::IImageList;
 use windows::Win32::UI::Shell::{
     ASSOCF_NONE, ASSOCKEY_CLASS, AssocQueryKeyW, FOLDERID_Desktop, FOLDERID_Documents,
     FOLDERID_Downloads, FOLDERID_Pictures, FOLDERID_RecycleBinFolder, FOLDERID_SkyDrive, ILFree,
     IShellLinkW, KF_FLAG_DEFAULT, SHFILEINFOW, SHGFI_FLAGS, SHGFI_PIDL, SHGFI_SYSICONINDEX,
-    SHGFI_USEFILEATTRIBUTES, SHGSI_SYSICONINDEX, SHGetFileInfoW, SHGetKnownFolderIDList,
-    SHGetStockIconInfo, SHSTOCKICONID, SHSTOCKICONINFO, SIID_DRIVENET, SIID_DRIVENETDISABLED,
+    SHGFI_USEFILEATTRIBUTES, SHGSI_SYSICONINDEX, SHGetFileInfoW, SHGetImageList,
+    SHGetKnownFolderIDList, SHGetStockIconInfo, SHIL_EXTRALARGE, SHIL_JUMBO, SHIL_LARGE,
+    SHIL_SMALL, SHSTOCKICONID, SHSTOCKICONINFO, SIID_DRIVENET, SIID_DRIVENETDISABLED,
     SIID_SERVERSHARE, SLGP_RAWPATH, ShellLink,
 };
 use windows::core::{GUID, Interface, PCWSTR, w};
@@ -86,6 +89,23 @@ impl Place {
     pub fn from_name(name: &str) -> Option<Place> {
         Place::ALL.into_iter().find(|place| place.name() == name)
     }
+}
+
+/// Sets up the Shell's system image lists once, on one thread, before any lookup: when several
+/// workers make a process's first lookups at once, they race inside the Shell, and drives,
+/// Recycle Bin and stock icons fail. Every lookup below calls it first; the first call blocks
+/// the others until the lists exist.
+pub fn init() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        for which in [SHIL_SMALL, SHIL_LARGE, SHIL_EXTRALARGE, SHIL_JUMBO] {
+            // SAFETY: a valid image list id; COM is initialized on this thread (a Shell pool
+            // worker).
+            if let Err(error) = unsafe { SHGetImageList::<IImageList>(which as i32) } {
+                tracing::warn!(%error, which, "a system image list couldn't be set up");
+            }
+        }
+    });
 }
 
 /// The icon of a file type, by name and attributes only: no disk access.

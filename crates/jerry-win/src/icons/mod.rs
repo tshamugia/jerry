@@ -188,6 +188,7 @@ impl Default for Icons {
 impl Cache {
     /// Runs on a Shell pool worker.
     fn render(&self, source: &IconSource, px: u32) -> Result<Arc<[u8]>, JerryError> {
+        shell::init();
         let glyph = match source {
             IconSource::Type(key) => self.type_glyph(*key)?,
             IconSource::File {
@@ -281,6 +282,38 @@ mod tests {
         let path = path.to_path_buf();
         pool.run("glyph", TIMEOUT, move || file_glyph(&path, attributes))
             .expect("a glyph")
+    }
+
+    #[test]
+    fn first_requests_on_every_worker_at_once_all_succeed() {
+        // nextest runs each test in its own process: these are the process's first Shell calls,
+        // on every worker at once, as when Jerry's window first shows its sidebar.
+        let icons = Icons::new();
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        let drive = IconSource::Drive(system.as_bytes()[0]);
+        let mut sources = vec![
+            drive.clone(),
+            IconSource::Place(Place::RecycleBin),
+            IconSource::Place(Place::NetworkShare),
+            IconSource::Type(key_of("a.pdf")),
+            IconSource::Type(FOLDER),
+        ];
+        sources.extend(Place::ALL.map(IconSource::Place));
+        sources.push(drive);
+        let (sender, results) = mpsc::channel();
+        for source in sources {
+            let sender = sender.clone();
+            let asked = source.clone();
+            icons.render(source, 16, move |png| {
+                let _ = sender.send((asked, png.map(|_| ()).map_err(|error| error.code)));
+            });
+        }
+        drop(sender);
+        let failed: Vec<_> = results
+            .iter()
+            .filter(|(_, result)| result.is_err())
+            .collect();
+        assert!(failed.is_empty(), "{failed:?}");
     }
 
     fn type_glyph_of(name: &str) -> Glyph {
