@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   commands,
+  type ListingDiff,
   type ListingMessage,
   type ListingOrder,
   type ListingTarget,
@@ -85,8 +86,9 @@ declare global {
 /**
  * Dev builds only: lists a folder through `listing_open`, paints the first rows and times it
  * (the PRD's "1 000 items shown < 0.2 s" and "100 000 items: first rows < 0.3 s"), then re-sorts
- * it through `listing_sort` and times that ("100 000 items: sort < 100 ms"). Not the file list
- * (#29): just enough to receive the batches and orders and paint them.
+ * it through `listing_sort` and times that ("100 000 items: sort < 100 ms"). The listing stays
+ * live: changes made in Explorer arrive as diffs and repaint the rows. Not the file list (#29):
+ * just enough to receive the batches, diffs and orders and paint them.
  */
 export function DevListing() {
   const [path, setPath] = useState("");
@@ -94,11 +96,15 @@ export function DevListing() {
   const [count, setCount] = useState(0);
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [status, setStatus] = useState<string>();
+  const [change, setChange] = useState<string>();
   const [lister] = useState(() =>
-    createLister((shown, total) => {
-      setRows(shown);
-      setCount(total);
-    }),
+    createLister(
+      (shown, total) => {
+        setRows(shown);
+        setCount(total);
+      },
+      (live) => setChange(strings.dev.changed(live)),
+    ),
   );
 
   const report = (outcome: ListingOutcome) => {
@@ -107,6 +113,7 @@ export function DevListing() {
   };
   const listPath = (folder: string) => {
     setStatus(strings.dev.listing);
+    setChange(undefined);
     return lister.list({ kind: "path", path: folder }, sort).then(report);
   };
   const listSynth = async (size: number) => {
@@ -170,6 +177,7 @@ export function DevListing() {
         ))}
       </fieldset>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
+      {change && <p className="text-small text-fg-2 tabular-nums">{change}</p>}
       <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(count)}</p>
       <ul className="flex flex-col">
         {rows.map((row) => (
@@ -183,41 +191,92 @@ export function DevListing() {
   );
 }
 
+/** The last diff: what it changed, and how long from its arrival to the paint. */
+export interface LiveChange {
+  added: number;
+  changed: number;
+  removed: number;
+  paintMs: number;
+}
+
+const sameSort = (a: Sort, b: Sort) =>
+  a.column === b.column && a.descending === b.descending && a.foldersFirst === b.foldersFirst;
+
 /**
- * Opens listings one at a time and shows the first rows of each batch and order with `show` the
- * moment it arrives (`flushSync`), so the paint that follows is the one the timings report.
+ * Opens listings one at a time and shows the first rows of each batch, diff and order with
+ * `show` the moment it arrives (`flushSync`), so the paint that follows is the one the timings
+ * report. `changed` hears about every diff once it is painted.
  */
-function createLister(show: (rows: Row[], count: number) => void) {
+function createLister(
+  show: (rows: Row[], count: number) => void,
+  changed: (change: LiveChange) => void,
+) {
   let current: OpenListing | undefined;
   let generation = 0;
-  // Every entry of the current listing by id, and its current display order.
+  // Every entry the current listing has had by id, the removed ones, and the display order.
   let names: string[] = [];
   let sizes: number[] = [];
   let folders: boolean[] = [];
+  let removed = new Set<number>();
   let order: Uint32Array | undefined;
+  let done = false;
   let wanted = DEFAULT_SORT;
+  /** A re-sort waiting for its order on the stream. */
+  let sorting: { sort: Sort; started: number; resolve: (outcome: SortOutcome) => void } | undefined;
 
   const firstRows = (): Row[] => {
-    const shown = Math.min(SHOWN_ROWS, names.length);
-    return Array.from({ length: shown }, (_, i) => {
+    const rows: Row[] = [];
+    const count = order?.length ?? names.length;
+    for (let i = 0; i < count && rows.length < SHOWN_ROWS; i++) {
       const id = order?.[i] ?? i;
-      return { id, name: names[id] ?? "", size: sizes[id] ?? 0, folder: folders[id] ?? false };
-    });
+      if (!removed.has(id)) {
+        rows.push({
+          id,
+          name: names[id] ?? "",
+          size: sizes[id] ?? 0,
+          folder: folders[id] ?? false,
+        });
+      }
+    }
+    return rows;
   };
-  const paint = () => flushSync(() => show(firstRows(), names.length));
-  /** Applies `next` if it is for the sort asked for last; an empty order changes nothing. */
+  const paint = () => flushSync(() => show(firstRows(), names.length - removed.size));
+  /** Applies `next` if it is for the sort asked for last. */
   const apply = (next: ListingOrder) => {
-    const { column, descending, foldersFirst } = next.sort;
-    const matches =
-      column === wanted.column &&
-      descending === wanted.descending &&
-      foldersFirst === wanted.foldersFirst;
-    if (!matches || next.ids.length === 0) {
-      return false;
+    if (!sameSort(next.sort, wanted)) {
+      return;
     }
     order = next.ids;
     paint();
-    return true;
+    if (sorting && sameSort(sorting.sort, next.sort)) {
+      const { sort, started, resolve } = sorting;
+      sorting = undefined;
+      const orderMs = performance.now() - started;
+      void afterNextPaint().then((painted) =>
+        resolve({
+          status: "ok",
+          timings: { count: next.ids.length, sort, orderMs, paintMs: painted - started },
+        }),
+      );
+    }
+  };
+  /** Puts entries `ids` in (new ones continue the ids), drops `gone`, and paints. */
+  const applyDiff = (diff: ListingDiff, at: number) => {
+    let added = 0;
+    diff.ids.forEach((id, i) => {
+      if (id >= names.length) {
+        added += 1;
+      }
+      names[id] = diff.names[i] ?? "";
+      sizes[id] = diff.sizes[i] ?? 0;
+      folders[id] = ((diff.attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0;
+    });
+    for (const id of diff.removed) {
+      removed.add(id);
+    }
+    paint();
+    const counts = { added, changed: diff.ids.length - added, removed: diff.removed.length };
+    void afterNextPaint().then((painted) => changed({ ...counts, paintMs: painted - at }));
   };
 
   const close = () => {
@@ -227,7 +286,11 @@ function createLister(show: (rows: Row[], count: number) => void) {
     names = [];
     sizes = [];
     folders = [];
+    removed = new Set();
     order = undefined;
+    done = false;
+    sorting?.resolve({ status: "error", text: strings.dev.sortPending });
+    sorting = undefined;
   };
 
   const list = async (target: ListingTarget, sort: Sort): Promise<ListingOutcome> => {
@@ -267,7 +330,11 @@ function createLister(show: (rows: Row[], count: number) => void) {
           case "order":
             apply(message);
             break;
+          case "diff":
+            applyDiff(message, at);
+            break;
           case "done": {
+            done = true;
             const doneMs = at - started;
             const donePaint = afterNextPaint();
             void Promise.all([firstPaint ?? donePaint, donePaint]).then(([first, all]) =>
@@ -304,27 +371,29 @@ function createLister(show: (rows: Row[], count: number) => void) {
     });
   };
 
+  /** Re-sorts and resolves once the new order, which comes on the stream, is painted. */
   const sort = async (next: Sort): Promise<SortOutcome> => {
     wanted = next;
     const listing = current;
     if (!listing) {
       return { status: "error", text: strings.dev.nothingToSort };
     }
+    // An earlier sort still waiting is overtaken: its order won't be painted.
+    sorting?.resolve({ status: "error", text: strings.dev.sortPending });
+    sorting = undefined;
     const started = performance.now();
+    const ordered = done
+      ? new Promise<SortOutcome>((resolve) => {
+          sorting = { sort: next, started, resolve };
+        })
+      : // Still being read: the stream's order before done follows the new sort.
+        Promise.resolve<SortOutcome>({ status: "error", text: strings.dev.sortPending });
     const result = await listing.sort(next);
     if (result.status === "error") {
+      sorting = undefined;
       return { status: "error", text: errorText(result.error) };
     }
-    const orderMs = performance.now() - started;
-    if (!apply(result.data)) {
-      // Still being read, or overtaken by a later sort: the order that follows is painted.
-      return { status: "error", text: strings.dev.sortPending };
-    }
-    const painted = await afterNextPaint();
-    return {
-      status: "ok",
-      timings: { count: result.data.ids.length, sort: next, orderMs, paintMs: painted - started },
-    };
+    return ordered;
   };
 
   return { list, sort, close };

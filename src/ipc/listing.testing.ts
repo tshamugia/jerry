@@ -13,6 +13,35 @@ export interface TestEntry {
 }
 
 export function batchMessage(firstId: number, entries: TestEntry[]): ArrayBuffer {
+  const units = unitCount(entries);
+  const buffer = new ArrayBuffer(HEADER_BYTES + entriesBytes(entries.length, units));
+  new Uint32Array(buffer, 0, 4).set([1, entries.length, firstId, units]);
+  writeEntries(buffer, HEADER_BYTES, entries);
+  return buffer;
+}
+
+/** A diff message: `entries[i]` has id `ids[i]`. */
+export function diffMessage(ids: number[], removed: number[], entries: TestEntry[]): ArrayBuffer {
+  const units = unitCount(entries);
+  const words = ids.length + removed.length;
+  const entriesAt = HEADER_BYTES + (words + (words % 2)) * 4;
+  const buffer = new ArrayBuffer(entriesAt + entriesBytes(entries.length, units));
+  new Uint32Array(buffer, 0, 4).set([5, ids.length, removed.length, units]);
+  new Uint32Array(buffer, HEADER_BYTES, words).set([...ids, ...removed]);
+  writeEntries(buffer, entriesAt, entries);
+  return buffer;
+}
+
+/** All names' UTF-16 units: a string's `length` counts them. */
+function unitCount(entries: TestEntry[]): number {
+  return entries.reduce((count, { name }) => count + name.length, 0);
+}
+
+function entriesBytes(count: number, units: number): number {
+  return count * 24 + units * 2;
+}
+
+function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
   const count = entries.length;
   const units: number[] = [];
   const ends: number[] = [];
@@ -20,9 +49,7 @@ export function batchMessage(firstId: number, entries: TestEntry[]): ArrayBuffer
     for (let i = 0; i < name.length; i++) units.push(name.charCodeAt(i));
     ends.push(units.length);
   }
-  const buffer = new ArrayBuffer(HEADER_BYTES + count * 24 + units.length * 2);
-  new Uint32Array(buffer, 0, 4).set([1, count, firstId, units.length]);
-  let offset = HEADER_BYTES;
+  let offset = at;
   new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.size ?? 0));
   offset += count * 8;
   new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.modified ?? 0));
@@ -32,7 +59,6 @@ export function batchMessage(firstId: number, entries: TestEntry[]): ArrayBuffer
   new Uint32Array(buffer, offset, count).set(ends);
   offset += count * 4;
   new Uint16Array(buffer, offset, units.length).set(units);
-  return buffer;
 }
 
 /** An order message; `column` is the column's code (0 name … 5 extension). */
