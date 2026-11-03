@@ -12,6 +12,26 @@ export const commands = {
 	 *  only now, so it never flashes white.
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
+	/**
+	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
+	 *  their order by `sort` and a done message, or an error message (decoded by
+	 *  `src/ipc/listing.ts`). Returns at once, before the folder is read: errors reading it, such
+	 *  as `AccessDenied`, `NotFound` or `DeviceGone`, come as the stream's error message. Opening a
+	 *  folder for a tab closes the tab's previous listing.
+	 */
+	listingOpen: (tab: number, target: ListingTarget, sort: Sort, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, sort, onMessage })),
+	/**
+	 *  Sorts listing `id` by `sort` from now on and returns the new order as one order message
+	 *  (only entry ids, as `u32`s). While the folder is still being read the order is empty and the
+	 *  stream's own order message, sent once the whole folder is in, follows the new sort. Fails
+	 *  with `NotFound` for a closed listing.
+	 */
+	listingSort: (id: number, sort: Sort) => typedError<ArrayBuffer, JerryError>(__TAURI_INVOKE("listing_sort", { id, sort })),
+	/**
+	 *  Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
+	 *  that is already closed does nothing.
+	 */
+	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**
@@ -41,6 +61,11 @@ export const commands = {
 	 *  `on_message`.
 	 */
 	devStream: (onMessage: Channel<ArrayBuffer>) => typedError<null, JerryError>(__TAURI_INVOKE("dev_stream", { onMessage })),
+	/**
+	 *  Builds the synthetic folder with `count` entries under `%TEMP%\jerry-synth` unless it is
+	 *  there already, and returns its path as display text, for timing listings in the dev panel.
+	 */
+	devSynthFolder: (count: number) => typedError<string, JerryError>(__TAURI_INVOKE("dev_synth_folder", { count })),
 	/**
 	 *  Opens another window on the same UI, so events can be checked across windows before Jerry
 	 *  has windows of its own (v1.0). It has Windows' title bar, to move and close it with the mouse.
@@ -110,6 +135,22 @@ export type JerryError = {
 	path: string | null,
 } & ErrorCode;
 
+/**  An opened listing: its id, and its folder as display text. */
+export type ListingOpened = {
+	id: number,
+	path: string,
+};
+
+/**  The folder to list. */
+export type ListingTarget = 
+/**  A folder the user named: typed in the address bar, a favorite, a drive. Must be absolute. */
+{ kind: "path"; path: string } | 
+/**
+ *  Subfolder `entry` of the open listing `listing`, opened by its exact path in core, so
+ *  names that aren't valid Unicode open too.
+ */
+{ kind: "entry"; listing: number; entry: number };
+
 /**  Every setting, defaults filled in. */
 export type Settings = {
 	/**  App theme. */
@@ -164,6 +205,28 @@ export type Settings = {
 
 /**  Sent to every window when a setting changes, with all the settings. */
 export type SettingsChanged = Settings;
+
+/**  How a list is sorted. */
+export type Sort = {
+	column: SortColumn,
+	/**  Descending is ascending reversed, folders kept first. */
+	descending: boolean,
+	/**  Folders before files, in both directions (the PRD's default; a setting). */
+	foldersFirst: boolean,
+};
+
+/**  A column the list sorts by. */
+export type SortColumn = "name" | 
+/**  Date modified. */
+"modified" | 
+/**  The type name, as Explorer's Type column shows it: "AutoCAD Drawing", "PDF File". */
+"type" | 
+/**  Size in bytes. Folders are 0. */
+"size" | 
+/**  Date created. */
+"created" | 
+/**  The extension: what follows the name's last dot. Folders have none. */
+"extension";
 
 /**  What Jerry opens at start. */
 export type Startup = 

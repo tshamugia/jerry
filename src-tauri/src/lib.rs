@@ -5,6 +5,7 @@
 mod dev;
 pub mod ipc;
 pub mod jobs;
+pub mod listing;
 pub mod logging;
 pub mod storage;
 
@@ -65,6 +66,9 @@ macro_rules! commands {
         collect_commands![
             app_version,
             app_ready,
+            listing::listing_open,
+            listing::listing_sort,
+            listing::listing_close,
             storage::settings_get,
             storage::settings_set,
             $($dev)*
@@ -80,6 +84,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         dev::dev_block_main_thread,
         dev::dev_long_task,
         dev::dev_stream,
+        dev::dev_synth_folder,
         dev::dev_open_window,
     ];
     #[cfg(not(debug_assertions))]
@@ -116,6 +121,7 @@ pub fn run() -> tauri::Result<()> {
 
     let app = tauri::Builder::default()
         .manage(db)
+        .manage(listing::Listings::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

@@ -5,8 +5,12 @@
 
 pub mod error;
 pub mod job;
+pub mod listing;
+pub mod path;
 pub mod settings;
+pub mod sort;
 pub mod storage;
+pub mod synth;
 
 pub use error::{ErrorCode, JerryError};
 

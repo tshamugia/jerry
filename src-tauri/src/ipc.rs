@@ -41,12 +41,19 @@ impl Type for Bytes {
 /// Builds a binary message: the 16-byte header `[kind, a, b, c]` (little-endian `u32`s), then
 /// the body. Columns in the body should keep 8-byte alignment where they hold `f64`s.
 pub fn message(header: [u32; 4], body: &[u8]) -> Bytes {
-    let mut bytes = Vec::with_capacity(16 + body.len());
+    let mut bytes = message_buffer(header, body.len());
+    bytes.extend_from_slice(body);
+    Bytes(bytes)
+}
+
+/// A binary message's buffer: the 16-byte header, with room for `body_capacity` more bytes.
+/// Write the body after it and wrap it in [`Bytes`]; for bodies built in place, with no copy.
+pub fn message_buffer(header: [u32; 4], body_capacity: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16 + body_capacity);
     for word in header {
         bytes.extend_from_slice(&word.to_le_bytes());
     }
-    bytes.extend_from_slice(body);
-    Bytes(bytes)
+    bytes
 }
 
 #[cfg(test)]

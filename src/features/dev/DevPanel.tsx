@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import {
   commands,
   HEADER_BYTES,
@@ -9,6 +9,8 @@ import {
 } from "../../ipc";
 import { setSetting, useSettings } from "../../stores/settings";
 import { errorText, strings } from "../../strings";
+import { DevButton } from "./DevButton";
+import { DevListing } from "./DevListing";
 
 const FREEZE_MS = 200;
 const STREAM_MESSAGES = 3;
@@ -59,6 +61,7 @@ export function DevPanel() {
           {result}
         </p>
       )}
+      <DevListing />
     </section>
   );
 }
@@ -74,18 +77,6 @@ async function saved(
 ): Promise<string | undefined> {
   const result = await command;
   return result.status === "error" ? errorText(result.error) : undefined;
-}
-
-function DevButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="h-row rounded-ctrl border border-ctrl-border bg-ctrl px-3 text-fg hover:bg-hover"
-    >
-      {children}
-    </button>
-  );
 }
 
 async function sampleError(): Promise<string> {

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use jerry_core::JerryError;
+use jerry_core::error::display_path;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 
@@ -93,4 +94,18 @@ pub async fn dev_open_window(app: AppHandle) -> Result<(), JerryError> {
             tracing::error!(%error, "can't open a dev window");
             JerryError::internal()
         })
+}
+
+/// Builds the synthetic folder with `count` entries under `%TEMP%\jerry-synth` unless it is
+/// there already, and returns its path as display text, for timing listings in the dev panel.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_synth_folder(count: u32) -> Result<String, JerryError> {
+    jobs::background("dev synth folder", move || {
+        let count = count as usize;
+        jerry_core::synth::ensure(count)
+            .map(|folder| display_path(&folder))
+            .map_err(|error| JerryError::from(error).at(jerry_core::synth::folder(count)))
+    })
+    .await
 }
