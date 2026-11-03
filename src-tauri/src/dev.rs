@@ -1,10 +1,12 @@
 //! Dev builds only: commands behind the UI's dev panel, for checking the IPC and error
 //! foundation by hand in the running app. Release builds have none of them.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use jerry_core::JerryError;
 use tauri::ipc::Channel;
+use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 
 use crate::ipc::{Bytes, message};
 use crate::jobs;
@@ -71,4 +73,24 @@ pub async fn dev_stream(on_message: Channel<Bytes>) -> Result<(), JerryError> {
             })?;
     }
     Ok(())
+}
+
+/// Opens another window on the same UI, so events can be checked across windows before Jerry
+/// has windows of its own (v1.0). It has Windows' title bar, to move and close it with the mouse.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_open_window(app: AppHandle) -> Result<(), JerryError> {
+    static OPENED: AtomicU32 = AtomicU32::new(0);
+    let label = format!("dev-{}", OPENED.fetch_add(1, Ordering::Relaxed) + 1);
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::default())
+        .title("Jerry (dev window)")
+        .inner_size(900.0, 600.0)
+        .disable_drag_drop_handler()
+        .visible(false) // `app_ready` shows it
+        .build()
+        .map(|_| ())
+        .map_err(|error| {
+            tracing::error!(%error, "can't open a dev window");
+            JerryError::internal()
+        })
 }

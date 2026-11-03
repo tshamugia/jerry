@@ -6,12 +6,13 @@ mod dev;
 pub mod ipc;
 pub mod jobs;
 pub mod logging;
+pub mod storage;
 
 use std::time::Duration;
 
 use specta_typescript::{Typescript, semantic};
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
-use tauri_specta::{Builder, collect_commands};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ipc/bindings.ts");
@@ -61,7 +62,13 @@ fn show(window: &WebviewWindow) {
 /// feeds the invoke handler and the bindings.
 macro_rules! commands {
     ($($dev:tt)*) => {
-        collect_commands![app_version, app_ready, $($dev)*]
+        collect_commands![
+            app_version,
+            app_ready,
+            storage::settings_get,
+            storage::settings_set,
+            $($dev)*
+        ]
     };
 }
 
@@ -73,12 +80,14 @@ fn specta_builder() -> Builder<tauri::Wry> {
         dev::dev_block_main_thread,
         dev::dev_long_task,
         dev::dev_stream,
+        dev::dev_open_window,
     ];
     #[cfg(not(debug_assertions))]
     let commands = commands![];
 
     Builder::<tauri::Wry>::new()
         .commands(commands)
+        .events(collect_events![storage::SettingsChanged])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
         .disable_serde_phases()
@@ -95,6 +104,8 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 /// Builds and runs the app until it exits.
 pub fn run() -> tauri::Result<()> {
     logging::init();
+    // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
+    let db = storage::Db::open(storage::db_path());
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -104,6 +115,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     let app = tauri::Builder::default()
+        .manage(db)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

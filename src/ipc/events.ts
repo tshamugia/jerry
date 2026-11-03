@@ -6,9 +6,14 @@ export interface CoreEvent<T> {
 /**
  * Calls `handler` with the payload of every `event` the core emits, until the returned function
  * is called. Unlike `listen`, it stops right away even if the listener isn't registered yet, so
- * a React effect can return it as its cleanup.
+ * a React effect can return it as its cleanup. `onListening` runs once the listener is
+ * registered: from then on no event is missed, so it is the moment to load the current state.
  */
-export function subscribe<T>(event: CoreEvent<T>, handler: (payload: T) => void): () => void {
+export function subscribe<T>(
+  event: CoreEvent<T>,
+  handler: (payload: T) => void,
+  onListening?: () => void,
+): () => void {
   let stopped = false;
   let unlisten: (() => void) | undefined;
   void event
@@ -22,6 +27,7 @@ export function subscribe<T>(event: CoreEvent<T>, handler: (payload: T) => void)
         stop();
       } else {
         unlisten = stop;
+        onListening?.();
       }
     });
   return () => {

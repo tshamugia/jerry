@@ -2,9 +2,22 @@
 //! `Channel`, binary ones a `Channel<Bytes>`; events go to all windows through tauri-specta
 //! events; `<img>` and `<video>` data comes from custom protocols. The UI's side is `src/ipc/`.
 
+use serde::Deserialize;
 use specta::Type;
 use specta::datatype::DataType;
 use tauri::ipc::{InvokeResponseBody, IpcResponse};
+
+/// Any JSON value from the UI, `unknown` in the bindings: the command checks its shape (a
+/// setting's value, say). The UI's typed wrapper decides what it sends.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(transparent)]
+pub struct Json(pub serde_json::Value);
+
+impl Type for Json {
+    fn definition(_: &mut specta::Types) -> DataType {
+        DataType::Reference(specta_typescript::define("unknown"))
+    }
+}
 
 /// A binary IPC payload: it reaches the UI as an `ArrayBuffer`, with no JSON in between
 /// (ADR-0001). Return it from a command or send it through a `Channel<Bytes>`. Binary messages
@@ -39,6 +52,13 @@ pub fn message(header: [u32; 4], body: &[u8]) -> Bytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_comes_in_as_is() {
+        let value = serde_json::json!({ "kind": "folder", "path": r"D:\ნახაზები" });
+        let json: Json = serde_json::from_value(value.clone()).expect("deserializes");
+        assert_eq!(json, Json(value));
+    }
 
     #[test]
     fn bytes_go_out_raw() {

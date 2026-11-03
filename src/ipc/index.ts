@@ -8,12 +8,24 @@
  *   with (an unknown command, a bad argument) is a bug and is thrown. Show the error with
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`.
- * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
+ * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
+ *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`.
  */
 
-export type { ErrorCode, JerryError } from "./bindings";
-export { commands } from "./bindings";
+export type {
+  Accent,
+  ClickToOpen,
+  Density,
+  DragAction,
+  ErrorCode,
+  JerryError,
+  Settings,
+  Startup,
+  Theme,
+  View,
+} from "./bindings";
+export { commands, events } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
 export { type Protocol, protocolUrl } from "./protocol";

@@ -5,6 +5,8 @@
 
 pub mod error;
 pub mod job;
+pub mod settings;
+pub mod storage;
 
 pub use error::{ErrorCode, JerryError};
 
