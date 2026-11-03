@@ -14,7 +14,7 @@ pub fn local_app_data() -> Result<PathBuf, JerryError> {
     known_folder(&FOLDERID_LocalAppData)
 }
 
-fn known_folder(id: &GUID) -> Result<PathBuf, JerryError> {
+pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, JerryError> {
     // SAFETY: `id` is a valid known folder id; no access token means the current user.
     let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }?;
     // SAFETY: on success the Shell returns a valid NUL-terminated string.

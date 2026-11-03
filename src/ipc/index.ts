@@ -10,13 +10,22 @@
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
  *   listings: `openListing`.
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
- * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`.
+ * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
+ *   `typeIconUrl`, `driveIconUrl` and `placeIconUrl`.
  */
 
 export type { ErrorCode, JerryError, ListingTarget } from "./bindings";
 export { commands } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
+export {
+  driveIconUrl,
+  IconKey,
+  iconPixels,
+  type Place,
+  placeIconUrl,
+  typeIconUrl,
+} from "./icons";
 export {
   decodeListingMessage,
   type ListingBatch,

@@ -3,6 +3,7 @@
 
 #[cfg(debug_assertions)]
 mod dev;
+pub mod icons;
 pub mod ipc;
 pub mod jobs;
 pub mod listing;
@@ -81,6 +82,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         dev::dev_long_task,
         dev::dev_stream,
         dev::dev_synth_folder,
+        dev::dev_icon_stats,
     ];
     #[cfg(not(debug_assertions))]
     let commands = commands![];
@@ -113,6 +115,8 @@ pub fn run() -> tauri::Result<()> {
 
     let app = tauri::Builder::default()
         .manage(listing::Listings::default())
+        .manage(jerry_win::icons::Icons::new())
+        .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

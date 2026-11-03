@@ -87,3 +87,32 @@ pub async fn dev_synth_folder(count: u32) -> Result<String, JerryError> {
     })
     .await
 }
+
+/// Icon counters since start: whether rows are served from memory or need the Shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct IconStats {
+    /// Served from memory, with no Shell call.
+    pub from_memory: u32,
+    /// Sent to the Shell pool.
+    pub from_shell: u32,
+    /// PNGs rendered.
+    pub rendered: u32,
+    pub failed: u32,
+}
+
+/// The icon counters, for the dev panel's scroll measurement.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_icon_stats(
+    icons: tauri::State<'_, jerry_win::icons::Icons>,
+) -> Result<IconStats, JerryError> {
+    let stats = icons.stats();
+    let count = |value: u64| u32::try_from(value).unwrap_or(u32::MAX);
+    Ok(IconStats {
+        from_memory: count(stats.from_memory),
+        from_shell: count(stats.from_shell),
+        rendered: count(stats.rendered),
+        failed: count(stats.failed),
+    })
+}

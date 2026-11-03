@@ -1553,6 +1553,7 @@ name = "jerry-win"
 version = "0.1.0-rc.1"
 dependencies = [
  "jerry-core",
+ "tempfile",
  "tracing",
  "windows",
 ]
