@@ -207,11 +207,11 @@ function createLister(show: (rows: Row[], count: number) => void) {
   const paint = () => flushSync(() => show(firstRows(), names.length));
   /** Applies `next` if it is for the sort asked for last; an empty order changes nothing. */
   const apply = (next: ListingOrder) => {
-    const current = next.sort;
+    const { column, descending, foldersFirst } = next.sort;
     const matches =
-      current.column === wanted.column &&
-      current.descending === wanted.descending &&
-      current.foldersFirst === wanted.foldersFirst;
+      column === wanted.column &&
+      descending === wanted.descending &&
+      foldersFirst === wanted.foldersFirst;
     if (!matches || next.ids.length === 0) {
       return false;
     }
