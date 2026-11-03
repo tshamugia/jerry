@@ -74,6 +74,10 @@ export const strings = {
     nothingToSort: "List a folder first.",
     sortPending:
       "No new order yet: the folder is still being read, or a later sort overtook this one.",
+    /** The last change the watcher sent, and how long it took to paint. */
+    changed: (change: { added: number; changed: number; removed: number; paintMs: number }) =>
+      `Live: ${integer.format(change.added)} new, ${integer.format(change.changed)} changed, ` +
+      `${integer.format(change.removed)} removed; painted ${decimal.format(change.paintMs)} ms after it arrived.`,
   },
 } as const;
 

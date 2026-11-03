@@ -1,10 +1,17 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { expect, test } from "vitest";
-import { decodeListingMessage, type ListingMessage, openListing, type Sort } from ".";
+import {
+  decodeListingMessage,
+  type ListingMessage,
+  type ListingOrder,
+  openListing,
+  type Sort,
+} from ".";
 import { HEADER_BYTES } from "./channel";
 import {
   batchMessage,
+  diffMessage,
   doneMessage,
   errorMessage,
   orderMessage,
@@ -54,6 +61,30 @@ test("odd names keep every later name in place", () => {
     "emoji 📐.dwg",
     "after.txt",
   ]);
+});
+
+test("a diff decodes its ids, removals and entries like a batch's", () => {
+  for (const removed of [[0], [0, 4]]) {
+    const message = diffMessage([1, 5], removed, [
+      { name: "b.txt", size: 2 ** 40 + 1, modified: 1_767_225_600_000 },
+      { name: "გეგმა 📐.pdf", size: 3, attributes: 0x10 },
+    ]);
+
+    const decoded = decodeListingMessage(message);
+
+    if (decoded.kind !== "diff") throw new Error(decoded.kind);
+    expect([...decoded.ids]).toEqual([1, 5]);
+    expect([...decoded.removed]).toEqual(removed);
+    expect(decoded.names).toEqual(["b.txt", "გეგმა 📐.pdf"]);
+    expect([...decoded.sizes]).toEqual([2 ** 40 + 1, 3]);
+    expect([...decoded.modified]).toEqual([1_767_225_600_000, 0]);
+    expect([...decoded.attributes]).toEqual([0x20, 0x10]);
+    expect(decoded.sizes.buffer).toBe(message);
+  }
+  const removalOnly = decodeListingMessage(diffMessage([], [3], []));
+  if (removalOnly.kind !== "diff") throw new Error(removalOnly.kind);
+  expect(removalOnly.names).toEqual([]);
+  expect([...removalOnly.removed]).toEqual([3]);
 });
 
 test("done and error messages decode", () => {
@@ -138,33 +169,39 @@ test("openListing streams decoded messages until it is closed", async () => {
   expect(calls[1]?.[1]).toEqual({ id: 7 });
 });
 
-test("an open listing re-sorts through listing_sort", async () => {
+test("an open listing re-sorts through listing_sort and gets the order on its stream", async () => {
   const calls: [string, unknown][] = [];
+  let channel: Channel<ArrayBuffer> | undefined;
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
     switch (cmd) {
       case "listing_open":
+        channel = (args as { onMessage: Channel<ArrayBuffer> }).onMessage;
         return { id: 7, path: String.raw`C:\Work` };
       case "listing_sort":
-        return orderMessage([1, 0], { column: 3, descending: true });
+        channel?.onmessage(orderMessage([1, 0], { column: 3, descending: true }));
+        return null;
       default:
         return null;
     }
   });
   const bySize: Sort = { column: "size", descending: true, foldersFirst: true };
+  const orders: ListingOrder[] = [];
 
   const opened = await openListing(
     2,
     { kind: "path", path: String.raw`C:\Work` },
     byName,
-    () => {},
+    (message) => {
+      if (message.kind === "order") orders.push(message);
+    },
   );
   if (opened.status !== "ok") throw new Error(opened.error.code);
   const sorted = await opened.data.sort(bySize);
 
-  if (sorted.status !== "ok") throw new Error(sorted.error.code);
-  expect(sorted.data.sort).toEqual(bySize);
-  expect([...sorted.data.ids]).toEqual([1, 0]);
+  expect(sorted).toEqual({ status: "ok", data: null });
+  expect(orders.map((order) => order.sort)).toEqual([bySize]);
+  expect([...(orders[0]?.ids ?? [])]).toEqual([1, 0]);
   expect(calls[1]).toEqual(["listing_sort", { id: 7, sort: bySize }]);
 });
 

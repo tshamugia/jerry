@@ -14,22 +14,24 @@ export const commands = {
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
 	/**
 	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
-	 *  their order by `sort` and a done message, or an error message (decoded by
-	 *  `src/ipc/listing.ts`). Returns at once, before the folder is read: errors reading it, such
-	 *  as `AccessDenied`, `NotFound` or `DeviceGone`, come as the stream's error message. Opening a
-	 *  folder for a tab closes the tab's previous listing.
+	 *  their order by `sort` and a done message, then a diff and an order for every change while the
+	 *  listing is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once,
+	 *  before the folder is read: errors reading it, such as `AccessDenied`, `NotFound` or
+	 *  `DeviceGone`, come as the stream's error message, and so does the folder going away. Opening
+	 *  a folder for a tab closes the tab's previous listing.
 	 */
 	listingOpen: (tab: number, target: ListingTarget, sort: Sort, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, sort, onMessage })),
 	/**
-	 *  Sorts listing `id` by `sort` from now on and returns the new order as one order message
-	 *  (only entry ids, as `u32`s). While the folder is still being read the order is empty and the
-	 *  stream's own order message, sent once the whole folder is in, follows the new sort. Fails
-	 *  with `NotFound` for a closed listing.
+	 *  Sorts listing `id` by `sort` from now on. The new order (only entry ids) comes through the
+	 *  listing's stream as an order message, after any diff sent before it, so it always names the
+	 *  entries the UI has. While the folder is still being read, the stream's own order message
+	 *  follows the new sort. Fails with `NotFound` for a closed listing.
 	 */
-	listingSort: (id: number, sort: Sort) => typedError<ArrayBuffer, JerryError>(__TAURI_INVOKE("listing_sort", { id, sort })),
+	listingSort: (id: number, sort: Sort) => typedError<null, JerryError>(__TAURI_INVOKE("listing_sort", { id, sort })),
 	/**
-	 *  Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
-	 *  that is already closed does nothing.
+	 *  Stops listing `id` if it still runs and forgets it: no message follows, and the folder's
+	 *  watcher stops unless another tab has the folder open. Closing a listing that is already
+	 *  closed does nothing.
 	 */
 	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
 	/**  All settings, defaults filled in. */
