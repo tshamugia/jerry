@@ -1,0 +1,97 @@
+# Listing and sort benchmarks (#44) on pull requests that touch the core. The base and the head
+# run on the same runner in interleaved rounds, and a benchmark more than 20% slower than the base
+# gets a warning (never a failure). The comparison is in the job summary;
+# .github/scripts/bench-compare.mjs describes it.
+name: Benchmarks
+
+on:
+  pull_request:
+    paths:
+      - "crates/jerry-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
+      - ".github/scripts/bench-compare.mjs"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Bash stops at the first failing command; the default pwsh only checks the last one.
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  # Base and head build into one target folder, so their shared dependencies compile once.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+  # Rounds per side, run as base-1, head-1, base-2, head-2, ...
+  ROUNDS: 3
+  THRESHOLD: 0.2
+
+jobs:
+  bench:
+    name: Listing and sort
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and both parents: the base it merges into and the PR's head.
+          fetch-depth: 2
+
+      - name: Check out the base next to it
+        run: |
+          echo "BASE=$RUNNER_TEMP/base" >> "$GITHUB_ENV"
+          echo "CRITERION_HOME=$RUNNER_TEMP/criterion" >> "$GITHUB_ENV"
+          git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build the head benchmarks
+        run: cargo bench -p jerry-core --no-run
+
+      - name: Build the base benchmarks
+        id: base
+        run: |
+          if [ ! -d "$BASE/crates/jerry-core/benches" ]; then
+            echo "::notice title=No base benchmarks::The base has no benchmarks yet."
+            exit 0
+          fi
+          cd "$BASE"
+          rustup toolchain install
+          if cargo bench -p jerry-core --no-run; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=No base benchmarks::The base's benchmarks don't build."
+          fi
+
+      - name: Run base and head in turns
+        env:
+          HAS_BASE: ${{ steps.base.outputs.ready }}
+        run: |
+          for round in $(seq "$ROUNDS"); do
+            if [ "$HAS_BASE" = true ]; then
+              (cd "$BASE" && cargo bench -p jerry-core -- --save-baseline "base-$round" --noplot) ||
+                echo "::warning title=Base benchmarks failed::Round $round of the base failed."
+            fi
+            cargo bench -p jerry-core -- --save-baseline "head-$round" --noplot
+          done
+
+      - name: Compare with the base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: >
+          node .github/scripts/bench-compare.mjs "$CRITERION_HOME" --threshold "$THRESHOLD"
+          --base "$BASE_REF $(git rev-parse --short HEAD^1)"
+          --head "#$PR $(git rev-parse --short HEAD^2)"
