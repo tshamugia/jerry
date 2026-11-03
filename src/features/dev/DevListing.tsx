@@ -79,6 +79,8 @@ declare global {
       listing: (path: string) => Promise<ListingOutcome>;
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
       sort: (sort: Sort) => Promise<SortOutcome>;
+      /** The next diff, once painted; `paintedAt` is `Date.now()` then, to time from outside. */
+      nextChange: () => Promise<PaintedChange>;
     };
   }
 }
@@ -97,13 +99,19 @@ export function DevListing() {
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [status, setStatus] = useState<string>();
   const [change, setChange] = useState<string>();
+  const [changeWaiters] = useState(() => new Set<(change: PaintedChange) => void>());
   const [lister] = useState(() =>
     createLister(
       (shown, total) => {
         setRows(shown);
         setCount(total);
       },
-      (live) => setChange(strings.dev.changed(live)),
+      (live) => {
+        setChange(strings.dev.changed(live));
+        const painted = { ...live, paintedAt: Date.now() };
+        for (const waiter of changeWaiters) waiter(painted);
+        changeWaiters.clear();
+      },
     ),
   );
 
@@ -142,7 +150,12 @@ export function DevListing() {
 
   useEffect(() => () => lister.close(), [lister]);
   useEffect(() => {
-    window.jerryDev = { listing: listPath, synthFolder: listSynth, sort: sortBy };
+    window.jerryDev = {
+      listing: listPath,
+      synthFolder: listSynth,
+      sort: sortBy,
+      nextChange: () => new Promise((resolve) => changeWaiters.add(resolve)),
+    };
     return () => {
       window.jerryDev = undefined;
     };
@@ -197,6 +210,10 @@ export interface LiveChange {
   changed: number;
   removed: number;
   paintMs: number;
+}
+
+export interface PaintedChange extends LiveChange {
+  paintedAt: number;
 }
 
 const sameSort = (a: Sort, b: Sort) =>

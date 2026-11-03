@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
@@ -43,7 +43,14 @@ struct Live {
 
 impl Live {
     fn new(watchers: &Watchers, folder: &Path) -> Self {
+        Self::holding_first(watchers, folder, Duration::ZERO)
+    }
+
+    /// Like [`Live::new`], with the watcher's thread held for `hold` after the first change it
+    /// tells: whatever happens meanwhile piles up in Windows' buffer.
+    fn holding_first(watchers: &Watchers, folder: &Path, hold: Duration) -> Self {
         let (sender, told) = channel();
+        let held = AtomicBool::new(hold.is_zero());
         let subscription = watchers
             .subscribe(folder, move |event| {
                 let told = match event {
@@ -51,6 +58,9 @@ impl Live {
                     Event::Gone(error) => Told::Gone(error.clone()),
                 };
                 let _ = sender.send(told);
+                if !held.swap(true, Ordering::Relaxed) {
+                    std::thread::sleep(hold);
+                }
             })
             .expect("watches");
         // Subscribed first, so nothing that happens while reading is missed.
@@ -233,10 +243,14 @@ fn a_mass_change_ends_where_the_folder_is() {
 #[test]
 fn an_overflow_lists_the_folder_again() {
     let dir = temp();
-    // A buffer this small overflows on a few dozen changes.
+    // A buffer this small holds a handful of changes; Windows keeps one as big for the changes
+    // that come while the watcher is busy.
     let watchers = Watchers::with_buffer(256);
-    let mut live = Live::new(&watchers, dir.path());
+    let mut live = Live::holding_first(&watchers, dir.path(), Duration::from_secs(1));
+    write(dir.path(), "first.txt", b"");
+    live.until("the first file", |listing| listing.len() == 1);
 
+    // The watcher is held now: 400 changes can't fit.
     for i in 0..400 {
         write(dir.path(), &format!("file {i}.txt"), b"");
     }

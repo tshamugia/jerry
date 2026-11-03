@@ -92,6 +92,9 @@ struct Open {
 /// One open listing, shared by its job, its watcher subscription and the commands.
 struct ListingState {
     folder: PathBuf,
+    /// The sort the listing started with: what a prestarted listing is matched by, without
+    /// waiting for `live`, which a change being applied holds through its IO.
+    started_sort: Sort,
     listing: RwLock<Listing>,
     live: Mutex<Live>,
     cancel: AtomicBool,
@@ -224,7 +227,7 @@ impl Listings {
         let prestarted = self.open().iter().find_map(|(&id, open)| {
             let waiting = open.tab == tab
                 && !open.state.outbox.is_attached()
-                && open.state.live().sort == sort
+                && open.state.started_sort == sort
                 && open.state.folder == folder;
             waiting.then(|| (id, open.state.outbox.clone()))
         });
@@ -244,6 +247,7 @@ impl Listings {
         let state = Arc::new(ListingState {
             listing: RwLock::new(Listing::new(folder.clone())),
             folder,
+            started_sort: sort,
             live: Mutex::new(Live {
                 sort,
                 index: None,
@@ -976,6 +980,7 @@ mod tests {
         let state = Arc::new(ListingState {
             listing: RwLock::new(Listing::new(folder.clone())),
             folder,
+            started_sort: Sort::default(),
             live: Mutex::new(Live {
                 sort: Sort::default(),
                 index: None,
