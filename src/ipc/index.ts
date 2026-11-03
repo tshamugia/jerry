@@ -8,12 +8,12 @@
  *   with (an unknown command, a bad argument) is a bug and is thrown. Show the error with
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
- *   listings: `openListing`.
+ *   listings: `openListing`, re-sorted with its `sort`.
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`.
  */
 
-export type { ErrorCode, JerryError, ListingTarget } from "./bindings";
+export type { ErrorCode, JerryError, ListingTarget, Sort, SortColumn } from "./bindings";
 export { commands } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
@@ -24,6 +24,7 @@ export {
   type ListingFailed,
   ListingKind,
   type ListingMessage,
+  type ListingOrder,
   type OpenListing,
   openListing,
 } from "./listing";

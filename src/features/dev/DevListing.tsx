@@ -3,9 +3,12 @@ import { flushSync } from "react-dom";
 import {
   commands,
   type ListingMessage,
+  type ListingOrder,
   type ListingTarget,
   type OpenListing,
   openListing,
+  type Sort,
+  type SortColumn,
 } from "../../ipc";
 import { errorText, sizeText, strings } from "../../strings";
 import { DevButton } from "./DevButton";
@@ -17,6 +20,15 @@ const DEV_TAB = 0;
 const SHOWN_ROWS = 20;
 const SYNTH_SIZES = [1_000, 100_000] as const;
 const FILE_ATTRIBUTE_DIRECTORY = 0x10;
+const SORT_COLUMNS: readonly SortColumn[] = [
+  "name",
+  "modified",
+  "type",
+  "size",
+  "created",
+  "extension",
+];
+const DEFAULT_SORT: Sort = { column: "name", descending: false, foldersFirst: true };
 
 interface Row {
   id: number;
@@ -35,7 +47,7 @@ export interface ListingTimings {
   firstPaintMs: number;
   /** Done message in JS. */
   doneMs: number;
-  /** The whole folder in and painted. */
+  /** The whole folder in, sorted and painted. */
   donePaintMs: number;
   /** The listing in Rust alone. */
   rustMs: number;
@@ -45,25 +57,42 @@ export type ListingOutcome =
   | { status: "ok"; timings: ListingTimings }
   | { status: "error"; text: string };
 
+/** One re-sort's timings, in ms from just before `listing_sort` is invoked. */
+export interface SortTimings {
+  count: number;
+  sort: Sort;
+  /** The order decoded in JS. */
+  orderMs: number;
+  /** The first rows in the new order painted: what the PRD's "sort < 100 ms" measures. */
+  paintMs: number;
+}
+
+export type SortOutcome =
+  | { status: "ok"; timings: SortTimings }
+  | { status: "error"; text: string };
+
 declare global {
   interface Window {
     /** Dev builds: for scripts that time listings over the DevTools protocol. */
     jerryDev?: {
       listing: (path: string) => Promise<ListingOutcome>;
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
+      sort: (sort: Sort) => Promise<SortOutcome>;
     };
   }
 }
 
 /**
  * Dev builds only: lists a folder through `listing_open`, paints the first rows and times it
- * (the PRD's "1 000 items shown < 0.2 s" and "100 000 items: first rows < 0.3 s"). Not the file
- * list (#29): just enough to receive and paint the batches.
+ * (the PRD's "1 000 items shown < 0.2 s" and "100 000 items: first rows < 0.3 s"), then re-sorts
+ * it through `listing_sort` and times that ("100 000 items: sort < 100 ms"). Not the file list
+ * (#29): just enough to receive the batches and orders and paint them.
  */
 export function DevListing() {
   const [path, setPath] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
   const [count, setCount] = useState(0);
+  const [sort, setSort] = useState(DEFAULT_SORT);
   const [status, setStatus] = useState<string>();
   const [lister] = useState(() =>
     createLister((shown, total) => {
@@ -78,7 +107,7 @@ export function DevListing() {
   };
   const listPath = (folder: string) => {
     setStatus(strings.dev.listing);
-    return lister.list({ kind: "path", path: folder }).then(report);
+    return lister.list({ kind: "path", path: folder }, sort).then(report);
   };
   const listSynth = async (size: number) => {
     setStatus(strings.dev.buildingSynth(size));
@@ -90,10 +119,23 @@ export function DevListing() {
     setPath(folder.data);
     return listPath(folder.data);
   };
+  const sortBy = async (next: Sort) => {
+    setSort(next);
+    const outcome = await lister.sort(next);
+    setStatus(outcome.status === "ok" ? strings.dev.sorted(outcome.timings) : outcome.text);
+    return outcome;
+  };
+  /** Like a column header: a new column sorts ascending, the same one flips direction. */
+  const clickColumn = (column: SortColumn) =>
+    void sortBy({
+      ...sort,
+      column,
+      descending: column === sort.column && !sort.descending,
+    });
 
   useEffect(() => () => lister.close(), [lister]);
   useEffect(() => {
-    window.jerryDev = { listing: listPath, synthFolder: listSynth };
+    window.jerryDev = { listing: listPath, synthFolder: listSynth, sort: sortBy };
     return () => {
       window.jerryDev = undefined;
     };
@@ -120,6 +162,13 @@ export function DevListing() {
           </DevButton>
         ))}
       </form>
+      <fieldset aria-label={strings.dev.sortBy} className="flex flex-wrap gap-2">
+        {SORT_COLUMNS.map((column) => (
+          <DevButton key={column} onClick={() => clickColumn(column)}>
+            {strings.dev.sortColumn(column, column === sort.column ? sort.descending : undefined)}
+          </DevButton>
+        ))}
+      </fieldset>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
       <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(count)}</p>
       <ul className="flex flex-col">
@@ -135,28 +184,60 @@ export function DevListing() {
 }
 
 /**
- * Opens listings one at a time and shows each batch with `show` the moment it arrives
- * (`flushSync`), so the paint that follows is the one the timings report.
+ * Opens listings one at a time and shows the first rows of each batch and order with `show` the
+ * moment it arrives (`flushSync`), so the paint that follows is the one the timings report.
  */
 function createLister(show: (rows: Row[], count: number) => void) {
   let current: OpenListing | undefined;
   let generation = 0;
+  // Every entry of the current listing by id, and its current display order.
+  let names: string[] = [];
+  let sizes: number[] = [];
+  let folders: boolean[] = [];
+  let order: Uint32Array | undefined;
+  let wanted = DEFAULT_SORT;
+
+  const firstRows = (): Row[] => {
+    const shown = Math.min(SHOWN_ROWS, names.length);
+    return Array.from({ length: shown }, (_, i) => {
+      const id = order?.[i] ?? i;
+      return { id, name: names[id] ?? "", size: sizes[id] ?? 0, folder: folders[id] ?? false };
+    });
+  };
+  const paint = () => flushSync(() => show(firstRows(), names.length));
+  /** Applies `next` if it is for the sort asked for last; an empty order changes nothing. */
+  const apply = (next: ListingOrder) => {
+    const current = next.sort;
+    const matches =
+      current.column === wanted.column &&
+      current.descending === wanted.descending &&
+      current.foldersFirst === wanted.foldersFirst;
+    if (!matches || next.ids.length === 0) {
+      return false;
+    }
+    order = next.ids;
+    paint();
+    return true;
+  };
 
   const close = () => {
     generation += 1;
     void current?.close();
     current = undefined;
+    names = [];
+    sizes = [];
+    folders = [];
+    order = undefined;
   };
 
-  const list = async (target: ListingTarget): Promise<ListingOutcome> => {
+  const list = async (target: ListingTarget, sort: Sort): Promise<ListingOutcome> => {
     close();
     const mine = generation;
-    flushSync(() => show([], 0));
+    wanted = sort;
+    paint();
     await afterNextPaint();
 
     const started = performance.now();
-    const rows: Row[] = [];
-    let count = 0;
     let batches = 0;
     let firstBatchMs = 0;
     let firstPaint: Promise<number> | undefined;
@@ -169,24 +250,23 @@ function createLister(show: (rows: Row[], count: number) => void) {
         const at = performance.now();
         switch (message.kind) {
           case "batch": {
-            const { firstId, names, sizes, attributes } = message;
-            for (let i = 0; i < names.length && rows.length < SHOWN_ROWS; i++) {
-              rows.push({
-                id: firstId + i,
-                name: names[i] ?? "",
-                size: sizes[i] ?? 0,
-                folder: ((attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0,
-              });
+            const { names: batchNames, sizes: batchSizes, attributes } = message;
+            for (let i = 0; i < batchNames.length; i++) {
+              names.push(batchNames[i] ?? "");
+              sizes.push(batchSizes[i] ?? 0);
+              folders.push(((attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0);
             }
-            count += names.length;
             batches += 1;
-            flushSync(() => show([...rows], count));
+            paint();
             if (!firstPaint) {
               firstBatchMs = at - started;
               firstPaint = afterNextPaint();
             }
             break;
           }
+          case "order":
+            apply(message);
+            break;
           case "done": {
             const doneMs = at - started;
             const donePaint = afterNextPaint();
@@ -212,7 +292,7 @@ function createLister(show: (rows: Row[], count: number) => void) {
         }
       };
 
-      void openListing(DEV_TAB, target, onMessage).then((result) => {
+      void openListing(DEV_TAB, target, sort, onMessage).then((result) => {
         if (result.status === "error") {
           resolve({ status: "error", text: errorText(result.error) });
         } else if (mine === generation) {
@@ -224,5 +304,28 @@ function createLister(show: (rows: Row[], count: number) => void) {
     });
   };
 
-  return { list, close };
+  const sort = async (next: Sort): Promise<SortOutcome> => {
+    wanted = next;
+    const listing = current;
+    if (!listing) {
+      return { status: "error", text: strings.dev.nothingToSort };
+    }
+    const started = performance.now();
+    const result = await listing.sort(next);
+    if (result.status === "error") {
+      return { status: "error", text: errorText(result.error) };
+    }
+    const orderMs = performance.now() - started;
+    if (!apply(result.data)) {
+      // Still being read, or overtaken by a later sort: the order that follows is painted.
+      return { status: "error", text: strings.dev.sortPending };
+    }
+    const painted = await afterNextPaint();
+    return {
+      status: "ok",
+      timings: { count: result.data.ids.length, sort: next, orderMs, paintMs: painted - started },
+    };
+  };
+
+  return { list, sort, close };
 }

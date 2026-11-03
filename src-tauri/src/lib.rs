@@ -66,6 +66,7 @@ macro_rules! commands {
             app_version,
             app_ready,
             listing::listing_open,
+            listing::listing_sort,
             listing::listing_close,
             $($dev)*
         ]
