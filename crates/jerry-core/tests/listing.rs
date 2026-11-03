@@ -185,6 +185,12 @@ fn a_denied_folder_is_access_denied() {
 
     let error = {
         let _denied = Denied::new(&locked);
+        // An elevated process (the CI runner) can list past the deny, so there is no denial to
+        // map. `std` lists through `FindFirstFileExW` too, so it tells without the code under test.
+        if std::fs::read_dir(&locked).is_ok() {
+            eprintln!("skipped: this process lists past a deny ACE");
+            return;
+        }
         Listing::read(&locked, &AtomicBool::new(false)).expect_err("denied")
     };
 
