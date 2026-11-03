@@ -11,11 +11,15 @@ publish.workspace = true
 jerry-core = { workspace = true }
 tracing = { workspace = true }
 windows = { workspace = true, features = [
+    "Foundation",
+    "UI_ViewManagement",
     "Wdk_System_SystemServices",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

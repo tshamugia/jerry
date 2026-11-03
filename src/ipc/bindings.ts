@@ -39,6 +39,8 @@ export const commands = {
 	 *  anything, every window gets `settings:changed`, this one included.
 	 */
 	settingsSet: (key: string, value: unknown) => typedError<null, JerryError>(__TAURI_INVOKE("settings_set", { key, value })),
+	/**  Whether Mica can show and the Windows accent. */
+	appearanceGet: () => __TAURI_INVOKE<Appearance>("appearance_get"),
 	/**
 	 *  Fails with a real Windows error: a background job reads a file that doesn't exist, so the
 	 *  UI gets `NotFound` with the path.
@@ -75,6 +77,7 @@ export const commands = {
 
 /** Events */
 export const events = {
+	appearanceChanged: makeEvent<AppearanceChanged, AppearanceChanged>("appearance:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
 };
 
@@ -83,6 +86,20 @@ export const events = {
 export type Accent = 
 /**  Match Windows: the Windows accent color. */
 "windows" | "blue" | "teal" | "indigo" | "graphite" | "plum" | "rust";
+
+/**  What the page needs from Windows to look right. */
+export type Appearance = {
+	/**
+	 *  Mica can show behind the windows (Windows 11 22H2 and later). With the Mica setting on,
+	 *  the page leaves its Mica areas transparent; otherwise it paints them.
+	 */
+	mica: boolean,
+	/**  The Windows accent, for the accent setting "Match Windows"; empty if Windows didn't tell. */
+	accent: WindowsAccent | null,
+};
+
+/**  Sent to every window when the Windows accent changes or Mica stops working. */
+export type AppearanceChanged = Appearance;
 
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
@@ -201,9 +218,18 @@ export type Settings = {
 	openInJerry: boolean,
 	/**  Check for new versions. */
 	checkUpdates: boolean,
+	/**  Sidebar width, in CSS pixels (drag its edge). */
+	sidebarWidth: number,
+	/**  Preview panel width, in CSS pixels (drag its edge). */
+	previewWidth: number,
+	/**  The left pane's share of the two panes' width, 0 to 1 (drag the divider). */
+	paneSplit: number,
 };
 
-/**  Sent to every window when a setting changes, with all the settings. */
+/**
+ *  Sent to every window when a setting changes, with all the settings. Rust hears it too
+ *  (`window::apply`).
+ */
 export type SettingsChanged = Settings;
 
 /**  How a list is sorted. */
@@ -244,6 +270,14 @@ export type Theme =
 
 /**  File list view. */
 export type View = "details" | "list" | "grid";
+
+/**  The Windows accent as CSS colors (`#rrggbb`). */
+export type WindowsAccent = {
+	/**  On light surfaces. */
+	light: string,
+	/**  On dark surfaces. */
+	dark: string,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

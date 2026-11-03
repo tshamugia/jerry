@@ -90,7 +90,7 @@ Also: never read the content of a cloud-only OneDrive file without a user action
 - One command registry (id, title, default shortcut, context, handler) feeds the palette, menus, toolbar, settings and the F1 table. Shortcuts match `KeyboardEvent.code`, so they work on the Georgian layout. WebView2 browser accelerators are off.
 - All user-visible text lives in `src/strings/`. Dates `DD.MM.YYYY HH:mm` by default, numbers and sizes through `Intl`, `tabular-nums` for numbers.
 - File content never runs script: SVG only through `<img>`, Markdown without raw HTML, pdf.js with `isEvalSupported: false`.
-- The window is created hidden and shown after the first render with the theme background (no white flash): `App` calls `commands.appReady()` once mounted; Rust shows the window anyway after 5 s if that never comes.
+- The window is created hidden, with the theme background (no white flash), and shown after the first render: `App` calls `commands.appReady()` once the settings and the Windows appearance are in and the frame is committed; Rust shows the window anyway after 5 s if that never comes. Theme, density, accent and Mica are attributes on `<html>` (`src/app/appearance.ts`); the tokens do the rest.
 
 ## Performance budgets
 

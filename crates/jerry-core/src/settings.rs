@@ -1,6 +1,7 @@
 //! Jerry's settings and their defaults, from the PRD's settings table («პარამეტრები და
-//! პერსონალიზაცია»). [`Storage`](crate::storage::Storage) keeps them in the `settings` table, one
-//! row per key, the value as JSON; a key without a row has its default.
+//! პერსონალიზაცია»), plus the zone sizes the window remembers («ინტერფეისის სტრუქტურა»).
+//! [`Storage`](crate::storage::Storage) keeps them in the `settings` table, one row per key, the
+//! value as JSON; a key without a row has its default.
 //!
 //! On the wire the keys are camelCase (`showHidden`), the same as the rows' keys.
 
@@ -11,7 +12,7 @@ use specta::Type;
 use crate::error::JerryError;
 
 /// Every setting, defaults filled in.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     /// App theme.
@@ -62,6 +63,12 @@ pub struct Settings {
     pub open_in_jerry: bool,
     /// Check for new versions.
     pub check_updates: bool,
+    /// Sidebar width, in CSS pixels (drag its edge).
+    pub sidebar_width: u16,
+    /// Preview panel width, in CSS pixels (drag its edge).
+    pub preview_width: u16,
+    /// The left pane's share of the two panes' width, 0 to 1 (drag the divider).
+    pub pane_split: f64,
 }
 
 impl Default for Settings {
@@ -91,6 +98,9 @@ impl Default for Settings {
             global_hotkey: "Ctrl+Alt+J".into(),
             open_in_jerry: false,
             check_updates: true,
+            sidebar_width: 232,
+            preview_width: 288,
+            pane_split: 0.5,
         }
     }
 }
@@ -249,6 +259,9 @@ mod tests {
                 "globalHotkey": "Ctrl+Alt+J",
                 "openInJerry": false,
                 "checkUpdates": true,
+                "sidebarWidth": 232,
+                "previewWidth": 288,
+                "paneSplit": 0.5,
             })
         );
     }

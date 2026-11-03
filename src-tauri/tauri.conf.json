@@ -14,6 +14,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Jerry",
         "width": 1280,
         "height": 800,
@@ -21,6 +22,7 @@
         "minHeight": 500,
         "center": true,
         "decorations": false,
+        "transparent": true,
         "visible": false,
         "dragDropEnabled": false
       }

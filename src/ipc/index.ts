@@ -16,6 +16,7 @@
 
 export type {
   Accent,
+  Appearance,
   ClickToOpen,
   Density,
   DragAction,
@@ -28,6 +29,7 @@ export type {
   Startup,
   Theme,
   View,
+  WindowsAccent,
 } from "./bindings";
 export { commands, events } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
