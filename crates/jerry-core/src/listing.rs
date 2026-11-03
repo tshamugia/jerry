@@ -8,8 +8,15 @@
 //! [`list`] streams batches (the first at [`FIRST_BATCH`] entries, then one every
 //! [`BATCH_INTERVAL`], the rest at the end) and can be cancelled; [`Listing::read`] collects a
 //! whole folder. Both block on IO: run them on a background thread.
+//!
+//! A listing stays live through [`Listing::apply`] and [`Listing::apply_listed`], which take what
+//! the watcher (`crate::watcher`) saw and return a [`Diff`]. Ids survive changes: a changed or
+//! renamed entry keeps its id, a new one gets the next id, and a removed one's id is never reused.
 
+use std::collections::hash_map::{DefaultHasher, Entry};
+use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
@@ -18,8 +25,9 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES, HANDLE, WIN32_ERROR};
 use windows::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FIND_FIRST_EX_LARGE_FETCH, FindClose, FindExInfoBasic,
-    FindExSearchNameMatch, FindFirstFileExW, FindNextFileW, GetDriveTypeW, WIN32_FIND_DATAW,
+    FILE_ATTRIBUTE_DIRECTORY, FIND_FIRST_EX_FLAGS, FIND_FIRST_EX_LARGE_FETCH, FindClose,
+    FindExInfoBasic, FindExSearchNameMatch, FindFirstFileExW, FindNextFileW, GetDriveTypeW,
+    GetFileAttributesW, INVALID_FILE_ATTRIBUTES, WIN32_FIND_DATAW,
 };
 use windows::core::PCWSTR;
 
@@ -138,22 +146,74 @@ impl Entries {
         self.attributes.clear();
     }
 
+    /// Copies of entries `ids`, in that order: entry `i` of the copy is entry `ids[i]` here.
+    pub fn copy_of(&self, ids: &[u32]) -> Entries {
+        let mut copy = Entries::default();
+        for &id in ids {
+            let id = id as usize;
+            copy.push(
+                self.name_utf16(id),
+                self.sizes[id],
+                self.created[id],
+                self.modified[id],
+                self.attributes[id],
+            );
+        }
+        copy
+    }
+
+    /// Gives entry `id` the size, dates and attributes of entry `from` of `other`. Returns
+    /// whether any of them changed, and whether the entry stopped or started being a folder.
+    fn set_data(&mut self, id: usize, other: &Entries, from: usize) -> (bool, bool) {
+        let was_dir = self.is_dir(id);
+        let changed = (
+            self.sizes[id],
+            self.created[id],
+            self.modified[id],
+            self.attributes[id],
+        ) != (
+            other.sizes[from],
+            other.created[from],
+            other.modified[from],
+            other.attributes[from],
+        );
+        self.sizes[id] = other.sizes[from];
+        self.created[id] = other.created[from];
+        self.modified[id] = other.modified[from];
+        self.attributes[id] = other.attributes[from];
+        (changed, was_dir != self.is_dir(id))
+    }
+
+    /// Gives every entry in `names` its new name, in one pass over all names, so the names stay
+    /// back to back.
+    fn rename(&mut self, names: &HashMap<usize, &[u16]>) {
+        if names.is_empty() {
+            return;
+        }
+        let mut units = Vec::with_capacity(self.name_units.len());
+        let mut start = 0;
+        for (id, end) in self.name_ends.iter_mut().enumerate() {
+            match names.get(&id) {
+                Some(name) => units.extend_from_slice(name),
+                None => units.extend_from_slice(&self.name_units[start..*end]),
+            }
+            start = *end;
+            *end = units.len();
+        }
+        self.name_units = units;
+    }
+
     fn name_range(&self, id: usize) -> Range<usize> {
         let start = if id == 0 { 0 } else { self.name_ends[id - 1] };
         start..self.name_ends[id]
     }
 
-    fn push_find_data(&mut self, data: &WIN32_FIND_DATAW) {
-        let len = data
-            .cFileName
-            .iter()
-            .position(|&unit| unit == 0)
-            .unwrap_or(data.cFileName.len());
+    pub(crate) fn push_find_data(&mut self, data: &WIN32_FIND_DATAW) {
         let filetime = |time: windows::Win32::Foundation::FILETIME| {
             (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
         };
         self.push(
-            &data.cFileName[..len],
+            find_data_name(data),
             (u64::from(data.nFileSizeHigh) << 32) | u64::from(data.nFileSizeLow),
             filetime(data.ftCreationTime),
             filetime(data.ftLastWriteTime),
@@ -162,11 +222,60 @@ impl Entries {
     }
 }
 
-/// One folder's entries and the folder's exact long path.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One folder's entries and the folder's exact long path. Entries the folder no longer has stay
+/// in the columns, marked removed, so every id keeps meaning the same entry.
+#[derive(Debug, Clone)]
 pub struct Listing {
     folder: PathBuf,
     entries: Entries,
+    /// `removed[id]`: entry `id` left the folder. Shorter than the entries when the last ones
+    /// weren't removed; empty until something is.
+    removed: Vec<bool>,
+    removed_count: usize,
+    /// The live entries by name, built at the first change.
+    names: Option<NameIndex>,
+}
+
+/// Same folder, same entries and the same ones removed: the name index is only a cache.
+impl PartialEq for Listing {
+    fn eq(&self, other: &Self) -> bool {
+        self.folder == other.folder
+            && self.entries == other.entries
+            && (0..self.entries.len()).all(|id| self.is_removed(id) == other.is_removed(id))
+    }
+}
+
+impl Eq for Listing {}
+
+/// What a folder holds now under the names that changed (`crate::watcher::observe`).
+#[derive(Debug, Default, Clone)]
+pub struct Observed {
+    /// The entries found, each name once, exactly as the folder has them.
+    pub present: Entries,
+    /// Names that changed and that the folder no longer has, exactly as the watcher saw them.
+    pub absent: Vec<Vec<u16>>,
+    /// The renames the watcher saw, in order: old name, new name.
+    pub renames: Vec<(Vec<u16>, Vec<u16>)>,
+}
+
+/// What a change did to a listing.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Diff {
+    /// Entries whose name, size, dates or attributes changed, by ascending id. A renamed entry
+    /// keeps its id.
+    pub changed: Vec<u32>,
+    /// New entries: these ids, continuing the listing's in order.
+    pub added: Range<u32>,
+    /// Entries that left the folder, by ascending id. Their ids are never used again.
+    pub removed: Vec<u32>,
+    /// Whether names changed, or which entries are folders: sort ranks need building again.
+    pub reindex: bool,
+}
+
+impl Diff {
+    pub fn is_empty(&self) -> bool {
+        self.changed.is_empty() && self.added.is_empty() && self.removed.is_empty()
+    }
 }
 
 impl Listing {
@@ -175,6 +284,9 @@ impl Listing {
         Self {
             folder,
             entries: Entries::default(),
+            removed: Vec::new(),
+            removed_count: 0,
+            names: None,
         }
     }
 
@@ -190,19 +302,262 @@ impl Listing {
         &self.folder
     }
 
+    /// Every entry the listing has had, removed ones included: ids `0..entries().len()`.
     pub fn entries(&self) -> &Entries {
         &self.entries
+    }
+
+    /// How many entries the folder has now.
+    pub fn len(&self) -> usize {
+        self.entries.len() - self.removed_count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether entry `id` left the folder.
+    pub fn is_removed(&self, id: usize) -> bool {
+        self.removed.get(id).copied().unwrap_or(false)
+    }
+
+    /// The ids of the entries the folder has now, ascending.
+    pub fn live_ids(&self) -> Vec<u32> {
+        (0..self.entries.len())
+            .filter(|&id| !self.is_removed(id))
+            .map(|id| id as u32)
+            .collect()
     }
 
     /// Appends a batch from [`list`]; its entries get the next ids.
     pub fn append(&mut self, batch: &Entries) {
         self.entries.append(batch);
+        self.names = None;
     }
 
-    /// The exact path of entry `id`, or `None` if the listing has no such entry.
+    /// The exact path of entry `id`, or `None` if the listing has no such entry or it was
+    /// removed.
     pub fn path(&self, id: usize) -> Option<PathBuf> {
-        (id < self.entries.len()).then(|| self.folder.join(self.entries.name(id)))
+        (id < self.entries.len() && !self.is_removed(id))
+            .then(|| self.folder.join(self.entries.name(id)))
     }
+
+    /// Applies what the watcher saw under the names that changed: entries found under a name the
+    /// listing has are updated, new names are added, names the folder no longer has are removed.
+    /// A rename keeps the entry's id, even through several renames in a row.
+    pub fn apply(&mut self, observed: &Observed) -> Diff {
+        let mut names = self.take_names();
+        let present = &observed.present;
+        let mut changed = BTreeSet::new();
+        let mut reindex = false;
+        let mut new: HashMap<&[u16], usize> = HashMap::new();
+        for at in 0..present.len() {
+            let name = present.name_utf16(at);
+            match names.find(&self.entries, name) {
+                Some(id) => {
+                    let (data, folder) = self.entries.set_data(id as usize, present, at);
+                    if data {
+                        changed.insert(id);
+                        reindex |= folder;
+                    }
+                }
+                None => {
+                    new.insert(name, at);
+                }
+            }
+        }
+
+        // Entries whose name is gone, by the name they have now as renames move them along.
+        let mut moving: HashMap<&[u16], u32> = observed
+            .absent
+            .iter()
+            .filter_map(|name| Some((name.as_slice(), names.find(&self.entries, name)?)))
+            .collect();
+        let mut removed = Vec::new();
+        for (old, new_name) in &observed.renames {
+            let Some(id) = moving.remove(old.as_slice()) else {
+                continue;
+            };
+            // A gone entry already had the new name: it was replaced.
+            if let Some(displaced) = moving.insert(new_name, id) {
+                removed.push(displaced);
+            }
+        }
+        let mut renamed: HashMap<usize, &[u16]> = HashMap::new();
+        for (name, id) in moving {
+            match new.remove(name) {
+                Some(at) => {
+                    names.remove(&self.entries, id);
+                    self.entries.set_data(id as usize, present, at);
+                    renamed.insert(id as usize, present.name_utf16(at));
+                    changed.insert(id);
+                }
+                None => removed.push(id),
+            }
+        }
+        self.entries.rename(&renamed);
+        for &id in renamed.keys() {
+            names.insert(&self.entries, id as u32);
+        }
+
+        removed.sort_unstable();
+        for &id in &removed {
+            names.remove(&self.entries, id);
+            self.mark_removed(id as usize);
+        }
+
+        let first = self.entries.len() as u32;
+        let mut added: Vec<usize> = new.into_values().collect();
+        added.sort_unstable();
+        for at in added {
+            self.entries.push(
+                present.name_utf16(at),
+                present.sizes[at],
+                present.created[at],
+                present.modified[at],
+                present.attributes[at],
+            );
+            names.insert(&self.entries, self.entries.len() as u32 - 1);
+        }
+        self.names = Some(names);
+
+        let added = first..self.entries.len() as u32;
+        Diff {
+            reindex: reindex || !renamed.is_empty() || !added.is_empty(),
+            changed: changed.into_iter().collect(),
+            added,
+            removed,
+        }
+    }
+
+    /// Brings the listing in line with `fresh`, the whole folder listed again: when single
+    /// changes were lost. Entries are matched by name, so a rename shows as a removal and an
+    /// addition.
+    pub fn apply_listed(&mut self, fresh: &Entries) -> Diff {
+        let mut names = self.take_names();
+        let mut seen = vec![false; self.entries.len()];
+        let mut changed = Vec::new();
+        let mut reindex = false;
+        let mut new = Vec::new();
+        for at in 0..fresh.len() {
+            match names.find(&self.entries, fresh.name_utf16(at)) {
+                Some(id) => {
+                    seen[id as usize] = true;
+                    let (data, folder) = self.entries.set_data(id as usize, fresh, at);
+                    if data {
+                        changed.push(id);
+                        reindex |= folder;
+                    }
+                }
+                None => new.push(at),
+            }
+        }
+        changed.sort_unstable();
+        let removed: Vec<u32> = (0..seen.len())
+            .filter(|&id| !seen[id] && !self.is_removed(id))
+            .map(|id| id as u32)
+            .collect();
+        for &id in &removed {
+            names.remove(&self.entries, id);
+            self.mark_removed(id as usize);
+        }
+        let first = self.entries.len() as u32;
+        for at in new {
+            self.entries.push(
+                fresh.name_utf16(at),
+                fresh.sizes[at],
+                fresh.created[at],
+                fresh.modified[at],
+                fresh.attributes[at],
+            );
+            names.insert(&self.entries, self.entries.len() as u32 - 1);
+        }
+        self.names = Some(names);
+        let added = first..self.entries.len() as u32;
+        Diff {
+            reindex: reindex || !added.is_empty(),
+            changed,
+            added,
+            removed,
+        }
+    }
+
+    /// The name index, built if this is the first change.
+    fn take_names(&mut self) -> NameIndex {
+        self.names.take().unwrap_or_else(|| {
+            let mut names = NameIndex::default();
+            for id in 0..self.entries.len() {
+                if !self.is_removed(id) {
+                    names.insert(&self.entries, id as u32);
+                }
+            }
+            names
+        })
+    }
+
+    fn mark_removed(&mut self, id: usize) {
+        if self.removed.len() <= id {
+            self.removed.resize(id + 1, false);
+        }
+        if !self.removed[id] {
+            self.removed[id] = true;
+            self.removed_count += 1;
+        }
+    }
+}
+
+/// Live entries by exact name: one `u64` hash per entry instead of a copy of every name. Names
+/// whose hash an earlier name already has (practically never) go to a short list.
+#[derive(Debug, Default, Clone)]
+struct NameIndex {
+    by_hash: HashMap<u64, u32>,
+    collided: Vec<u32>,
+}
+
+impl NameIndex {
+    fn find(&self, entries: &Entries, name: &[u16]) -> Option<u32> {
+        let named = |id: &u32| entries.name_utf16(*id as usize) == name;
+        self.by_hash
+            .get(&name_hash(name))
+            .filter(|id| named(id))
+            .or_else(|| self.collided.iter().find(|id| named(id)))
+            .copied()
+    }
+
+    /// Adds entry `id` under its current name.
+    fn insert(&mut self, entries: &Entries, id: u32) {
+        let hash = name_hash(entries.name_utf16(id as usize));
+        match self.by_hash.entry(hash) {
+            Entry::Occupied(_) => self.collided.push(id),
+            Entry::Vacant(slot) => {
+                slot.insert(id);
+            }
+        }
+    }
+
+    /// Drops entry `id`, under the name it has now: call it before the name changes.
+    fn remove(&mut self, entries: &Entries, id: u32) {
+        let hash = name_hash(entries.name_utf16(id as usize));
+        if self.by_hash.get(&hash) != Some(&id) {
+            self.collided.retain(|&other| other != id);
+            return;
+        }
+        self.by_hash.remove(&hash);
+        let same_hash = self
+            .collided
+            .iter()
+            .position(|&other| name_hash(entries.name_utf16(other as usize)) == hash);
+        if let Some(position) = same_hash {
+            self.by_hash
+                .insert(hash, self.collided.swap_remove(position));
+        }
+    }
+}
+
+fn name_hash(name: &[u16]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Converts a FILETIME (100 ns ticks since 1601) to milliseconds since the Unix epoch.
@@ -299,6 +654,78 @@ pub fn list(
     Ok(())
 }
 
+/// Looks up `name` in `folder` (a long path) and hands every entry that matches it to `found`:
+/// the entry itself under its exact name, and entries it matches only by 8.3 short name or by
+/// case. Nothing matching is not an error. Blocking IO.
+pub(crate) fn find_name(
+    folder: &Path,
+    name: &[u16],
+    mut found: impl FnMut(&WIN32_FIND_DATAW),
+) -> Result<(), JerryError> {
+    let mut pattern: Vec<u16> = folder.as_os_str().encode_wide().collect();
+    if pattern.last() != Some(&u16::from(b'\\')) {
+        pattern.push(u16::from(b'\\'));
+    }
+    pattern.extend_from_slice(name);
+    pattern.push(0);
+    let mut data = WIN32_FIND_DATAW::default();
+    // SAFETY: `pattern` is NUL-terminated and outlives the call; `data` is the WIN32_FIND_DATAW
+    // that FindExInfoBasic fills.
+    let first = unsafe {
+        FindFirstFileExW(
+            PCWSTR(pattern.as_ptr()),
+            FindExInfoBasic,
+            (&raw mut data).cast(),
+            FindExSearchNameMatch,
+            None,
+            FIND_FIRST_EX_FLAGS(0),
+        )
+    };
+    let handle = match first {
+        Ok(handle) => FindHandle(handle),
+        Err(error) if WIN32_ERROR::from_error(&error) == Some(ERROR_FILE_NOT_FOUND) => {
+            return Ok(());
+        }
+        Err(error) => return Err(list_error(&error, folder)),
+    };
+    loop {
+        if !is_dot_entry(&data) {
+            found(&data);
+        }
+        // SAFETY: `handle` is an open find handle and `data` a valid WIN32_FIND_DATAW.
+        if let Err(error) = unsafe { FindNextFileW(handle.0, &mut data) } {
+            if WIN32_ERROR::from_error(&error) == Some(ERROR_NO_MORE_FILES) {
+                return Ok(());
+            }
+            return Err(list_error(&error, folder));
+        }
+    }
+}
+
+/// The exact name in `data`, without its NUL.
+pub(crate) fn find_data_name(data: &WIN32_FIND_DATAW) -> &[u16] {
+    let len = data
+        .cFileName
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(data.cFileName.len());
+    &data.cFileName[..len]
+}
+
+/// What is wrong with `folder` (a long path), or `None` while it is still a folder there:
+/// [`ErrorCode::NotFound`] once it is deleted, [`ErrorCode::DeviceGone`] once its drive is.
+pub(crate) fn folder_error(folder: &Path) -> Option<JerryError> {
+    let wide: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
+    // SAFETY: `wide` is NUL-terminated and outlives the call.
+    let attributes = unsafe { GetFileAttributesW(PCWSTR(wide.as_ptr())) };
+    if attributes == INVALID_FILE_ATTRIBUTES {
+        let error = windows::core::Error::from_thread();
+        return Some(list_error(&error, folder));
+    }
+    (attributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0)
+        .then(|| JerryError::new(ErrorCode::NotFound).at(folder))
+}
+
 /// Closes a find handle when dropped.
 struct FindHandle(HANDLE);
 
@@ -313,7 +740,7 @@ impl Drop for FindHandle {
 
 /// The error for a failed directory read of `folder`. A path on a drive letter with no volume
 /// behind it (an unplugged USB drive) is [`ErrorCode::DeviceGone`], not [`ErrorCode::NotFound`].
-fn list_error(error: &windows::core::Error, folder: &Path) -> JerryError {
+pub(crate) fn list_error(error: &windows::core::Error, folder: &Path) -> JerryError {
     let mut error = JerryError::new(ErrorCode::from_hresult(error.code())).at(folder);
     if error.code == ErrorCode::NotFound && drive_is_gone(folder) {
         error.code = ErrorCode::DeviceGone;
@@ -398,6 +825,196 @@ mod tests {
         expected.extend(odd);
         assert_eq!(path.as_os_str().encode_wide().collect::<Vec<_>>(), expected);
         assert_eq!(listing.path(1), None);
+    }
+
+    fn wide(name: &str) -> Vec<u16> {
+        name.encode_utf16().collect()
+    }
+
+    /// A listing of `names`: entry `i` has size `i`.
+    fn listing_of(names: &[&str]) -> Listing {
+        let mut listing = Listing::new(PathBuf::from(r"\\?\C:\Work"));
+        listing.append(&entries(names));
+        listing
+    }
+
+    /// What the watcher would see: `present` as (name, size), `absent` names, `renames`.
+    fn observed(present: &[(&str, u64)], absent: &[&str], renames: &[(&str, &str)]) -> Observed {
+        let mut found = Entries::default();
+        for &(name, size) in present {
+            found.push(&wide(name), size, 10, 99, 0x20);
+        }
+        Observed {
+            present: found,
+            absent: absent.iter().map(|name| wide(name)).collect(),
+            renames: renames
+                .iter()
+                .map(|(old, new)| (wide(old), wide(new)))
+                .collect(),
+        }
+    }
+
+    fn live_names(listing: &Listing) -> Vec<String> {
+        listing
+            .live_ids()
+            .into_iter()
+            .map(|id| {
+                listing
+                    .entries()
+                    .name(id as usize)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn changes_update_add_and_remove_by_name() {
+        let mut listing = listing_of(&["a.txt", "ნახაზი.dwg", "c.txt"]);
+
+        let diff = listing.apply(&observed(
+            &[("ნახაზი.dwg", 7), ("new.txt", 3), ("c.txt", 2)],
+            &["a.txt", "never listed.txt"],
+            &[],
+        ));
+
+        assert_eq!(
+            diff,
+            Diff {
+                changed: vec![1, 2],
+                added: 3..4,
+                removed: vec![0],
+                reindex: true,
+            }
+        );
+        assert_eq!(live_names(&listing), ["ნახაზი.dwg", "c.txt", "new.txt"]);
+        assert_eq!(listing.entries().sizes()[1], 7);
+        assert_eq!(listing.len(), 3);
+        assert!(listing.is_removed(0));
+        assert_eq!(listing.path(0), None, "a removed entry has no path");
+        assert!(listing.path(3).is_some());
+
+        // Seeing the same again changes nothing.
+        let again = listing.apply(&observed(&[("ნახაზი.dwg", 7)], &["a.txt"], &[]));
+        assert!(again.is_empty());
+    }
+
+    #[test]
+    fn data_only_changes_keep_the_sort_ranks() {
+        let mut listing = listing_of(&["a.txt", "b.txt"]);
+        let diff = listing.apply(&observed(&[("b.txt", 500)], &[], &[]));
+        assert_eq!(diff.changed, [1]);
+        assert!(!diff.reindex);
+    }
+
+    #[test]
+    fn a_rename_keeps_the_id_even_through_a_chain() {
+        let mut listing = listing_of(&["a.txt", "b.txt"]);
+
+        let diff = listing.apply(&observed(
+            &[("გეგმა.pdf", 0)],
+            &["a.txt", "middle.txt"],
+            &[("a.txt", "middle.txt"), ("middle.txt", "გეგმა.pdf")],
+        ));
+
+        assert_eq!(diff.changed, [0]);
+        assert!(diff.added.is_empty() && diff.removed.is_empty() && diff.reindex);
+        assert_eq!(listing.entries().name(0), "გეგმა.pdf");
+        assert_eq!(listing.entries().name(1), "b.txt", "later names stay put");
+        // The name index follows the rename.
+        let gone = listing.apply(&observed(&[], &["გეგმა.pdf"], &[]));
+        assert_eq!(gone.removed, [0]);
+    }
+
+    #[test]
+    fn a_case_only_rename_keeps_the_id() {
+        let mut listing = listing_of(&["plan.dwg"]);
+        // Windows finds "Plan.dwg" under the old name too, so the old name is absent exactly.
+        let diff = listing.apply(&observed(
+            &[("Plan.dwg", 0)],
+            &["plan.dwg"],
+            &[("plan.dwg", "Plan.dwg")],
+        ));
+        assert_eq!(diff.changed, [0]);
+        assert!(diff.added.is_empty() && diff.removed.is_empty());
+        assert_eq!(listing.entries().name(0), "Plan.dwg");
+    }
+
+    #[test]
+    fn a_rename_onto_an_existing_name_replaces_it() {
+        let mut listing = listing_of(&["draft.docx", "final.docx"]);
+        let diff = listing.apply(&observed(
+            &[("final.docx", 9)],
+            &["draft.docx"],
+            &[("draft.docx", "final.docx")],
+        ));
+        assert_eq!(live_names(&listing), ["final.docx"]);
+        assert_eq!(diff.removed.len(), 1);
+        assert_eq!(listing.len(), 1);
+    }
+
+    #[test]
+    fn a_new_listing_matches_by_name() {
+        let mut listing = listing_of(&["a.txt", "b.txt", "c.txt"]);
+        let mut fresh = Entries::default();
+        fresh.push(&wide("c.txt"), 2, 10, 20 + 2, 0x20);
+        fresh.push(&wide("b.txt"), 50, 10, 21, 0x20);
+        fresh.push(&wide("d.txt"), 0, 10, 0, 0x20);
+
+        let diff = listing.apply_listed(&fresh);
+
+        assert_eq!(
+            diff,
+            Diff {
+                changed: vec![1],
+                added: 3..4,
+                removed: vec![0],
+                reindex: true,
+            }
+        );
+        assert_eq!(live_names(&listing), ["b.txt", "c.txt", "d.txt"]);
+        assert!(listing.apply_listed(&fresh).is_empty());
+    }
+
+    #[test]
+    fn removed_ids_are_never_reused() {
+        let mut listing = listing_of(&["a.txt"]);
+        listing.apply(&observed(&[], &["a.txt"], &[]));
+        let diff = listing.apply(&observed(&[("a.txt", 0)], &[], &[]));
+        assert_eq!(diff.added, 1..2, "the file came back as a new entry");
+        assert_eq!(listing.live_ids(), [1]);
+    }
+
+    #[test]
+    fn names_with_the_same_hash_are_still_told_apart() {
+        let entries = entries(&["a", "b", "c"]);
+        // Force every name into one hash bucket by indexing them under one key.
+        let mut names = NameIndex::default();
+        names.by_hash.insert(name_hash(&wide("a")), 0);
+        names.collided.extend([1, 2]);
+        assert_eq!(names.find(&entries, &wide("c")), Some(2));
+        names.remove(&entries, 0);
+        assert_eq!(names.find(&entries, &wide("a")), None);
+        assert_eq!(names.find(&entries, &wide("b")), Some(1));
+    }
+
+    #[test]
+    fn copies_and_renames_keep_names_back_to_back() {
+        let mut all = entries(&["a.txt", "ნახაზი.dwg", "c"]);
+        let copy = all.copy_of(&[2, 0]);
+        assert_eq!(copy.name(0), "c");
+        assert_eq!(copy.name(1), "a.txt");
+        assert_eq!(copy.sizes(), [2, 0]);
+
+        let longer = wide("a much longer name.txt");
+        all.rename(&HashMap::from([(0, longer.as_slice())]));
+        assert_eq!(all.name(0), "a much longer name.txt");
+        assert_eq!(all.name(1), "ნახაზი.dwg");
+        assert_eq!(all.name(2), "c");
+        assert_eq!(
+            all.name_units().len(),
+            *all.name_ends().last().expect("ends")
+        );
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod settings;
 pub mod sort;
 pub mod storage;
 pub mod synth;
+pub mod watcher;
 
 pub use error::{ErrorCode, JerryError};
 
