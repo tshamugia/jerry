@@ -32,6 +32,12 @@ export const strings = {
     streamed: (messages: number, values: string) =>
       `Received ${messages} binary messages: ${values}.`,
     streamIncomplete: (messages: number) => `Only ${messages} of 3 messages arrived.`,
+    toggleHidden: "Toggle hidden files",
+    nextTheme: "Next theme",
+    openWindow: "Open another window",
+    settingsLoading: "Settings: loading…",
+    settings: (showHidden: boolean, theme: string) =>
+      `Settings: hidden files ${showHidden ? "shown" : "hidden"}, theme ${theme}.`,
     listingTitle: "Listing",
     listingPath: "Folder path",
     listFolder: "List",

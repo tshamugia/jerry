@@ -6,12 +6,19 @@ use std::path::PathBuf;
 
 use jerry_core::JerryError;
 use windows::Win32::System::Com::CoTaskMemFree;
-use windows::Win32::UI::Shell::{FOLDERID_LocalAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
+use windows::Win32::UI::Shell::{
+    FOLDERID_LocalAppData, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+};
 use windows::core::GUID;
 
 /// `%LOCALAPPDATA%`: the user's local application data (Jerry's logs live in `Jerry\logs`).
 pub fn local_app_data() -> Result<PathBuf, JerryError> {
     known_folder(&FOLDERID_LocalAppData)
+}
+
+/// `%APPDATA%`: the user's roaming application data (Jerry's database is `Jerry\jerry.db`).
+pub fn roaming_app_data() -> Result<PathBuf, JerryError> {
+    known_folder(&FOLDERID_RoamingAppData)
 }
 
 fn known_folder(id: &GUID) -> Result<PathBuf, JerryError> {
@@ -29,9 +36,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_app_data_is_an_existing_folder() {
-        let path = local_app_data().expect("the Shell knows LocalAppData");
-        assert!(path.is_absolute(), "{}", path.display());
-        assert!(path.is_dir(), "{}", path.display());
+    fn app_data_folders_exist() {
+        for path in [local_app_data(), roaming_app_data()] {
+            let path = path.expect("the Shell knows the folder");
+            assert!(path.is_absolute(), "{}", path.display());
+            assert!(path.is_dir(), "{}", path.display());
+        }
+        assert_ne!(local_app_data(), roaming_app_data());
     }
 }

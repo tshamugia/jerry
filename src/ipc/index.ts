@@ -9,12 +9,27 @@
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
  *   listings: `openListing`, re-sorted with its `sort`.
- * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
+ * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
+ *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`.
  */
 
-export type { ErrorCode, JerryError, ListingTarget, Sort, SortColumn } from "./bindings";
-export { commands } from "./bindings";
+export type {
+  Accent,
+  ClickToOpen,
+  Density,
+  DragAction,
+  ErrorCode,
+  JerryError,
+  ListingTarget,
+  Settings,
+  Sort,
+  SortColumn,
+  Startup,
+  Theme,
+  View,
+} from "./bindings";
+export { commands, events } from "./bindings";
 export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
 export {

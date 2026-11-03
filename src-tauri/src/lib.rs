@@ -7,12 +7,13 @@ pub mod ipc;
 pub mod jobs;
 pub mod listing;
 pub mod logging;
+pub mod storage;
 
 use std::time::Duration;
 
 use specta_typescript::{Typescript, semantic};
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
-use tauri_specta::{Builder, collect_commands};
+use tauri_specta::{Builder, collect_commands, collect_events};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
 const BINDINGS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/ipc/bindings.ts");
@@ -68,6 +69,8 @@ macro_rules! commands {
             listing::listing_open,
             listing::listing_sort,
             listing::listing_close,
+            storage::settings_get,
+            storage::settings_set,
             $($dev)*
         ]
     };
@@ -82,12 +85,14 @@ fn specta_builder() -> Builder<tauri::Wry> {
         dev::dev_long_task,
         dev::dev_stream,
         dev::dev_synth_folder,
+        dev::dev_open_window,
     ];
     #[cfg(not(debug_assertions))]
     let commands = commands![];
 
     Builder::<tauri::Wry>::new()
         .commands(commands)
+        .events(collect_events![storage::SettingsChanged])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
         .disable_serde_phases()
@@ -104,6 +109,8 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 /// Builds and runs the app until it exits.
 pub fn run() -> tauri::Result<()> {
     logging::init();
+    // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
+    let db = storage::Db::open(storage::db_path());
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -113,6 +120,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     let app = tauri::Builder::default()
+        .manage(db)
         .manage(listing::Listings::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
