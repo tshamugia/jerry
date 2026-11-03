@@ -1,28 +1,43 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, test } from "vitest";
-import { batchMessage, doneMessage, errorMessage, orderMessage } from "../../ipc/listing.testing";
+import type { Sort } from "../../ipc";
+import {
+  batchMessage,
+  diffMessage,
+  doneMessage,
+  errorMessage,
+  orderMessage,
+} from "../../ipc/listing.testing";
 import { DevListing } from "./DevListing";
 
 /**
  * A fake `listing_open` that streams `messages` once it has answered, and a `listing_sort` that
- * answers with `sorted`.
+ * sends the order `sorted` gives for the sort through the same stream, as Rust does. `send` puts
+ * more messages on the stream: what the watcher would send.
  */
-function streams(messages: ArrayBuffer[], sorted?: ArrayBuffer) {
+function streams(messages: ArrayBuffer[], sorted?: (sort: Sort) => ArrayBuffer) {
+  let channel: Channel<ArrayBuffer> | undefined;
   mockIPC((cmd, args) => {
     if (cmd === "listing_sort") {
-      return sorted ?? null;
+      const order = sorted?.((args as { sort: Sort }).sort);
+      if (order) {
+        setTimeout(() => channel?.onmessage(order), 0);
+      }
+      return null;
     }
     if (cmd !== "listing_open") {
       return null;
     }
-    const channel = (args as { onMessage: Channel<ArrayBuffer> }).onMessage;
+    channel = (args as { onMessage: Channel<ArrayBuffer> }).onMessage;
+    const opened = channel;
     setTimeout(() => {
-      for (const message of messages) channel.onmessage(message);
+      for (const message of messages) opened.onmessage(message);
     }, 0);
     return { id: 1, path: String.raw`C:\Work` };
   });
+  return { send: (message: ArrayBuffer) => act(() => channel?.onmessage(message)) };
 }
 
 const rowNames = () =>
@@ -67,7 +82,7 @@ test("paints the stream's order and re-sorts by a column", async () => {
       orderMessage([2, 1, 0]),
       doneMessage(3, 1, 1.5),
     ],
-    orderMessage([2, 0, 1], { column: 3 }),
+    () => orderMessage([2, 0, 1], { column: 3 }),
   );
   render(<DevListing />);
 
@@ -87,18 +102,60 @@ test("paints the stream's order and re-sorts by a column", async () => {
 
 test("ignores an order for a sort it no longer wants", async () => {
   streams(
-    [batchMessage(0, [{ name: "a.txt" }, { name: "b.txt" }]), doneMessage(2, 1, 1)],
-    // Answers for name, ascending, though the click asks for name, descending.
-    orderMessage([1, 0]),
+    [
+      batchMessage(0, [
+        { name: "b.txt", size: 1 },
+        { name: "a.txt", size: 2 },
+      ]),
+      orderMessage([1, 0]),
+      doneMessage(2, 1, 1),
+    ],
+    (sort) => (sort.column === "size" ? orderMessage([0, 1], { column: 3 }) : orderMessage([1, 0])),
   );
   render(<DevListing />);
   list(String.raw`C:\Work`);
   expect(await screen.findByText(/^2 items in 1 batch\./)).toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("button", { name: "Name ↑" }));
+  // By size, then back to name before the size order arrives: that one is not painted.
+  fireEvent.click(screen.getByRole("button", { name: "Size" }));
+  fireEvent.click(screen.getByRole("button", { name: "Name" }));
 
-  expect(await screen.findByText(/^No new order yet/)).toBeInTheDocument();
+  expect(
+    await screen.findByText(/^Sorted 2 items by name, ascending: painted/),
+  ).toBeInTheDocument();
   expect(rowNames()).toEqual(["a.txt", "b.txt"]);
+});
+
+test("a diff repaints new, changed and removed entries", async () => {
+  const { send } = streams([
+    batchMessage(0, [
+      { name: "a.txt", size: 1 },
+      { name: "b.txt", size: 2 },
+    ]),
+    orderMessage([0, 1]),
+    doneMessage(2, 1, 1),
+  ]);
+  render(<DevListing />);
+  list(String.raw`C:\Work`);
+  expect(await screen.findByText(/^2 items in 1 batch\./)).toBeInTheDocument();
+
+  // a.txt deleted, b.txt grew, ნახაზი.dwg created: the watcher's diff and its order.
+  send(
+    diffMessage(
+      [1, 2],
+      [0],
+      [
+        { name: "b.txt", size: 4096 },
+        { name: "ნახაზი.dwg", size: 10 },
+      ],
+    ),
+  );
+  send(orderMessage([1, 2]));
+
+  expect(await screen.findByText(/^Live: 1 new, 1 changed, 1 removed/)).toBeInTheDocument();
+  expect(rowNames()).toEqual(["b.txt", "ნახაზი.dwg"]);
+  expect(screen.getByText("4 KB")).toBeInTheDocument();
+  expect(screen.getByText("2 items")).toBeInTheDocument();
 });
 
 test("shows a listing error as text", async () => {
