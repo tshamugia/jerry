@@ -25,7 +25,7 @@ echo "::group::Build the base"
 has_base=false
 if [ ! -d "$BASE/crates/jerry-core/benches" ]; then
   echo "::notice title=No base benchmarks::The base has no benchmarks yet."
-elif (cd "$BASE" && rustup toolchain install &&
+elif (cd "$BASE" && rustup toolchain install --no-self-update &&
   CARGO_TARGET_DIR="$base_target" cargo bench -p jerry-core --no-run); then
   has_base=true
 else
