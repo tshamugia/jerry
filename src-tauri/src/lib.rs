@@ -5,6 +5,7 @@
 mod dev;
 pub mod ipc;
 pub mod jobs;
+pub mod listing;
 pub mod logging;
 
 use std::time::Duration;
@@ -61,7 +62,13 @@ fn show(window: &WebviewWindow) {
 /// feeds the invoke handler and the bindings.
 macro_rules! commands {
     ($($dev:tt)*) => {
-        collect_commands![app_version, app_ready, $($dev)*]
+        collect_commands![
+            app_version,
+            app_ready,
+            listing::listing_open,
+            listing::listing_close,
+            $($dev)*
+        ]
     };
 }
 
@@ -73,6 +80,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         dev::dev_block_main_thread,
         dev::dev_long_task,
         dev::dev_stream,
+        dev::dev_synth_folder,
     ];
     #[cfg(not(debug_assertions))]
     let commands = commands![];
@@ -104,6 +112,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     let app = tauri::Builder::default()
+        .manage(listing::Listings::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

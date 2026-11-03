@@ -1,6 +1,8 @@
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { commands, HEADER_BYTES, messageHeader, stream } from "../../ipc";
 import { errorText, strings } from "../../strings";
+import { DevButton } from "./DevButton";
+import { DevListing } from "./DevListing";
 
 const FREEZE_MS = 200;
 const STREAM_MESSAGES = 3;
@@ -30,19 +32,8 @@ export function DevPanel() {
           {result}
         </p>
       )}
+      <DevListing />
     </section>
-  );
-}
-
-function DevButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="h-row rounded-ctrl border border-ctrl-border bg-ctrl px-3 text-fg hover:bg-hover"
-    >
-      {children}
-    </button>
   );
 }
 

@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use jerry_core::JerryError;
+use jerry_core::error::display_path;
 use tauri::ipc::Channel;
 
 use crate::ipc::{Bytes, message};
@@ -71,4 +72,18 @@ pub async fn dev_stream(on_message: Channel<Bytes>) -> Result<(), JerryError> {
             })?;
     }
     Ok(())
+}
+
+/// Builds the synthetic folder with `count` entries under `%TEMP%\jerry-synth` unless it is
+/// there already, and returns its path as display text, for timing listings in the dev panel.
+#[tauri::command]
+#[specta::specta]
+pub async fn dev_synth_folder(count: u32) -> Result<String, JerryError> {
+    jobs::background("dev synth folder", move || {
+        let count = count as usize;
+        jerry_core::synth::ensure(count)
+            .map(|folder| display_path(&folder))
+            .map_err(|error| JerryError::from(error).at(jerry_core::synth::folder(count)))
+    })
+    .await
 }
