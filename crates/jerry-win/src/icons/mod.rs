@@ -36,13 +36,21 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// session shows at one size.
 const CACHE_BYTES: usize = 32 << 20;
 
+/// Files whose own icon is kept in memory; past this, that cache starts over.
+const CACHE_FILES: usize = 16_384;
+
 /// Which icon to render.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IconSource {
     /// A type icon, by the key from the listing batch ([`keys::key`]).
     Type(u32),
-    /// An entry with its own icon ([`keys::OWN`]): its exact path and attributes.
-    File { path: PathBuf, attributes: u32 },
+    /// An entry with its own icon ([`keys::OWN`]): its exact path, attributes and last write
+    /// time (a FILETIME). A file whose time or cloud state changed is looked up anew.
+    File {
+        path: PathBuf,
+        attributes: u32,
+        modified: u64,
+    },
     /// A drive, by letter (`b'C'`).
     Drive(u8),
     /// A standard place for the sidebar.
@@ -71,11 +79,30 @@ pub struct Icons {
 struct Cache {
     /// Type key → its icon. Types don't change their icon while Jerry runs.
     types: Mutex<HashMap<u32, Glyph>>,
+    /// Path → the file's icon, for the version of the file it was read from. WebView2 doesn't
+    /// keep icons of rows that scrolled away, so rows that come back ask again.
+    files: Mutex<HashMap<PathBuf, (FileVersion, Glyph)>>,
     images: Mutex<Images>,
     from_memory: AtomicU64,
     from_shell: AtomicU64,
     rendered: AtomicU64,
     failed: AtomicU64,
+}
+
+/// What a file's own icon depends on besides its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileVersion {
+    modified: u64,
+    cloud_only: bool,
+}
+
+impl FileVersion {
+    fn of(attributes: u32, modified: u64) -> Self {
+        Self {
+            modified,
+            cloud_only: attributes & keys::CLOUD_ONLY != 0,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -93,13 +120,22 @@ impl Icons {
         }
     }
 
-    /// The PNG for `source` at `px` if it is in memory, with no Shell call: a type icon rendered
-    /// before. Safe on any thread, the main thread included.
+    /// The PNG for `source` at `px` if it is in memory, with no Shell call: a type or file icon
+    /// rendered before. Safe on any thread, the main thread included.
     pub fn cached(&self, source: &IconSource, px: u32) -> Option<Arc<[u8]>> {
-        let IconSource::Type(key) = source else {
-            return None;
+        let glyph = match source {
+            IconSource::Type(key) => *lock(&self.cache.types).get(key)?,
+            IconSource::File {
+                path,
+                attributes,
+                modified,
+            } => {
+                let files = lock(&self.cache.files);
+                let (version, glyph) = files.get(path)?;
+                (*version == FileVersion::of(*attributes, *modified)).then_some(*glyph)?
+            }
+            IconSource::Drive(_) | IconSource::Place(_) => return None,
         };
-        let glyph = *lock(&self.cache.types).get(key)?;
         let png = self.cache.image(glyph, clamp(px))?;
         self.cache.from_memory.fetch_add(1, Ordering::Relaxed);
         Some(png)
@@ -154,7 +190,22 @@ impl Cache {
     fn render(&self, source: &IconSource, px: u32) -> Result<Arc<[u8]>, JerryError> {
         let glyph = match source {
             IconSource::Type(key) => self.type_glyph(*key)?,
-            IconSource::File { path, attributes } => file_glyph(path, *attributes)?,
+            IconSource::File {
+                path,
+                attributes,
+                modified,
+            } => {
+                let glyph = file_glyph(path, *attributes)?;
+                let mut files = lock(&self.files);
+                if files.len() >= CACHE_FILES {
+                    files.clear();
+                }
+                files.insert(
+                    path.clone(),
+                    (FileVersion::of(*attributes, *modified), glyph),
+                );
+                glyph
+            }
             IconSource::Drive(letter) => drive_glyph(*letter)?,
             IconSource::Place(place) => place_glyph(*place)?,
         };
@@ -343,6 +394,36 @@ mod tests {
         ] {
             assert_eq!(glyph_of(&write(name, icon), 0x20), by_type, "{name}");
         }
+    }
+
+    #[test]
+    fn a_file_icon_comes_from_memory_until_the_file_changes() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let path = dir.path().join("ნახაზები.url");
+        std::fs::write(&path, "[InternetShortcut]\r\nURL=https://example.com/\r\n").expect("write");
+        let source = |attributes, modified| IconSource::File {
+            path: path.clone(),
+            attributes,
+            modified,
+        };
+        let icons = Icons::new();
+        assert!(icons.cached(&source(0x20, 1), 16).is_none());
+
+        render(&icons, source(0x20, 1), 16).expect("rendered");
+
+        assert!(
+            icons.cached(&source(0x20, 1), 16).is_some(),
+            "again, from memory"
+        );
+        assert!(icons.cached(&source(0x20, 1), 32).is_none(), "another size");
+        assert!(
+            icons.cached(&source(0x20, 2), 16).is_none(),
+            "the file changed"
+        );
+        assert!(
+            icons.cached(&source(0x40_0020, 1), 16).is_none(),
+            "now cloud-only"
+        );
     }
 
     #[test]

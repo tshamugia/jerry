@@ -1,8 +1,8 @@
 import { protocolUrl } from "./protocol";
 
 /**
- * Icons from Jerry's `icon://` protocol (`src-tauri/src/icons.rs`): file types by the icon key a
- * listing batch carries, drives and standard places. Sizes are CSS px; the URL asks for device
+ * Icons from Jerry's `icon://` protocol (`src-tauri/src/icons.rs`): listing entries by the icon
+ * key their batch carries, drives and standard places. Sizes are CSS px; the URL asks for device
  * pixels, so icons stay sharp at every DPI. Build a new URL when `devicePixelRatio` changes.
  */
 
@@ -41,6 +41,29 @@ function iconUrl(icon: string, cssPx: number): string {
 /** The icon of every file of a type: `key` from a listing batch, not `IconKey.own`. */
 export function typeIconUrl(key: number, cssPx: number): string {
   return iconUrl(`type-${key}`, cssPx);
+}
+
+/** A listing entry, as its batch describes it. */
+export interface IconEntry {
+  /** The listing's id (`OpenListing.id`). */
+  listing: number;
+  /** The entry's id: the batch's `firstId + i`. */
+  id: number;
+  /** The batch's `iconKeys[i]`. */
+  key: number;
+  /** The batch's `modified[i]`: a changed file gets a new URL. */
+  modified: number;
+}
+
+/**
+ * A listing entry's icon: its own (.exe, .lnk, .ico, .url) when its key is `IconKey.own`, else
+ * its type's, which every file of the type shares.
+ */
+export function entryIconUrl(entry: IconEntry, cssPx: number): string {
+  if (entry.key !== IconKey.own) {
+    return typeIconUrl(entry.key, cssPx);
+  }
+  return `${iconUrl(`entry-${entry.listing}-${entry.id}`, cssPx)}&m=${Math.trunc(entry.modified)}`;
 }
 
 /** A drive's icon, by letter ("C"). */

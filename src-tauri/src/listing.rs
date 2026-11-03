@@ -5,8 +5,10 @@
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then `f64 size[count]` (bytes),
 //!   `f64 modified[count]` (ms since the Unix epoch), `u32 attributes[count]`,
-//!   `u32 nameEnd[count]` (where each name ends in this batch's names, in UTF-16 units) and the
-//!   names as UTF-16 code units. The entries' ids are `firstId + i`.
+//!   `u32 iconKey[count]` (the `icon://` key: 0 for an entry with its own icon, else its type's;
+//!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this batch's
+//!   names, in UTF-16 units) and the names as UTF-16 code units. The entries' ids are
+//!   `firstId + i`.
 //! - Order (2): a display order, from sorting (#26).
 //! - Done (3): `[3, count, batches, 0]`, then the `f64` ms the listing took in Rust. Last message.
 //! - Error (4): `[4, jsonBytes, 0, 0]`, then the `JerryError` as UTF-8 JSON. Last message.
@@ -23,6 +25,7 @@ use jerry_core::error::display_path;
 use jerry_core::listing::{Entries, Listing, filetime_to_unix_ms, list};
 use jerry_core::path::long_path;
 use jerry_core::{ErrorCode, JerryError};
+use jerry_win::icons::keys::keys as icon_keys;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::ipc::Channel;
@@ -155,6 +158,17 @@ impl Listings {
         }
     }
 
+    /// The exact path, attributes and last write time (FILETIME) of entry `entry` of the open
+    /// listing `listing`: for the `icon://` protocol, which asks for an entry's own icon by id.
+    pub fn entry(&self, listing: u32, entry: u32) -> Option<(PathBuf, u32, u64)> {
+        let open = self.open();
+        let listing = read(&open.get(&listing)?.listing);
+        let id = entry as usize;
+        let entries = listing.entries();
+        let (attributes, modified) = (*entries.attributes().get(id)?, *entries.modified().get(id)?);
+        Some((listing.path(id)?, attributes, modified))
+    }
+
     fn close_tab(&self, tab: u32) {
         let mut open = self.open();
         open.retain(|_, listing| {
@@ -209,7 +223,7 @@ fn batch_message(first_id: usize, batch: &Entries) -> Bytes {
     let units = batch.name_units();
     // A batch holds at most `MAX_BATCH` entries, and a folder fewer than 2^32: these fit.
     let header = [BATCH, count as u32, first_id as u32, units.len() as u32];
-    let mut out = message_buffer(header, count * 24 + units.len() * 2);
+    let mut out = message_buffer(header, count * 28 + units.len() * 2);
     for &size in batch.sizes() {
         out.extend_from_slice(&(size as f64).to_le_bytes());
     }
@@ -218,6 +232,9 @@ fn batch_message(first_id: usize, batch: &Entries) -> Bytes {
     }
     for &attributes in batch.attributes() {
         out.extend_from_slice(&attributes.to_le_bytes());
+    }
+    for key in icon_keys(batch) {
+        out.extend_from_slice(&key.to_le_bytes());
     }
     for &end in batch.name_ends() {
         out.extend_from_slice(&(end as u32).to_le_bytes());
@@ -369,6 +386,7 @@ mod tests {
         // FILETIME of 2026-01-01T00:00:00Z.
         batch.push(&units[0], 1 << 40, 0, 134_116_992_000_000_000, 0x20);
         batch.push(&units[1], 0, 0, 116_444_736_000_000_000, 0x10);
+        let txt = jerry_win::icons::keys::key(&units[0], 0x20);
 
         let Bytes(bytes) = batch_message(7, &batch);
 
@@ -386,8 +404,12 @@ mod tests {
             [1_767_225_600_000.0, 0.0]
         );
         assert_eq!([word(&bytes, 48), word(&bytes, 52)], [0x20, 0x10]);
-        assert_eq!([word(&bytes, 56), word(&bytes, 60)], [10, 16]);
-        let names_at = 64;
+        assert_eq!(
+            [word(&bytes, 56), word(&bytes, 60)],
+            [txt, jerry_win::icons::keys::FOLDER]
+        );
+        assert_eq!([word(&bytes, 64), word(&bytes, 68)], [10, 16]);
+        let names_at = 72;
         let (pairs, rest) = bytes[names_at..].as_chunks::<2>();
         assert!(rest.is_empty());
         let decoded: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
@@ -488,6 +510,12 @@ mod tests {
             subfolder,
             long_path(&dir.path().join("ქვესაქაღალდე")).expect("path")
         );
+        // The icon protocol finds entries the same way.
+        let (path, attributes, modified) = listings.entry(id, sub).expect("entry");
+        assert_eq!((path, attributes & 0x10), (subfolder, 0x10));
+        assert_eq!(modified, entries.modified()[sub as usize]);
+        assert!(listings.entry(id, 4).is_none());
+        assert!(listings.entry(id + 1, 0).is_none());
     }
 
     #[test]

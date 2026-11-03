@@ -1,7 +1,7 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { expect, test } from "vitest";
-import { decodeListingMessage, type ListingMessage, openListing } from ".";
+import { decodeListingMessage, IconKey, type ListingMessage, openListing } from ".";
 import { HEADER_BYTES } from "./channel";
 import { batchMessage, doneMessage, errorMessage, type TestEntry } from "./listing.testing";
 
@@ -9,8 +9,15 @@ const file = (name: string, size = 0): TestEntry => ({ name, size });
 
 test("a batch decodes into columns without copying", () => {
   const message = batchMessage(256, [
-    { name: "ნახაზი 2.dwg", size: 2 ** 40 + 1, modified: 1_767_225_600_000, attributes: 0x20 },
-    { name: "Folder", size: 0, modified: 0, attributes: 0x10 },
+    {
+      name: "ნახაზი 2.dwg",
+      size: 2 ** 40 + 1,
+      modified: 1_767_225_600_000,
+      attributes: 0x20,
+      iconKey: 7,
+    },
+    { name: "Folder", size: 0, modified: 0, attributes: 0x10, iconKey: 1 },
+    { name: "setup.exe", size: 1, modified: 0, attributes: 0x20, iconKey: 0 },
   ]);
 
   const decoded = decodeListingMessage(message);
@@ -18,11 +25,13 @@ test("a batch decodes into columns without copying", () => {
   expect(decoded.kind).toBe("batch");
   if (decoded.kind !== "batch") return;
   expect(decoded.firstId).toBe(256);
-  expect(decoded.names).toEqual(["ნახაზი 2.dwg", "Folder"]);
-  expect([...decoded.sizes]).toEqual([2 ** 40 + 1, 0]);
-  expect([...decoded.modified]).toEqual([1_767_225_600_000, 0]);
-  expect([...decoded.attributes]).toEqual([0x20, 0x10]);
+  expect(decoded.names).toEqual(["ნახაზი 2.dwg", "Folder", "setup.exe"]);
+  expect([...decoded.sizes]).toEqual([2 ** 40 + 1, 0, 1]);
+  expect([...decoded.modified]).toEqual([1_767_225_600_000, 0, 0]);
+  expect([...decoded.attributes]).toEqual([0x20, 0x10, 0x20]);
+  expect([...decoded.iconKeys]).toEqual([7, IconKey.folder, IconKey.own]);
   expect(decoded.sizes.buffer).toBe(message);
+  expect(decoded.iconKeys.buffer).toBe(message);
 });
 
 test("odd names keep every later name in place", () => {

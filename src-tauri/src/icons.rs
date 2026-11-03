@@ -3,17 +3,20 @@
 //! path segment that `src/ipc/icons.ts` builds:
 //!
 //! - `type-<key>-<px>`: a type icon, by the icon key from the listing batch.
+//! - `entry-<listing>-<entry>-<px>`: the own icon of an entry whose key is 0 (.exe, .lnk, .ico,
+//!   .url), by listing and entry id: core reads it at its exact path.
 //! - `drive-<letter>-<px>`: a drive, such as `drive-C-24`.
 //! - `place-<name>-<px>`: a standard place for the sidebar (`desktop`, `documents`, `downloads`,
 //!   `pictures`, `onedrive`, `recyclebin`, `share`).
 //!
 //! `<px>` is the size in device pixels (CSS size × `devicePixelRatio`), so icons are sharp at
-//! every DPI. The query string is ignored: the UI adds one so its URLs never outlive the page.
+//! every DPI. The query string is ignored: the UI adds one so its URLs never outlive the page,
+//! and an entry's modified time, so a changed file gets a new URL.
 //!
 //! The handler runs on the main thread and never calls the Shell there: an icon already in memory
 //! is answered at once, anything else is rendered on the Shell pool and answered from there. Type
-//! icons never change while Jerry runs, so WebView2 may keep them; drives and places change
-//! (media, a full Recycle Bin) and are asked for again each time.
+//! and entry icons don't change for their URL, so WebView2 may keep them; drives and places
+//! change (media, a full Recycle Bin) and are asked for again each time.
 
 use std::sync::Arc;
 
@@ -21,6 +24,8 @@ use jerry_core::{ErrorCode, JerryError};
 use jerry_win::icons::{IconSource, Icons, MAX_PX, MIN_PX, Place};
 use tauri::http::{Request, Response, StatusCode, header};
 use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
+
+use crate::listing::Listings;
 
 /// The protocol's scheme.
 pub const SCHEME: &str = "icon";
@@ -31,8 +36,18 @@ const ERROR_TIMEOUT: u32 = 1460;
 /// What an `icon://` URL asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IconUrl {
-    source: IconSource,
+    icon: Icon,
     px: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Icon {
+    Source(IconSource),
+    /// An entry of an open listing, which has its own icon.
+    Entry {
+        listing: u32,
+        entry: u32,
+    },
 }
 
 /// Answers one `icon://` request (registered in `lib.rs`).
@@ -41,12 +56,27 @@ pub fn protocol<R: Runtime>(
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
 ) {
-    let Some(IconUrl { source, px }) = parse(request.uri().path()) else {
+    let Some(IconUrl { icon, px }) = parse(request.uri().path()) else {
         responder.respond(status(StatusCode::BAD_REQUEST));
         return;
     };
-    let lasting = matches!(source, IconSource::Type(_));
-    let icons = context.app_handle().state::<Icons>();
+    let app = context.app_handle();
+    let source = match icon {
+        Icon::Source(source) => source,
+        Icon::Entry { listing, entry } => match app.state::<Listings>().entry(listing, entry) {
+            Some((path, attributes, modified)) => IconSource::File {
+                path,
+                attributes,
+                modified,
+            },
+            None => {
+                responder.respond(status(StatusCode::NOT_FOUND));
+                return;
+            }
+        },
+    };
+    let lasting = matches!(source, IconSource::Type(_) | IconSource::File { .. });
+    let icons = app.state::<Icons>();
     if let Some(png) = icons.cached(&source, px) {
         responder.respond(image(&png, lasting));
         return;
@@ -61,25 +91,28 @@ pub fn protocol<R: Runtime>(
 
 /// Parses the path of an `icon://` URL (see the module docs).
 fn parse(path: &str) -> Option<IconUrl> {
-    let mut parts = path.strip_prefix('/')?.split('-');
-    let kind = parts.next()?;
-    let what = parts.next()?;
-    let px: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || !(MIN_PX..=MAX_PX).contains(&px) {
+    let parts: Vec<&str> = path.strip_prefix('/')?.split('-').collect();
+    let (px, icon) = parts.split_last()?;
+    let px: u32 = px.parse().ok()?;
+    if !(MIN_PX..=MAX_PX).contains(&px) {
         return None;
     }
-    let source = match kind {
-        "type" => IconSource::Type(what.parse().ok()?),
-        "drive" => match what.as_bytes() {
+    let icon = match icon {
+        ["type", key] => Icon::Source(IconSource::Type(key.parse().ok()?)),
+        ["entry", listing, entry] => Icon::Entry {
+            listing: listing.parse().ok()?,
+            entry: entry.parse().ok()?,
+        },
+        ["drive", letter] => match letter.as_bytes() {
             [letter] if letter.is_ascii_alphabetic() => {
-                IconSource::Drive(letter.to_ascii_uppercase())
+                Icon::Source(IconSource::Drive(letter.to_ascii_uppercase()))
             }
             _ => return None,
         },
-        "place" => IconSource::Place(Place::from_name(what)?),
+        ["place", name] => Icon::Source(IconSource::Place(Place::from_name(name)?)),
         _ => return None,
     };
-    Some(IconUrl { source, px })
+    Some(IconUrl { icon, px })
 }
 
 fn image(png: &Arc<[u8]>, lasting: bool) -> Response<Vec<u8>> {
@@ -119,12 +152,25 @@ mod tests {
     use super::*;
 
     fn url(source: IconSource, px: u32) -> Option<IconUrl> {
-        Some(IconUrl { source, px })
+        Some(IconUrl {
+            icon: Icon::Source(source),
+            px,
+        })
     }
 
     #[test]
     fn parses_icon_urls() {
         assert_eq!(parse("/type-7-24"), url(IconSource::Type(7), 24));
+        assert_eq!(
+            parse("/entry-3-1200-48"),
+            Some(IconUrl {
+                icon: Icon::Entry {
+                    listing: 3,
+                    entry: 1200
+                },
+                px: 48
+            })
+        );
         assert_eq!(parse("/drive-c-16"), url(IconSource::Drive(b'C'), 16));
         assert_eq!(
             parse("/place-recyclebin-32"),
@@ -142,6 +188,9 @@ mod tests {
             "/type-7-16-extra",
             "/type-7-4",
             "/type-7-1024",
+            "/entry-3-16",
+            "/entry-3-x-16",
+            "/entry-3-4-5-16",
             "/drive-CD-16",
             "/drive-1-16",
             "/place-system32-16",

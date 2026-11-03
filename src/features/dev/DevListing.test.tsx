@@ -55,3 +55,23 @@ test("shows a listing error as text", async () => {
     await screen.findByText("You don't have permission to access “დახურული”."),
   ).toBeInTheDocument();
 });
+
+test("rows show their icons: their own by entry, the rest by type", async () => {
+  streams([
+    batchMessage(0, [
+      { name: "ნახაზი.dwg", iconKey: 7 },
+      { name: "setup.exe", iconKey: 0, modified: 1_767_225_600_000 },
+    ]),
+    doneMessage(2, 1, 0.5),
+  ]);
+  const { container } = render(<DevListing />);
+
+  list(String.raw`C:\Work`);
+
+  expect(await screen.findByText(/^2 items in 1 batch\./)).toBeInTheDocument();
+  const icons = [...container.querySelectorAll("img")]
+    .map((img) => new URL(img.src))
+    .filter((url) => !url.pathname.startsWith("/place-") && !url.pathname.startsWith("/drive-"));
+  expect(icons.map((url) => url.pathname.replace(/-\d+$/, ""))).toEqual(["/type-7", "/entry-1-1"]);
+  expect(icons[1]?.searchParams.get("m")).toBe("1767225600000");
+});

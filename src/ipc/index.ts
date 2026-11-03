@@ -11,7 +11,7 @@
  *   listings: `openListing`.
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
- *   `typeIconUrl`, `driveIconUrl` and `placeIconUrl`.
+ *   `entryIconUrl`, `typeIconUrl`, `driveIconUrl` and `placeIconUrl`.
  */
 
 export type { ErrorCode, JerryError, ListingTarget } from "./bindings";
@@ -20,6 +20,8 @@ export { HEADER_BYTES, messageHeader, stream } from "./channel";
 export { type CoreEvent, subscribe } from "./events";
 export {
   driveIconUrl,
+  entryIconUrl,
+  type IconEntry,
   IconKey,
   iconPixels,
   type Place,
