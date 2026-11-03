@@ -1,6 +1,11 @@
 //! Folder listing on real temp folders: Georgian names, long paths, empty and denied folders,
 //! missing folders and drives, locked files, names that aren't valid Unicode, batching, cancel.
 
+#![allow(
+    clippy::expect_used,
+    reason = "test helpers: a failed setup fails the test"
+)]
+
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};

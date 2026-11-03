@@ -388,10 +388,9 @@ mod tests {
         assert_eq!([word(&bytes, 48), word(&bytes, 52)], [0x20, 0x10]);
         assert_eq!([word(&bytes, 56), word(&bytes, 60)], [10, 16]);
         let names_at = 64;
-        let decoded: Vec<u16> = bytes[names_at..]
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect();
+        let (pairs, rest) = bytes[names_at..].as_chunks::<2>();
+        assert!(rest.is_empty());
+        let decoded: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
         assert_eq!(String::from_utf16_lossy(&decoded), "file10.txtნახაზი");
         assert_eq!(bytes.len(), names_at + 16 * 2);
     }

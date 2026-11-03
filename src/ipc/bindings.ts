@@ -12,10 +12,10 @@ export const commands = {
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
 	/**
-	 *  Opens a folder for `tab` and streams its entries to `on_message` (see the module docs for
-	 *  the messages). Returns at once, before the folder is read: errors reading it, such as
-	 *  `AccessDenied`, `NotFound` or `DeviceGone`, arrive as the stream's error message. Opening a
-	 *  folder for a tab closes the tab's previous listing.
+	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then a
+	 *  done or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
+	 *  folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come
+	 *  as the stream's error message. Opening a folder for a tab closes the tab's previous listing.
 	 */
 	listingOpen: (tab: number, target: ListingTarget, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, onMessage })),
 	/**
