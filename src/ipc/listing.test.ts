@@ -1,11 +1,18 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { expect, test } from "vitest";
-import { decodeListingMessage, type ListingMessage, openListing } from ".";
+import { decodeListingMessage, type ListingMessage, openListing, type Sort } from ".";
 import { HEADER_BYTES } from "./channel";
-import { batchMessage, doneMessage, errorMessage, type TestEntry } from "./listing.testing";
+import {
+  batchMessage,
+  doneMessage,
+  errorMessage,
+  orderMessage,
+  type TestEntry,
+} from "./listing.testing";
 
 const file = (name: string, size = 0): TestEntry => ({ name, size });
+const byName: Sort = { column: "name", descending: false, foldersFirst: true };
 
 test("a batch decodes into columns without copying", () => {
   const message = batchMessage(256, [
@@ -64,6 +71,30 @@ test("done and error messages decode", () => {
   });
 });
 
+test("an order decodes into ids and the sort it follows", () => {
+  const message = orderMessage([2, 0, 70_000], { column: 4, descending: true });
+
+  const decoded = decodeListingMessage(message);
+
+  if (decoded.kind !== "order") throw new Error(decoded.kind);
+  expect(decoded.sort).toEqual({ column: "created", descending: true, foldersFirst: true });
+  expect([...decoded.ids]).toEqual([2, 0, 70_000]);
+  expect(decoded.ids.buffer).toBe(message);
+  const columns = [0, 1, 2, 3, 4, 5].map((column) => {
+    const order = decodeListingMessage(orderMessage([], { column, foldersFirst: false }));
+    return order.kind === "order" ? [order.sort.column, order.sort.foldersFirst] : [];
+  });
+  expect(columns).toEqual([
+    ["name", false],
+    ["modified", false],
+    ["type", false],
+    ["size", false],
+    ["created", false],
+    ["extension", false],
+  ]);
+  expect(() => decodeListingMessage(orderMessage([], { column: 6 }))).toThrow(RangeError);
+});
+
 test("an unknown message kind is a bug", () => {
   const buffer = new ArrayBuffer(HEADER_BYTES);
   new Uint32Array(buffer, 0, 1).set([9]);
@@ -83,29 +114,85 @@ test("openListing streams decoded messages until it is closed", async () => {
   });
   const seen: ListingMessage["kind"][] = [];
 
-  const result = await openListing(2, { kind: "path", path: String.raw`C:\Work` }, (message) =>
-    seen.push(message.kind),
+  const result = await openListing(
+    2,
+    { kind: "path", path: String.raw`C:\Work` },
+    byName,
+    (message) => seen.push(message.kind),
   );
   if (result.status !== "ok") throw new Error(result.error.code);
   channel?.onmessage(batchMessage(0, [file("a.txt")]));
+  channel?.onmessage(orderMessage([0]));
   channel?.onmessage(doneMessage(1, 1, 0.5));
   await result.data.close();
   channel?.onmessage(batchMessage(1, [file("late.txt")]));
 
   expect(result.data).toMatchObject({ id: 7, path: String.raw`C:\Work` });
-  expect(seen).toEqual(["batch", "done"]);
+  expect(seen).toEqual(["batch", "order", "done"]);
   expect(calls.map(([cmd]) => cmd)).toEqual(["listing_open", "listing_close"]);
   expect(calls[0]?.[1]).toMatchObject({
     tab: 2,
     target: { kind: "path", path: String.raw`C:\Work` },
+    sort: byName,
   });
   expect(calls[1]?.[1]).toEqual({ id: 7 });
+});
+
+test("an open listing re-sorts through listing_sort", async () => {
+  const calls: [string, unknown][] = [];
+  mockIPC((cmd, args) => {
+    calls.push([cmd, args]);
+    switch (cmd) {
+      case "listing_open":
+        return { id: 7, path: String.raw`C:\Work` };
+      case "listing_sort":
+        return orderMessage([1, 0], { column: 3, descending: true });
+      default:
+        return null;
+    }
+  });
+  const bySize: Sort = { column: "size", descending: true, foldersFirst: true };
+
+  const opened = await openListing(
+    2,
+    { kind: "path", path: String.raw`C:\Work` },
+    byName,
+    () => {},
+  );
+  if (opened.status !== "ok") throw new Error(opened.error.code);
+  const sorted = await opened.data.sort(bySize);
+
+  if (sorted.status !== "ok") throw new Error(sorted.error.code);
+  expect(sorted.data.sort).toEqual(bySize);
+  expect([...sorted.data.ids]).toEqual([1, 0]);
+  expect(calls[1]).toEqual(["listing_sort", { id: 7, sort: bySize }]);
+});
+
+test("sorting a closed listing fails with NotFound", async () => {
+  mockIPC((cmd) =>
+    cmd === "listing_sort"
+      ? Promise.reject({ code: "NotFound", path: null })
+      : { id: 7, path: String.raw`C:\Work` },
+  );
+
+  const opened = await openListing(
+    2,
+    { kind: "path", path: String.raw`C:\Work` },
+    byName,
+    () => {},
+  );
+  if (opened.status !== "ok") throw new Error(opened.error.code);
+
+  expect(await opened.data.sort(byName)).toEqual({
+    status: "error",
+    error: { code: "NotFound", path: null },
+  });
 });
 
 test("openListing passes a JerryError through", async () => {
   mockIPC(() => Promise.reject({ code: "InvalidName", path: "Work" }));
 
-  const result = await openListing(1, { kind: "path", path: "Work" }, () => {});
+  const result = await openListing(1, { kind: "path", path: "Work" }, byName, () => {});
 
   expect(result).toEqual({ status: "error", error: { code: "InvalidName", path: "Work" } });
 });

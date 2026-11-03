@@ -12,12 +12,20 @@ export const commands = {
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
 	/**
-	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then a
-	 *  done or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
-	 *  folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come
-	 *  as the stream's error message. Opening a folder for a tab closes the tab's previous listing.
+	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
+	 *  their order by `sort` and a done message, or an error message (decoded by
+	 *  `src/ipc/listing.ts`). Returns at once, before the folder is read: errors reading it, such
+	 *  as `AccessDenied`, `NotFound` or `DeviceGone`, come as the stream's error message. Opening a
+	 *  folder for a tab closes the tab's previous listing.
 	 */
-	listingOpen: (tab: number, target: ListingTarget, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, onMessage })),
+	listingOpen: (tab: number, target: ListingTarget, sort: Sort, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, sort, onMessage })),
+	/**
+	 *  Sorts listing `id` by `sort` from now on and returns the new order as one order message
+	 *  (only entry ids, as `u32`s). While the folder is still being read the order is empty and the
+	 *  stream's own order message, sent once the whole folder is in, follows the new sort. Fails
+	 *  with `NotFound` for a closed listing.
+	 */
+	listingSort: (id: number, sort: Sort) => typedError<ArrayBuffer, JerryError>(__TAURI_INVOKE("listing_sort", { id, sort })),
 	/**
 	 *  Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
 	 *  that is already closed does nothing.
@@ -108,6 +116,28 @@ export type ListingTarget =
  *  names that aren't valid Unicode open too.
  */
 { kind: "entry"; listing: number; entry: number };
+
+/**  How a list is sorted. */
+export type Sort = {
+	column: SortColumn,
+	/**  Descending is ascending reversed, folders kept first. */
+	descending: boolean,
+	/**  Folders before files, in both directions (the PRD's default; a setting). */
+	foldersFirst: boolean,
+};
+
+/**  A column the list sorts by. */
+export type SortColumn = "name" | 
+/**  Date modified. */
+"modified" | 
+/**  The type name, as Explorer's Type column shows it: "AutoCAD Drawing", "PDF File". */
+"type" | 
+/**  Size in bytes. Folders are 0. */
+"size" | 
+/**  Date created. */
+"created" | 
+/**  The extension: what follows the name's last dot. Folders have none. */
+"extension";
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

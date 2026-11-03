@@ -1,15 +1,36 @@
-import { commands, type JerryError, type ListingOpened, type ListingTarget } from "./bindings";
+import {
+  commands,
+  type JerryError,
+  type ListingOpened,
+  type ListingTarget,
+  type Sort,
+  type SortColumn,
+} from "./bindings";
 import { HEADER_BYTES, messageHeader, stream } from "./channel";
 
 /**
  * Folder listings. `listing_open` streams binary messages (ADR-0001, layout in
- * `src-tauri/src/listing.rs`): batches of entries as columns, then one done or error message.
- * Every message starts with the 16-byte header, so the typed-array views below are aligned and
- * copy nothing.
+ * `src-tauri/src/listing.rs`): batches of entries as columns, then their order and one done
+ * message, or an error message. `listing_sort` answers with an order message too. Every message
+ * starts with the 16-byte header, so the typed-array views below are aligned and copy nothing.
  */
 
-/** Message kinds: the header's first `u32`. `order` arrives with sorting (#26). */
+/** Message kinds: the header's first `u32`. */
 export const ListingKind = { batch: 1, order: 2, done: 3, error: 4 } as const;
+
+/** Columns in the order message's header, by their code. */
+const SORT_COLUMNS: readonly SortColumn[] = [
+  "name",
+  "modified",
+  "type",
+  "size",
+  "created",
+  "extension",
+];
+
+/** Order flags: bit 0 descending, bit 1 folders first. */
+const DESCENDING = 1;
+const FOLDERS_FIRST = 2;
 
 /** Entries `firstId` to `firstId + names.length - 1` of a listing, as columns. */
 export interface ListingBatch {
@@ -23,6 +44,19 @@ export interface ListingBatch {
   modified: Float64Array;
   /** `FILE_ATTRIBUTE_*` flags. */
   attributes: Uint32Array;
+}
+
+/**
+ * The listing's entries in display order, by `sort`: entry ids, each once. The stream sends one
+ * once the whole folder is in, right before done; `sort` returns one for a new sort. Apply only
+ * an order whose `sort` is the tab's current one: an order for an earlier sort can still be on
+ * its way. An empty order changes nothing (a sort while the folder is still being read: the
+ * stream's order follows it).
+ */
+export interface ListingOrder {
+  kind: "order";
+  sort: Sort;
+  ids: Uint32Array;
 }
 
 /** The whole folder has arrived. */
@@ -40,23 +74,32 @@ export interface ListingFailed {
   error: JerryError;
 }
 
-export type ListingMessage = ListingBatch | ListingDone | ListingFailed;
+export type ListingMessage = ListingBatch | ListingOrder | ListingDone | ListingFailed;
 
 /** An open listing. Call `close` when its tab closes or goes to another folder. */
 export interface OpenListing extends ListingOpened {
+  /**
+   * Sorts the listing by `sort` from now on and resolves with its new order, only entry ids.
+   * Fails with `NotFound` once the listing is closed.
+   */
+  sort: (
+    sort: Sort,
+  ) => Promise<{ status: "ok"; data: ListingOrder } | { status: "error"; error: JerryError }>;
   /** Stops the listing; messages still on their way are dropped. */
   close: () => Promise<void>;
 }
 
 /**
- * Opens `target` for `tab` and calls `onMessage` with each message, in order: batches, then one
- * done or error message. Resolves once the listing has started, often after its first batch has
- * arrived. Fails only when `target` can't be used (a relative path, an entry of a closed
- * listing); errors reading the folder arrive as an error message.
+ * Opens `target` for `tab`, sorted by `sort`, and calls `onMessage` with each message, in
+ * order: batches, then the order and one done message, or an error message. Resolves once the
+ * listing has started, often after its first batch has arrived. Fails only when `target` can't
+ * be used (a relative path, an entry of a closed listing); errors reading the folder arrive as an
+ * error message.
  */
 export async function openListing(
   tab: number,
   target: ListingTarget,
+  sort: Sort,
   onMessage: (message: ListingMessage) => void,
 ): Promise<{ status: "ok"; data: OpenListing } | { status: "error"; error: JerryError }> {
   let open = true;
@@ -65,16 +108,22 @@ export async function openListing(
       onMessage(decodeListingMessage(message));
     }
   });
-  const result = await commands.listingOpen(tab, target, channel);
+  const result = await commands.listingOpen(tab, target, sort, channel);
   if (result.status === "error") {
     return result;
   }
   const { id } = result.data;
+  const resort = async (next: Sort) => {
+    const sorted = await commands.listingSort(id, next);
+    return sorted.status === "error"
+      ? sorted
+      : { status: "ok" as const, data: decodeOrder(sorted.data) };
+  };
   const close = () => {
     open = false;
     return commands.listingClose(id);
   };
-  return { status: "ok", data: { ...result.data, close } };
+  return { status: "ok", data: { ...result.data, sort: resort, close } };
 }
 
 // `ignoreBOM` keeps a leading U+FEFF: it can start a file name, and dropping it would shift the
@@ -88,6 +137,8 @@ export function decodeListingMessage(message: ArrayBuffer): ListingMessage {
   switch (kind) {
     case ListingKind.batch:
       return decodeBatch(message, a, b, c);
+    case ListingKind.order:
+      return decodeOrder(message);
     case ListingKind.done:
       return {
         kind: "done",
@@ -102,6 +153,23 @@ export function decodeListingMessage(message: ArrayBuffer): ListingMessage {
     default:
       throw new RangeError(`Unknown listing message kind ${kind}`);
   }
+}
+
+function decodeOrder(message: ArrayBuffer): ListingOrder {
+  const [kind, count = 0, column = 0, flags = 0] = messageHeader(message);
+  const sortColumn = SORT_COLUMNS[column];
+  if (kind !== ListingKind.order || sortColumn === undefined) {
+    throw new RangeError(`Not an order message: kind ${kind}, column ${column}`);
+  }
+  return {
+    kind: "order",
+    sort: {
+      column: sortColumn,
+      descending: (flags & DESCENDING) !== 0,
+      foldersFirst: (flags & FOLDERS_FIRST) !== 0,
+    },
+    ids: new Uint32Array(message, HEADER_BYTES, count),
+  };
 }
 
 function decodeBatch(

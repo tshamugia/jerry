@@ -7,6 +7,7 @@ pub mod error;
 pub mod job;
 pub mod listing;
 pub mod path;
+pub mod sort;
 pub mod synth;
 
 pub use error::{ErrorCode, JerryError};
