@@ -1,3 +1,6 @@
+import type { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@tauri-apps/api/mocks";
+import type { ListingTarget, Sort } from "./bindings";
 import { HEADER_BYTES } from "./channel";
 
 /**
@@ -5,10 +8,71 @@ import { HEADER_BYTES } from "./channel";
  * UI tests can feed a fake `listing_open` channel.
  */
 
+/** A command the UI sent to the fake core. */
+export interface Call {
+  cmd: string;
+  args: Record<string, unknown>;
+}
+
+export interface FakeListings {
+  /** Every command the UI sent, in order. */
+  calls: Call[];
+  /**
+   * Puts `message` on a listing's stream now, as the watcher would: the last opened one, or
+   * listing `id`'s.
+   */
+  send: (message: ArrayBuffer, id?: number) => void;
+}
+
+/**
+ * A fake core for listings. `listing_open` answers with the next id (from 1) and `path`, then
+ * streams `messages(target)` on a timer; `listing_sort` sends `sorted(sort)` through the same
+ * stream, as Rust does. Other commands answer `null`.
+ */
+export function fakeListings({
+  messages = () => [],
+  sorted = () => undefined,
+  path = String.raw`C:\Work`,
+}: {
+  messages?: (target: ListingTarget) => ArrayBuffer[];
+  sorted?: (sort: Sort) => ArrayBuffer | undefined;
+  path?: string;
+} = {}): FakeListings {
+  const calls: Call[] = [];
+  // Each listing's stream, by id - 1.
+  const streams: Channel<ArrayBuffer>[] = [];
+  mockIPC((cmd, args) => {
+    const payload = (args ?? {}) as Record<string, unknown>;
+    calls.push({ cmd, args: payload });
+    if (cmd === "listing_open") {
+      const opened = payload.onMessage as Channel<ArrayBuffer>;
+      streams.push(opened);
+      const queued = messages(payload.target as ListingTarget);
+      setTimeout(() => {
+        for (const message of queued) opened.onmessage(message);
+      }, 0);
+      return { id: streams.length, path };
+    }
+    if (cmd === "listing_sort") {
+      const order = sorted(payload.sort as Sort);
+      const stream = streams[(payload.id as number) - 1];
+      if (order && stream) {
+        setTimeout(() => stream.onmessage(order), 0);
+      }
+    }
+    return null;
+  });
+  return {
+    calls,
+    send: (message, id = streams.length) => streams[id - 1]?.onmessage(message),
+  };
+}
+
 export interface TestEntry {
   name: string;
   size?: number;
   modified?: number;
+  created?: number;
   attributes?: number;
   /** Defaults to the folder key for folders, a type key otherwise. */
   iconKey?: number;
@@ -40,7 +104,7 @@ function unitCount(entries: TestEntry[]): number {
 }
 
 function entriesBytes(count: number, units: number): number {
-  return count * 28 + units * 2;
+  return count * 36 + units * 2;
 }
 
 function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
@@ -55,6 +119,8 @@ function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
   new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.size ?? 0));
   offset += count * 8;
   new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.modified ?? 0));
+  offset += count * 8;
+  new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.created ?? 0));
   offset += count * 8;
   const attributes = entries.map((entry) => entry.attributes ?? 0x20);
   new Uint32Array(buffer, offset, count).set(attributes);

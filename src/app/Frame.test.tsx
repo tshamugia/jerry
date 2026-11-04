@@ -160,3 +160,18 @@ test("the toolbar skeleton is in place, its controls disabled until their featur
     "true",
   );
 });
+
+test("each pane shows its own content, and the preview zone its own", () => {
+  render(
+    <Frame
+      settings={defaultSettings}
+      left={<p>left list</p>}
+      right={<p>right list</p>}
+      previewContent={<p>dev panel</p>}
+    />,
+  );
+  const pane = (name: RegExp) => screen.getByRole("region", { name });
+  expect(pane(/^Left pane/)).toHaveTextContent("left list");
+  expect(pane(/^Right pane/)).toHaveTextContent("right list");
+  expect(screen.getByRole("complementary", { name: "Preview" })).toHaveTextContent("dev panel");
+});

@@ -48,6 +48,24 @@ export const strings = {
     filterPlaceholder: "Filter this folder",
     view: "View",
   },
+  /** A pane's file list (Details view). */
+  fileList: {
+    files: (pane: string) => `${pane} files`,
+    columns: sortColumns,
+    /** The header's context menu. */
+    columnsMenu: "Columns",
+    moveLeft: "Move left",
+    moveRight: "Move right",
+    resetColumns: "Reset columns",
+    resizeColumn: (column: string) => `Resize ${column}`,
+    /** The Type column, as Explorer names types with nothing registered. */
+    folderType: "File folder",
+    fileType: "File",
+    typeOf: (extension: string) => `${extension} File`,
+    empty: "This folder is empty. Drop files here",
+    loading: "Loading…",
+    retry: "Retry",
+  },
   /** The status bar. */
   status: {
     comfortable: "Comfortable rows",
@@ -159,6 +177,8 @@ export const strings = {
       `Received ${messages} binary messages: ${values}.`,
     streamIncomplete: (messages: number) => `Only ${messages} of 3 messages arrived.`,
     toggleHidden: "Toggle hidden files",
+    toggleExtensions: "Toggle extensions",
+    toggleClickToOpen: "Toggle single click",
     nextTheme: "Next theme",
     openWindow: "Open another window",
     sampleTabs: "Sample tabs",
@@ -172,11 +192,16 @@ export const strings = {
     ],
     toggleDualPane: "Toggle dual pane",
     settingsLoading: "Settings: loading…",
-    settings: (showHidden: boolean, theme: string) =>
-      `Settings: hidden files ${showHidden ? "shown" : "hidden"}, theme ${theme}.`,
+    settings: (settings: {
+      showHidden: boolean;
+      showExtensions: boolean;
+      clickToOpen: string;
+      theme: string;
+    }) =>
+      `Settings: hidden files ${settings.showHidden ? "shown" : "hidden"}, extensions ${settings.showExtensions ? "shown" : "hidden"}, ` +
+      `${settings.clickToOpen} click to open, theme ${settings.theme}.`,
     listingTitle: "Listing",
     listingPath: "Folder path",
-    entries: "Entries",
     listFolder: "List",
     listSynth: (count: number) => `List ${integer.format(count)}`,
     buildingSynth: (count: number) => `Building a folder with ${integer.format(count)} items…`,
@@ -227,10 +252,6 @@ export const strings = {
       `95th percentile ${decimal.format(result.p95Ms)} ms, longest ${decimal.format(result.maxMs)} ms, ` +
       `${result.janky} janky, ${result.longTasks} long tasks. Icons: ${integer.format(result.fromMemory)} from memory, ` +
       `${integer.format(result.fromShell)} from the Shell, ${integer.format(result.rendered)} rendered, ${result.failed} failed.`,
-    sortBy: "Sort by",
-    /** A sort button; `descending` is set on the column the list is sorted by. */
-    sortColumn: (column: SortColumn, descending?: boolean) =>
-      `${sortColumns[column]}${descending === undefined ? "" : descending ? " ↓" : " ↑"}`,
     sorted: (timings: {
       count: number;
       sort: { column: SortColumn; descending: boolean };
@@ -240,9 +261,7 @@ export const strings = {
       `Sorted ${integer.format(timings.count)} items by ${sortColumns[timings.sort.column].toLowerCase()}, ` +
       `${timings.sort.descending ? "descending" : "ascending"}: painted ${decimal.format(timings.paintMs)} ms ` +
       `(order in JS ${decimal.format(timings.orderMs)} ms).`,
-    nothingToSort: "List a folder first.",
-    sortPending:
-      "No new order yet: the folder is still being read, or a later sort overtook this one.",
+    nothingToSort: "List a folder first, and wait until it is all in.",
     /** The last change the watcher sent, and how long it took to paint. */
     changed: (change: { added: number; changed: number; removed: number; paintMs: number }) =>
       `Live: ${integer.format(change.added)} new, ${integer.format(change.changed)} changed, ` +

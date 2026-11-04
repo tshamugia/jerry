@@ -108,6 +108,10 @@
   --jerry-col-date-w: 104px;
   --jerry-col-type-w: 84px;
   --jerry-col-size-w: 60px;
+  /* Not in the canvas: the optional Extension column, and how narrow Name gets before the list
+     scrolls sideways. Date created shares Date modified's width. */
+  --jerry-col-ext-w: 60px;
+  --jerry-col-name-min-w: 80px;
   --jerry-transfer-h: 56px;
   --jerry-statusbar-h: 28px;
   --jerry-toast-w: 336px;

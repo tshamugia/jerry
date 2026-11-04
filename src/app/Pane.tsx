@@ -24,14 +24,14 @@ export const Pane = memo(function Pane({ side, edge = false, handle, children }:
   return (
     <section
       aria-label={active ? strings.frame.activePane(name) : name}
-      className={`relative flex min-w-0 flex-col bg-pane ${edge ? "border-l border-stroke" : ""}`}
+      className={`relative flex min-h-0 min-w-0 flex-col bg-pane ${edge ? "border-l border-stroke" : ""}`}
       onPointerDown={() => activatePane(side)}
       onFocus={() => activatePane(side)}
     >
       {handle}
       <PaneToolbar />
       <div className={`h-active-pane-bar shrink-0 ${active ? "bg-accent" : "bg-bar"}`} />
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>
   );
 });

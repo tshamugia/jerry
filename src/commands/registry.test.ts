@@ -107,7 +107,10 @@ describe("the shortcut table", () => {
       {
         group: "view",
         title: "View",
-        rows: [{ id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+D"] }],
+        rows: [
+          { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
+          { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+D"] },
+        ],
       },
       {
         group: "other",
@@ -142,7 +145,10 @@ describe("the shortcut table", () => {
       {
         group: "view",
         title: "View",
-        rows: [{ id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+R"] }],
+        rows: [
+          { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
+          { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+R"] },
+        ],
       },
     ]);
   });

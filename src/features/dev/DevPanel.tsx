@@ -19,9 +19,10 @@ const STREAM_TIMEOUT_MS = 2000;
 const THEMES: readonly Theme[] = ["system", "light", "dark"];
 
 /**
- * Dev builds only: buttons that exercise the IPC, error and settings foundation in the running
- * app. Each shows what came back; freezes and panics also land in the log. The settings line
- * follows the store, so a change made in another window shows here at once.
+ * Dev builds only, in the preview zone: buttons that exercise the IPC, error and settings
+ * foundation in the running app, and the listing checks for the file lists. Each shows what came
+ * back; freezes and panics also land in the log. The settings line follows the store, so a change
+ * made in another window shows here at once.
  */
 export function DevPanel() {
   const [result, setResult] = useState<string>();
@@ -31,7 +32,7 @@ export function DevPanel() {
   };
 
   return (
-    <section aria-label={strings.dev.title} className="flex flex-col items-center gap-3">
+    <section aria-label={strings.dev.title} className="flex flex-col items-center gap-3 text-small">
       <div className="flex flex-wrap justify-center gap-2">
         <DevButton onClick={run(sampleError)}>{strings.dev.sampleError}</DevButton>
         <DevButton onClick={run(panicInJob)}>{strings.dev.panicInJob}</DevButton>
@@ -44,6 +45,22 @@ export function DevPanel() {
           onClick={run(() => saved(setSetting("showHidden", !(settings?.showHidden ?? false))))}
         >
           {strings.dev.toggleHidden}
+        </DevButton>
+        <DevButton
+          onClick={run(() =>
+            saved(setSetting("showExtensions", !(settings?.showExtensions ?? true))),
+          )}
+        >
+          {strings.dev.toggleExtensions}
+        </DevButton>
+        <DevButton
+          onClick={run(() =>
+            saved(
+              setSetting("clickToOpen", settings?.clickToOpen === "single" ? "double" : "single"),
+            ),
+          )}
+        >
+          {strings.dev.toggleClickToOpen}
         </DevButton>
         <DevButton onClick={run(() => saved(setSetting("theme", nextTheme(settings?.theme))))}>
           {strings.dev.nextTheme}
@@ -61,9 +78,7 @@ export function DevPanel() {
         </DevButton>
       </div>
       <p className="text-small text-fg-2">
-        {settings
-          ? strings.dev.settings(settings.showHidden, settings.theme)
-          : strings.dev.settingsLoading}
+        {settings ? strings.dev.settings(settings) : strings.dev.settingsLoading}
       </p>
       {result && (
         <p role="status" className="text-small text-fg-2">

@@ -46,6 +46,14 @@ export function setSetting<K extends keyof Settings>(key: K, value: Settings[K])
   return commands.settingsSet(key, value);
 }
 
+/** Shows or hides hidden and system files (Ctrl+H). */
+export function toggleHidden() {
+  const showHidden = useSettings.getState().settings?.showHidden;
+  if (showHidden !== undefined) {
+    void setSetting("showHidden", !showHidden);
+  }
+}
+
 /** Switches the row density: Comfortable (30 px) ↔ Compact (24 px). */
 export function toggleDensity() {
   const density = useSettings.getState().settings?.density;

@@ -1,5 +1,5 @@
 import { openOverlay } from "../stores/overlay";
-import { toggleDensity, useSettings } from "../stores/settings";
+import { toggleDensity, toggleHidden, useSettings } from "../stores/settings";
 import { strings } from "../strings";
 import type { Bindable, CommandContext } from "./keymap";
 
@@ -33,6 +33,8 @@ export interface Command extends Bindable {
 }
 
 const tabs = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
+
+const settingsLoaded = () => useSettings.getState().settings !== undefined;
 
 /** Every command, in the PRD's order («კლავიატურა, command palette და context menu»). */
 export const COMMANDS: readonly Command[] = [
@@ -73,7 +75,14 @@ export const COMMANDS: readonly Command[] = [
   { id: "detailsView", group: "view", keys: ["Ctrl+Shift+1"], context: "global" },
   { id: "listView", group: "view", keys: ["Ctrl+Shift+2"], context: "global" },
   { id: "gridView", group: "view", keys: ["Ctrl+Shift+3"], context: "global" },
-  { id: "toggleHidden", group: "view", keys: ["Ctrl+H"], context: "global" },
+  {
+    id: "toggleHidden",
+    group: "view",
+    keys: ["Ctrl+H"],
+    context: "global",
+    enabled: settingsLoaded,
+    run: toggleHidden,
+  },
   { id: "toggleSidebar", group: "view", keys: ["Ctrl+B"], context: "global" },
   { id: "togglePreview", group: "view", keys: ["Alt+P"], context: "global" },
   {
@@ -81,7 +90,7 @@ export const COMMANDS: readonly Command[] = [
     group: "view",
     keys: ["Ctrl+Alt+D"],
     context: "global",
-    enabled: () => useSettings.getState().settings !== undefined,
+    enabled: settingsLoaded,
     run: toggleDensity,
   },
 
