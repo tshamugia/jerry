@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   commands,
+  type ListingDiff,
   type ListingMessage,
   type ListingOrder,
   type ListingTarget,
@@ -75,6 +76,8 @@ declare global {
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
       sort: (sort: Sort) => Promise<SortOutcome>;
       scroll: (durationMs?: number) => Promise<ScrollResult | undefined>;
+      /** The next diff, once painted; `paintedAt` is `Date.now()` then, to time from outside. */
+      nextChange: () => Promise<PaintedChange>;
     };
   }
 }
@@ -83,18 +86,27 @@ declare global {
  * Dev builds only: lists a folder through `listing_open`, shows every entry with its icon in a
  * virtualized list and times it (the PRD's "1 000 items shown < 0.2 s", "100 000 items: first
  * rows < 0.3 s" and "scrolling 10 000+ items at 60 fps"), then re-sorts it through
- * `listing_sort` and times that ("100 000 items: sort < 100 ms"). Not the file list (#29).
+ * `listing_sort` and times that ("100 000 items: sort < 100 ms"). The listing stays live:
+ * changes made in Explorer arrive as diffs and repaint the rows. Not the file list (#29).
  */
 export function DevListing() {
   const [path, setPath] = useState("");
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [status, setStatus] = useState<string>();
+  const [change, setChange] = useState<string>();
+  const [changeWaiters] = useState(() => new Set<(change: PaintedChange) => void>());
   const viewport = useRef<HTMLDivElement>(null);
   const [rowHeight] = useState(rowPx);
   const [, changed] = useReducer((version: number) => version + 1, 0);
-  const [lister] = useState(() => createLister(changed));
+  const [lister] = useState(() =>
+    createLister(changed, (live) => {
+      setChange(strings.dev.changed(live));
+      const painted = { ...live, paintedAt: Date.now() };
+      for (const waiter of changeWaiters) waiter(painted);
+      changeWaiters.clear();
+    }),
+  );
   const entries = lister.entries();
-  const count = entries.names.length;
 
   const report = (outcome: ListingOutcome) => {
     setStatus(outcome.status === "ok" ? strings.dev.listed(outcome.timings) : outcome.text);
@@ -102,6 +114,7 @@ export function DevListing() {
   };
   const listPath = (folder: string) => {
     setStatus(strings.dev.listing);
+    setChange(undefined);
     return lister.list({ kind: "path", path: folder }, sort).then(report);
   };
   const listSynth = async (size: number) => {
@@ -139,7 +152,13 @@ export function DevListing() {
 
   useEffect(() => () => lister.close(), [lister]);
   useEffect(() => {
-    window.jerryDev = { listing: listPath, synthFolder: listSynth, sort: sortBy, scroll };
+    window.jerryDev = {
+      listing: listPath,
+      synthFolder: listSynth,
+      sort: sortBy,
+      scroll,
+      nextChange: () => new Promise((resolve) => changeWaiters.add(resolve)),
+    };
     return () => {
       window.jerryDev = undefined;
     };
@@ -176,8 +195,14 @@ export function DevListing() {
         <DevButton onClick={() => void scroll()}>{strings.dev.scrollTest}</DevButton>
       </fieldset>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
-      <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(count)}</p>
-      <DevRows entries={entries} count={count} rowHeight={rowHeight} viewport={viewport} />
+      {change && <p className="text-small text-fg-2 tabular-nums">{change}</p>}
+      <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(lister.count())}</p>
+      <DevRows
+        entries={entries}
+        count={entries.order?.length ?? entries.names.length}
+        rowHeight={rowHeight}
+        viewport={viewport}
+      />
     </section>
   );
 }
@@ -188,31 +213,80 @@ function rowPx(): number {
   return Number.parseFloat(token) || FALLBACK_ROW_PX;
 }
 
+/** The last diff: what it changed, and how long from its arrival to the paint. */
+export interface LiveChange {
+  added: number;
+  changed: number;
+  removed: number;
+  paintMs: number;
+}
+
+export interface PaintedChange extends LiveChange {
+  paintedAt: number;
+}
+
+const sameSort = (a: Sort, b: Sort) =>
+  a.column === b.column && a.descending === b.descending && a.foldersFirst === b.foldersFirst;
+
 /**
- * Opens listings one at a time and shows each batch and order with `show` the moment it arrives
- * (`flushSync`), so the paint that follows is the one the timings report.
+ * Opens listings one at a time and shows each batch, diff and order with `show` the moment it
+ * arrives (`flushSync`), so the paint that follows is the one the timings report. `changed`
+ * hears about every diff once it is painted.
  */
-function createLister(show: () => void) {
+function createLister(show: () => void, changed: (change: LiveChange) => void) {
   let current: OpenListing | undefined;
   let generation = 0;
-  // Every entry of the current listing by id, and its current display order.
+  // Every entry the current listing has had by id, its display order, and the removed ids.
   let entries: DevEntries = emptyEntries();
+  let removed = new Set<number>();
+  let done = false;
   let wanted = DEFAULT_SORT;
+  /** A re-sort waiting for its order on the stream. */
+  let sorting: { sort: Sort; started: number; resolve: (outcome: SortOutcome) => void } | undefined;
 
   const paint = () => flushSync(show);
-  /** Applies `next` if it is for the sort asked for last; an empty order changes nothing. */
+  /** Applies `next` if it is for the sort asked for last. */
   const apply = (next: ListingOrder) => {
-    const { column, descending, foldersFirst } = next.sort;
-    const matches =
-      column === wanted.column &&
-      descending === wanted.descending &&
-      foldersFirst === wanted.foldersFirst;
-    if (!matches || next.ids.length === 0) {
-      return false;
+    if (!sameSort(next.sort, wanted)) {
+      return;
     }
     entries.order = next.ids;
     paint();
-    return true;
+    if (sorting && sameSort(sorting.sort, next.sort)) {
+      const { sort, started, resolve } = sorting;
+      sorting = undefined;
+      const orderMs = performance.now() - started;
+      void afterNextPaint().then((painted) =>
+        resolve({
+          status: "ok",
+          timings: { count: next.ids.length, sort, orderMs, paintMs: painted - started },
+        }),
+      );
+    }
+  };
+  /** Puts entries `ids` in (new ones continue the ids), drops `gone`, and paints. */
+  const applyDiff = (diff: ListingDiff, at: number) => {
+    let added = 0;
+    diff.ids.forEach((id, i) => {
+      if (id >= entries.names.length) {
+        added += 1;
+      }
+      entries.names[id] = diff.names[i] ?? "";
+      entries.sizes[id] = diff.sizes[i] ?? 0;
+      entries.modified[id] = diff.modified[i] ?? 0;
+      entries.folders[id] = ((diff.attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0;
+      entries.iconKeys[id] = diff.iconKeys[i] ?? 0;
+    });
+    if (diff.removed.length > 0) {
+      for (const id of diff.removed) {
+        removed.add(id);
+      }
+      // The order that follows leaves them out; until it comes, so does this one.
+      entries.order = entries.order?.filter((id) => !removed.has(id));
+    }
+    paint();
+    const counts = { added, changed: diff.ids.length - added, removed: diff.removed.length };
+    void afterNextPaint().then((painted) => changed({ ...counts, paintMs: painted - at }));
   };
 
   const close = () => {
@@ -220,6 +294,10 @@ function createLister(show: () => void) {
     void current?.close();
     current = undefined;
     entries = emptyEntries();
+    removed = new Set();
+    done = false;
+    sorting?.resolve({ status: "error", text: strings.dev.sortPending });
+    sorting = undefined;
   };
 
   const list = async (target: ListingTarget, sort: Sort): Promise<ListingOutcome> => {
@@ -261,7 +339,11 @@ function createLister(show: () => void) {
           case "order":
             apply(message);
             break;
+          case "diff":
+            applyDiff(message, at);
+            break;
           case "done": {
+            done = true;
             const doneMs = at - started;
             const donePaint = afterNextPaint();
             void Promise.all([firstPaint ?? donePaint, donePaint]).then(([first, all]) =>
@@ -300,28 +382,37 @@ function createLister(show: () => void) {
     });
   };
 
+  /** Re-sorts and resolves once the new order, which comes on the stream, is painted. */
   const sort = async (next: Sort): Promise<SortOutcome> => {
     wanted = next;
     const listing = current;
     if (!listing) {
       return { status: "error", text: strings.dev.nothingToSort };
     }
+    // An earlier sort still waiting is overtaken: its order won't be painted.
+    sorting?.resolve({ status: "error", text: strings.dev.sortPending });
+    sorting = undefined;
     const started = performance.now();
+    const ordered = done
+      ? new Promise<SortOutcome>((resolve) => {
+          sorting = { sort: next, started, resolve };
+        })
+      : // Still being read: the stream's order before done follows the new sort.
+        Promise.resolve<SortOutcome>({ status: "error", text: strings.dev.sortPending });
     const result = await listing.sort(next);
     if (result.status === "error") {
+      sorting = undefined;
       return { status: "error", text: errorText(result.error) };
     }
-    const orderMs = performance.now() - started;
-    if (!apply(result.data)) {
-      // Still being read, or overtaken by a later sort: the order that follows is painted.
-      return { status: "error", text: strings.dev.sortPending };
-    }
-    const painted = await afterNextPaint();
-    return {
-      status: "ok",
-      timings: { count: result.data.ids.length, sort: next, orderMs, paintMs: painted - started },
-    };
+    return ordered;
   };
 
-  return { list, sort, close, entries: () => entries };
+  return {
+    list,
+    sort,
+    close,
+    entries: () => entries,
+    /** How many entries the folder has now. */
+    count: () => entries.names.length - removed.size,
+  };
 }

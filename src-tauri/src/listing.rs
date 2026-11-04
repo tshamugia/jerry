@@ -1,20 +1,32 @@
 //! Folder listings for the UI. `listing_open` streams a folder through a `Channel` as binary
-//! messages (ADR-0001), `listing_sort` re-sorts it and `listing_close` stops and forgets it.
-//! Every listing is its own background job, so a slow disk holds up only its own tab.
+//! messages (ADR-0001) and keeps it live, `listing_sort` re-sorts it and `listing_close` stops
+//! and forgets it. Every listing is its own background job, so a slow disk holds up only its own
+//! tab. Its folder's watcher (`jerry_core::watcher`, shared by every tab on that folder) starts
+//! before the folder is read, so no change is missed; changes that come while it is read are
+//! applied right after.
 //!
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
-//! - Batch (1): `[1, count, firstId, nameUnits]`, then `f64 size[count]` (bytes),
+//! - Batch (1): `[1, count, firstId, nameUnits]`, then the entries: `f64 size[count]` (bytes),
 //!   `f64 modified[count]` (ms since the Unix epoch), `u32 attributes[count]`,
 //!   `u32 iconKey[count]` (the `icon://` key: 0 for an entry with its own icon, else its type's;
-//!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this batch's
+//!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this message's
 //!   names, in UTF-16 units) and the names as UTF-16 code units. The entries' ids are
 //!   `firstId + i`.
-//! - Order (2): `[2, count, column, flags]`, then `u32 id[count]`: the entries in display order,
-//!   sorted by `column` (0 name, 1 modified, 2 type, 3 size, 4 created, 5 extension), descending
-//!   if `flags` bit 0 is set, folders first if bit 1 is. Once the whole folder is in, one comes
-//!   for the listing's sort, right before Done; `listing_sort` returns one for a new sort.
-//! - Done (3): `[3, count, batches, 0]`, then the `f64` ms the listing took in Rust. Last message.
-//! - Error (4): `[4, jsonBytes, 0, 0]`, then the `JerryError` as UTF-8 JSON. Last message.
+//! - Order (2): `[2, count, column, flags]`, then `u32 id[count]`: the entries the folder has, in
+//!   display order, sorted by `column` (0 name, 1 modified, 2 type, 3 size, 4 created,
+//!   5 extension), descending if `flags` bit 0 is set, folders first if bit 1 is. One comes for
+//!   the listing's sort once the whole folder is in, right before Done, one after every Diff, and
+//!   one for every `listing_sort` once the folder is in.
+//! - Done (3): `[3, count, batches, 0]`, then the `f64` ms the listing took in Rust: the whole
+//!   folder is in. Diffs follow while the listing is open.
+//! - Error (4): `[4, jsonBytes, 0, 0]`, then the `JerryError` as UTF-8 JSON: reading the folder
+//!   failed, or the folder went away (`NotFound`, `DeviceGone`). Last message.
+//! - Diff (5): `[5, count, removedCount, nameUnits]`, then `u32 id[count]`,
+//!   `u32 removed[removedCount]`, 4 zero bytes if `count + removedCount` is odd (so the `f64`s
+//!   stay aligned), and the `count` entries laid out exactly as in a Batch. Ids are ascending:
+//!   one the listing already has is that entry changed (a rename keeps its id), the others are
+//!   new and continue the listing's ids in order. Removed ids are gone and never come back.
+//!   Changes collect for 100 ms; an Order follows.
 //!
 //! The UI's decoder is `src/ipc/listing.ts`; both sides test this layout.
 
@@ -25,9 +37,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::Instant;
 
 use jerry_core::error::display_path;
-use jerry_core::listing::{Entries, Listing, filetime_to_unix_ms, list};
+use jerry_core::listing::{Diff, Entries, Listing, filetime_to_unix_ms, list};
 use jerry_core::path::long_path;
 use jerry_core::sort::{PlainTypeNames, Sort, SortColumn, SortIndex};
+use jerry_core::watcher::{Changes, Event, Subscription, Watchers, refresh};
 use jerry_core::{ErrorCode, JerryError};
 use jerry_win::icons::keys::keys as icon_keys;
 use serde::{Deserialize, Serialize};
@@ -42,6 +55,7 @@ const BATCH: u32 = 1;
 const ORDER: u32 = 2;
 const DONE: u32 = 3;
 const ERROR: u32 = 4;
+const DIFF: u32 = 5;
 
 /// The folder to list.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
@@ -70,20 +84,116 @@ pub struct Listings(Arc<Shared>);
 struct Shared {
     last_id: AtomicU32,
     open: Mutex<HashMap<u32, Open>>,
+    watchers: Watchers,
 }
 
 struct Open {
     tab: u32,
-    listing: Arc<RwLock<Listing>>,
-    sorting: Arc<Mutex<Sorting>>,
-    cancel: Arc<AtomicBool>,
-    outbox: Outbox,
+    state: Arc<ListingState>,
 }
 
-/// A listing's sort and, once the whole folder is in, its sort index.
-struct Sorting {
+/// One open listing, shared by its job, its watcher subscription and the commands.
+struct ListingState {
+    folder: PathBuf,
+    /// The sort the listing started with: what a prestarted listing is matched by, without
+    /// waiting for `live`, which a change being applied holds through its IO.
+    started_sort: Sort,
+    listing: RwLock<Listing>,
+    live: Mutex<Live>,
+    cancel: AtomicBool,
+    outbox: Outbox,
+    /// The folder's watcher, once the job has subscribed. Its callback holds this state only
+    /// weakly, so closing the listing drops both.
+    watch: Mutex<Option<Subscription>>,
+}
+
+/// What changes as a listing goes on. Every message after the batches is sent under its lock,
+/// so diffs and orders go out in the order they happened.
+struct Live {
     sort: Sort,
-    index: Option<Arc<SortIndex>>,
+    /// Once the whole folder is in: its sort index. Until then, changes wait in `pending`.
+    index: Option<SortIndex>,
+    pending: Changes,
+    /// After an error message: nothing more goes out.
+    ended: bool,
+}
+
+impl ListingState {
+    fn live(&self) -> MutexGuard<'_, Live> {
+        self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn watch(&self) -> MutexGuard<'_, Option<Subscription>> {
+        self.watch.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Listing> {
+        self.listing.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Listing> {
+        self.listing.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Sends `error` as the last message.
+    fn end(&self, live: &mut Live, error: &JerryError) {
+        live.ended = true;
+        self.outbox.send(error_message(error));
+    }
+
+    /// Sends `diff` and the order that follows it, with the sort index brought up to date.
+    fn send_diff(&self, live: &mut Live, diff: &Diff) {
+        if diff.is_empty() {
+            return;
+        }
+        let started = Instant::now();
+        let listing = self.read();
+        self.outbox.send(diff_message(&listing, diff));
+        let index = match live.index.take() {
+            Some(_) if diff.reindex => {
+                SortIndex::build_for(listing.entries(), listing.live_ids(), &PlainTypeNames)
+            }
+            Some(index) if !diff.removed.is_empty() => index.without(&diff.removed),
+            Some(index) => index,
+            None => return,
+        };
+        self.outbox.send(order_message(
+            live.sort,
+            &index.order(listing.entries(), live.sort),
+        ));
+        live.index = Some(index);
+        tracing::debug!(
+            entries = listing.len(),
+            changed = diff.changed.len(),
+            added = diff.added.len(),
+            removed = diff.removed.len(),
+            ms = started.elapsed().as_secs_f64() * 1000.0,
+            "listing diff sent"
+        );
+    }
+
+    /// Applies what the folder's watcher says, or keeps it for after the read.
+    fn on_event(&self, event: Event<'_>) {
+        let mut live = self.live();
+        if live.ended {
+            return;
+        }
+        if live.index.is_none() {
+            // Still reading: look the names up again once the whole folder is in.
+            match event {
+                Event::Changed { changes, .. } => live.pending.merge(changes),
+                Event::Gone(_) => live.pending.lose(),
+            }
+            return;
+        }
+        match event {
+            Event::Changed { now, .. } => {
+                let diff = now.apply_to(&mut self.write());
+                self.send_diff(&mut live, &diff);
+            }
+            Event::Gone(error) => self.end(&mut live, error),
+        }
+    }
 }
 
 impl Listings {
@@ -108,7 +218,7 @@ impl Listings {
             ListingTarget::Entry { listing, entry } => {
                 let open = self.open();
                 open.get(&listing)
-                    .and_then(|open| read(&open.listing).path(entry as usize))
+                    .and_then(|open| open.state.read().path(entry as usize))
                     .ok_or_else(|| JerryError::new(ErrorCode::NotFound))
             }
         }
@@ -119,10 +229,10 @@ impl Listings {
     fn open_folder(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Channel<Bytes>) -> u32 {
         let prestarted = self.open().iter().find_map(|(&id, open)| {
             let waiting = open.tab == tab
-                && !open.outbox.is_attached()
-                && lock(&open.sorting).sort == sort
-                && read(&open.listing).folder() == folder;
-            waiting.then(|| (id, open.outbox.clone()))
+                && !open.state.outbox.is_attached()
+                && open.state.started_sort == sort
+                && open.state.folder == folder;
+            waiting.then(|| (id, open.state.outbox.clone()))
         });
         match prestarted {
             Some((id, outbox)) => {
@@ -137,60 +247,69 @@ impl Listings {
     fn start(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Option<Channel<Bytes>>) -> u32 {
         self.close_tab(tab);
         let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let listing = Arc::new(RwLock::new(Listing::new(folder.clone())));
-        let sorting = Arc::new(Mutex::new(Sorting { sort, index: None }));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let outbox = Outbox::new(channel);
+        let state = Arc::new(ListingState {
+            listing: RwLock::new(Listing::new(folder.clone())),
+            folder,
+            started_sort: sort,
+            live: Mutex::new(Live {
+                sort,
+                index: None,
+                pending: Changes::default(),
+                ended: false,
+            }),
+            cancel: AtomicBool::new(false),
+            outbox: Outbox::new(channel),
+            watch: Mutex::new(None),
+        });
         self.open().insert(
             id,
             Open {
                 tab,
-                listing: listing.clone(),
-                sorting: sorting.clone(),
-                cancel: cancel.clone(),
-                outbox: outbox.clone(),
+                state: state.clone(),
             },
         );
-        let job_outbox = outbox.clone();
+        let watchers = self.0.watchers.clone();
         tauri::async_runtime::spawn(async move {
-            let job = move || run(&folder, &listing, &sorting, &cancel, &job_outbox);
+            let job_state = state.clone();
+            let job = move || run(&job_state, &watchers);
             match jobs::background("listing", job).await {
                 Ok(()) => {}
                 Err(error) if error.code == ErrorCode::Cancelled => {}
                 Err(error) => {
                     tracing::info!(id, code = ?error.code, "listing failed");
-                    outbox.send(error_message(&error));
+                    // Nothing to keep live.
+                    state.watch().take();
+                    state.end(&mut state.live(), &error);
                 }
             }
         });
         id
     }
 
-    /// Sorts listing `id` by `sort` from now on and returns its order message. While the folder
-    /// is still being read the order is empty: the stream's own Order, sent once the whole
-    /// folder is in, uses the new sort. CPU work: call it on a background thread.
-    fn sort(&self, id: u32, sort: Sort) -> Result<Bytes, JerryError> {
-        let (listing, sorting) = self
+    /// Sorts listing `id` by `sort` from now on. Once the whole folder is in, its order goes out
+    /// through the stream, after any diff before it; while the folder is still being read, the
+    /// stream's own Order follows the new sort. CPU work: call it on a background thread.
+    fn sort(&self, id: u32, sort: Sort) -> Result<(), JerryError> {
+        let state = self
             .open()
             .get(&id)
-            .map(|open| (open.listing.clone(), open.sorting.clone()))
+            .map(|open| open.state.clone())
             .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
-        let index = {
-            let mut sorting = lock(&sorting);
-            sorting.sort = sort;
-            sorting.index.clone()
+        let mut live = state.live();
+        live.sort = sort;
+        let Some(index) = live.index.as_ref().filter(|_| !live.ended) else {
+            return Ok(());
         };
         let started = Instant::now();
-        let order = index.map_or_else(Vec::new, |index| {
-            index.order(read(&listing).entries(), sort)
-        });
+        let order = index.order(state.read().entries(), sort);
+        state.outbox.send(order_message(sort, &order));
         tracing::debug!(
             id,
             entries = order.len(),
             ms = started.elapsed().as_secs_f64() * 1000.0,
             "listing sorted"
         );
-        Ok(order_message(sort, &order))
+        Ok(())
     }
 
     /// Stops listing `id` if it still runs and forgets it. No message follows.
@@ -204,8 +323,8 @@ impl Listings {
     /// The exact path, attributes and last write time (FILETIME) of entry `entry` of the open
     /// listing `listing`: for the `icon://` protocol, which asks for an entry's own icon by id.
     pub fn entry(&self, listing: u32, entry: u32) -> Option<(PathBuf, u32, u64)> {
-        let open = self.open();
-        let listing = read(&open.get(&listing)?.listing);
+        let state = self.open().get(&listing)?.state.clone();
+        let listing = state.read();
         let id = entry as usize;
         let entries = listing.entries();
         let (attributes, modified) = (*entries.attributes().get(id)?, *entries.modified().get(id)?);
@@ -230,76 +349,147 @@ impl Listings {
 
 impl Open {
     fn stop(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
-        self.outbox.close();
+        self.state.cancel.store(true, Ordering::Relaxed);
+        self.state.outbox.close();
+        // Stops the folder's watcher if no other tab watches it.
+        self.state.watch().take();
     }
 }
 
-/// The listing job: reads `folder` into `listing` and sends each batch, then builds the sort
-/// index and sends the order and the done message.
-fn run(
-    folder: &Path,
-    listing: &RwLock<Listing>,
-    sorting: &Mutex<Sorting>,
-    cancel: &AtomicBool,
-    outbox: &Outbox,
-) -> Result<(), JerryError> {
+/// The listing job: subscribes to the folder's watcher, reads the folder and sends each batch,
+/// then builds the sort index and sends the order and the done message, and last applies the
+/// changes that came while it read.
+fn run(state: &Arc<ListingState>, watchers: &Watchers) -> Result<(), JerryError> {
     let started = Instant::now();
+    watch(state, watchers);
     let mut count = 0;
     let mut batches = 0;
-    list(folder, cancel, |batch| {
+    list(&state.folder, &state.cancel, |batch| {
         // Core has the entries before the UI does, so every id the UI gets resolves.
-        write(listing).append(batch);
-        outbox.send(batch_message(count, batch));
+        state.write().append(batch);
+        state.outbox.send(batch_message(count, batch));
         count += batch.len();
         batches += 1;
     })?;
+    // Under the lock, so a `listing_sort` meanwhile either set the sort used here or sees the
+    // index and sends its own order after this one.
+    let mut live = state.live();
     {
-        let listing = read(listing);
-        let index = Arc::new(SortIndex::build(listing.entries(), &PlainTypeNames));
-        // Under the lock, so a `listing_sort` meanwhile either set the sort used here or sees
-        // the index and sorts by itself.
-        let mut sorting = lock(sorting);
-        outbox.send(order_message(
-            sorting.sort,
-            &index.order(listing.entries(), sorting.sort),
+        let listing = state.read();
+        let index = SortIndex::build(listing.entries(), &PlainTypeNames);
+        state.outbox.send(order_message(
+            live.sort,
+            &index.order(listing.entries(), live.sort),
         ));
-        sorting.index = Some(index);
+        live.index = Some(index);
     }
-    outbox.send(done_message(
+    state.outbox.send(done_message(
         count,
         batches,
         started.elapsed().as_secs_f64() * 1000.0,
     ));
+    let pending = std::mem::take(&mut live.pending);
+    if !pending.is_empty() {
+        match refresh(&state.folder, &pending, &state.cancel) {
+            Ok(now) => {
+                let diff = now.apply_to(&mut state.write());
+                state.send_diff(&mut live, &diff);
+            }
+            Err(error) if error.code == ErrorCode::Cancelled => {}
+            Err(error) => state.end(&mut live, &error),
+        }
+    }
     Ok(())
+}
+
+/// Subscribes `state` to its folder's watcher, unless the listing was closed meanwhile.
+fn watch(state: &Arc<ListingState>, watchers: &Watchers) {
+    let weak = Arc::downgrade(state);
+    let subscribed = watchers.subscribe(&state.folder, move |event| {
+        if let Some(state) = weak.upgrade() {
+            state.on_event(event);
+        }
+    });
+    match subscribed {
+        Ok(subscription) => {
+            // Checked under the lock `Open::stop` takes the subscription with.
+            let mut slot = state.watch();
+            if !state.cancel.load(Ordering::Relaxed) {
+                *slot = Some(subscription);
+            }
+        }
+        // Reading the folder reports what is wrong with it; unwatched, the list just isn't live.
+        Err(error) => tracing::info!(code = ?error.code, "folder isn't watched"),
+    }
 }
 
 /// Entries `first_id..` as one batch message (see the module docs).
 fn batch_message(first_id: usize, batch: &Entries) -> Bytes {
     let count = batch.len();
-    let units = batch.name_units();
+    let units = batch.name_units().len();
     // A batch holds at most `MAX_BATCH` entries, and a folder fewer than 2^32: these fit.
-    let header = [BATCH, count as u32, first_id as u32, units.len() as u32];
-    let mut out = message_buffer(header, count * 28 + units.len() * 2);
-    for &size in batch.sizes() {
+    let header = [BATCH, count as u32, first_id as u32, units as u32];
+    let mut out = message_buffer(header, entries_bytes(count, units));
+    push_entries(&mut out, batch);
+    Bytes(out)
+}
+
+/// The changed and new entries of `listing` and its removed ids, as one diff message (see the
+/// module docs).
+fn diff_message(listing: &Listing, diff: &Diff) -> Bytes {
+    let ids: Vec<u32> = diff
+        .changed
+        .iter()
+        .copied()
+        .chain(diff.added.clone())
+        .collect();
+    let entries = listing.entries().copy_of(&ids);
+    let units = entries.name_units().len();
+    let words = ids.len() + diff.removed.len();
+    let padding = words % 2 * 4;
+    let header = [
+        DIFF,
+        ids.len() as u32,
+        diff.removed.len() as u32,
+        units as u32,
+    ];
+    let mut out = message_buffer(
+        header,
+        words * 4 + padding + entries_bytes(ids.len(), units),
+    );
+    for &id in ids.iter().chain(&diff.removed) {
+        out.extend_from_slice(&id.to_le_bytes());
+    }
+    out.resize(out.len() + padding, 0);
+    push_entries(&mut out, &entries);
+    Bytes(out)
+}
+
+/// The size of `count` entries with `units` name units, as [`push_entries`] writes them.
+fn entries_bytes(count: usize, units: usize) -> usize {
+    count * 28 + units * 2
+}
+
+/// Writes `entries` as batches and diffs carry them: each column in turn, then the names.
+fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
+    for &size in entries.sizes() {
         out.extend_from_slice(&(size as f64).to_le_bytes());
     }
-    for &modified in batch.modified() {
+    for &modified in entries.modified() {
         out.extend_from_slice(&filetime_to_unix_ms(modified).to_le_bytes());
     }
-    for &attributes in batch.attributes() {
+    for &attributes in entries.attributes() {
         out.extend_from_slice(&attributes.to_le_bytes());
     }
-    for key in icon_keys(batch) {
+    for key in icon_keys(entries) {
         out.extend_from_slice(&key.to_le_bytes());
     }
-    for &end in batch.name_ends() {
+    for &end in entries.name_ends() {
         out.extend_from_slice(&(end as u32).to_le_bytes());
     }
-    for &unit in units {
+    for &unit in entries.name_units() {
         out.extend_from_slice(&unit.to_le_bytes());
     }
-    Bytes(out)
 }
 
 /// Entry ids in display order as one order message (see the module docs).
@@ -402,23 +592,12 @@ fn deliver(channel: &Channel<Bytes>, message: Bytes) {
     }
 }
 
-fn lock(sorting: &Mutex<Sorting>) -> MutexGuard<'_, Sorting> {
-    sorting.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn read(listing: &RwLock<Listing>) -> std::sync::RwLockReadGuard<'_, Listing> {
-    listing.read().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn write(listing: &RwLock<Listing>) -> std::sync::RwLockWriteGuard<'_, Listing> {
-    listing.write().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
-/// their order by `sort` and a done message, or an error message (decoded by
-/// `src/ipc/listing.ts`). Returns at once, before the folder is read: errors reading it, such
-/// as `AccessDenied`, `NotFound` or `DeviceGone`, come as the stream's error message. Opening a
-/// folder for a tab closes the tab's previous listing.
+/// their order by `sort` and a done message, then a diff and an order for every change while the
+/// listing is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once,
+/// before the folder is read: errors reading it, such as `AccessDenied`, `NotFound` or
+/// `DeviceGone`, come as the stream's error message, and so does the folder going away. Opening
+/// a folder for a tab closes the tab's previous listing.
 #[tauri::command]
 #[specta::specta]
 pub async fn listing_open(
@@ -434,19 +613,20 @@ pub async fn listing_open(
     Ok(ListingOpened { id, path })
 }
 
-/// Sorts listing `id` by `sort` from now on and returns the new order as one order message
-/// (only entry ids, as `u32`s). While the folder is still being read the order is empty and the
-/// stream's own order message, sent once the whole folder is in, follows the new sort. Fails
-/// with `NotFound` for a closed listing.
+/// Sorts listing `id` by `sort` from now on. The new order (only entry ids) comes through the
+/// listing's stream as an order message, after any diff sent before it, so it always names the
+/// entries the UI has. While the folder is still being read, the stream's own order message
+/// follows the new sort. Fails with `NotFound` for a closed listing.
 #[tauri::command]
 #[specta::specta]
-pub async fn listing_sort(app: AppHandle, id: u32, sort: Sort) -> Result<Bytes, JerryError> {
+pub async fn listing_sort(app: AppHandle, id: u32, sort: Sort) -> Result<(), JerryError> {
     let listings = app.state::<Listings>().inner().clone();
     jobs::background("sort", move || listings.sort(id, sort)).await
 }
 
-/// Stops listing `id` if it still runs and forgets it: no message follows. Closing a listing
-/// that is already closed does nothing.
+/// Stops listing `id` if it still runs and forgets it: no message follows, and the folder's
+/// watcher stops unless another tab has the folder open. Closing a listing that is already
+/// closed does nothing.
 #[tauri::command]
 #[specta::specta]
 pub async fn listing_close(app: AppHandle, id: u32) {
@@ -455,6 +635,7 @@ pub async fn listing_close(app: AppHandle, id: u32) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::mpsc::{Receiver, channel};
     use std::time::Duration;
 
@@ -561,6 +742,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn diffs_carry_ids_removals_and_entries_laid_out_as_in_batches() {
+        let mut listing = Listing::new(PathBuf::from(r"\\?\C:\Work"));
+        let mut batch = Entries::default();
+        for name in ["a.txt", "b.txt", "c.txt"] {
+            let units: Vec<u16> = name.encode_utf16().collect();
+            batch.push(&units, 1, 0, 116_444_736_000_000_000, 0x20);
+        }
+        listing.append(&batch);
+        let mut present = Entries::default();
+        let units: Vec<u16> = "გეგმა.pdf".encode_utf16().collect();
+        present.push(&units, 1 << 33, 0, 134_116_992_000_000_000, 0x20);
+        let units: Vec<u16> = "b.txt".encode_utf16().collect();
+        present.push(&units, 5, 0, 116_444_736_000_000_000, 0x20);
+        let diff = listing.apply(&jerry_core::listing::Observed {
+            present,
+            absent: vec!["a.txt".encode_utf16().collect()],
+            renames: Vec::new(),
+        });
+
+        let Bytes(bytes) = diff_message(&listing, &diff);
+
+        // b.txt changed (id 1), გეგმა.pdf is new (id 3), a.txt is gone (id 0).
+        assert_eq!(
+            [
+                word(&bytes, 0),
+                word(&bytes, 4),
+                word(&bytes, 8),
+                word(&bytes, 12)
+            ],
+            [DIFF, 2, 1, 5 + 9]
+        );
+        assert_eq!([word(&bytes, 16), word(&bytes, 20)], [1, 3], "ids");
+        assert_eq!(word(&bytes, 24), 0, "removed");
+        assert_eq!(word(&bytes, 28), 0, "padding to 8 bytes");
+        let entries_at = 32;
+        assert_eq!(
+            [float(&bytes, entries_at), float(&bytes, entries_at + 8)],
+            [5.0, (1_u64 << 33) as f64]
+        );
+        assert_eq!(float(&bytes, entries_at + 24), 1_767_225_600_000.0);
+        let keys_at = entries_at + 32 + 8;
+        let key = |name: &str| {
+            let units: Vec<u16> = name.encode_utf16().collect();
+            jerry_win::icons::keys::key(&units, 0x20)
+        };
+        assert_eq!(
+            [word(&bytes, keys_at), word(&bytes, keys_at + 4)],
+            [key("b.txt"), key("გეგმა.pdf")]
+        );
+        let ends_at = keys_at + 8;
+        assert_eq!([word(&bytes, ends_at), word(&bytes, ends_at + 4)], [5, 14]);
+        let (pairs, rest) = bytes[ends_at + 8..].as_chunks::<2>();
+        assert!(rest.is_empty());
+        let names: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
+        assert_eq!(String::from_utf16_lossy(&names), "b.txtგეგმა.pdf");
+
+        // An even number of ids needs no padding.
+        let Bytes(removal) = diff_message(
+            &listing,
+            &Diff {
+                removed: vec![1, 2],
+                ..Diff::default()
+            },
+        );
+        assert_eq!([word(&removal, 4), word(&removal, 8)], [0, 2]);
+        assert_eq!(removal.len(), 16 + 8);
+    }
+
     /// A channel whose raw messages arrive on the returned receiver.
     fn test_channel() -> (Channel<Bytes>, Receiver<Vec<u8>>) {
         let (sender, receiver) = channel();
@@ -573,13 +823,17 @@ mod tests {
         (channel, receiver)
     }
 
+    fn next(receiver: &Receiver<Vec<u8>>) -> Vec<u8> {
+        receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a message comes")
+    }
+
     /// The messages up to and including the done or error message.
     fn until_end(receiver: &Receiver<Vec<u8>>) -> Vec<Vec<u8>> {
         let mut messages = Vec::new();
         loop {
-            let message = receiver
-                .recv_timeout(Duration::from_secs(10))
-                .expect("the listing ends");
+            let message = next(receiver);
             let kind = word(&message, 0);
             messages.push(message);
             if kind == DONE || kind == ERROR {
@@ -602,10 +856,14 @@ mod tests {
         }
     }
 
+    fn state(listings: &Listings, id: u32) -> Arc<ListingState> {
+        listings.open()[&id].state.clone()
+    }
+
     /// The names of an order message's entries, in its order.
     fn ordered_names(listings: &Listings, id: u32, message: &[u8]) -> Vec<String> {
         assert_eq!(word(message, 0), ORDER);
-        let entries = read(&listings.open()[&id].listing).entries().clone();
+        let entries = state(listings, id).read().entries().clone();
         let count = word(message, 4) as usize;
         assert_eq!(message.len(), 16 + count * 4);
         (0..count)
@@ -646,7 +904,7 @@ mod tests {
         );
 
         // Every id the stream gave has its exact path in core, and a subfolder opens by its id.
-        let entries = read(&listings.open()[&id].listing).entries().clone();
+        let entries = state(&listings, id).read().entries().clone();
         let sub = (0..entries.len())
             .find(|&id| entries.is_dir(id))
             .expect("the subfolder") as u32;
@@ -682,6 +940,7 @@ mod tests {
         assert_eq!(messages.len(), 1);
         let json: serde_json::Value = serde_json::from_slice(&messages[0][16..]).expect("JSON");
         assert_eq!(json["code"], "NotFound");
+        assert_eq!(listings.0.watchers.watched(), 0, "nothing to watch");
     }
 
     #[test]
@@ -717,15 +976,17 @@ mod tests {
         let entry = |listing| ListingTarget::Entry { listing, entry: 0 };
         assert!(listings.resolve(entry(old)).is_err(), "replaced");
         assert!(listings.resolve(entry(new)).is_ok());
+        assert_eq!(listings.0.watchers.watched(), 1);
         listings.close(new);
         listings.close(new);
         assert!(listings.resolve(entry(new)).is_err(), "closed");
+        assert_eq!(listings.0.watchers.watched(), 0, "the watcher stopped");
         let error = listings.sort(new, BY_SIZE).expect_err("closed");
         assert_eq!(error.code, ErrorCode::NotFound);
     }
 
     #[test]
-    fn sorting_a_listed_folder_returns_only_the_new_order() {
+    fn sorting_a_listed_folder_sends_only_the_new_order() {
         // Each file holds its own name, so the longer name is the bigger file.
         let dir = folder_with(&["a.txt", "ccc.txt", "bb.txt"]);
         std::fs::create_dir(dir.path().join("ფოლდერი")).expect("mkdir");
@@ -735,7 +996,9 @@ mod tests {
         let id = listings.open_folder(1, folder, Sort::default(), channel);
         until_end(&receiver);
 
-        let Bytes(order) = listings.sort(id, BY_SIZE).expect("sorts");
+        listings.sort(id, BY_SIZE).expect("sorts");
+
+        let order = next(&receiver);
         assert_eq!([word(&order, 8), word(&order, 12)], [3, 0b11]);
         assert_eq!(
             ordered_names(&listings, id, &order),
@@ -750,34 +1013,35 @@ mod tests {
         let folder = long_path(dir.path()).expect("long path");
         // A listing whose job hasn't run yet, as `start` makes it.
         let listings = Listings::default();
-        let listing = Arc::new(RwLock::new(Listing::new(folder.clone())));
-        let sorting = Arc::new(Mutex::new(Sorting {
-            sort: Sort::default(),
-            index: None,
-        }));
         let (channel, receiver) = test_channel();
-        let outbox = Outbox::new(Some(channel));
+        let state = Arc::new(ListingState {
+            listing: RwLock::new(Listing::new(folder.clone())),
+            folder,
+            started_sort: Sort::default(),
+            live: Mutex::new(Live {
+                sort: Sort::default(),
+                index: None,
+                pending: Changes::default(),
+                ended: false,
+            }),
+            cancel: AtomicBool::new(false),
+            outbox: Outbox::new(Some(channel)),
+            watch: Mutex::new(None),
+        });
         listings.open().insert(
             7,
             Open {
                 tab: 1,
-                listing: listing.clone(),
-                sorting: sorting.clone(),
-                cancel: Arc::new(AtomicBool::new(false)),
-                outbox: outbox.clone(),
+                state: state.clone(),
             },
         );
 
-        let Bytes(pending) = listings.sort(7, BY_SIZE).expect("sorts");
-        assert_eq!(word(&pending, 4), 0, "no order before the folder is in");
-        run(
-            &folder,
-            &listing,
-            &sorting,
-            &AtomicBool::new(false),
-            &outbox,
-        )
-        .expect("lists");
+        listings.sort(7, BY_SIZE).expect("sorts");
+        assert!(
+            receiver.try_recv().is_err(),
+            "no order before the folder is in"
+        );
+        run(&state, &listings.0.watchers).expect("lists");
         let messages = until_end(&receiver);
 
         let order = &messages[messages.len() - 2];
@@ -798,7 +1062,7 @@ mod tests {
 
         // Let it finish with nobody listening.
         let wait = Instant::now();
-        while lock(&listings.open()[&id].sorting).index.is_none() {
+        while state(&listings, id).live().index.is_none() {
             assert!(wait.elapsed() < Duration::from_secs(10), "the listing ends");
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -821,6 +1085,88 @@ mod tests {
             .expect("starts");
         let other = listings.open_folder(4, folder, BY_SIZE, test_channel().0);
         assert_ne!(other, again);
+    }
+
+    /// The ids and removed ids of a diff message.
+    fn diff_ids(message: &[u8]) -> (Vec<u32>, Vec<u32>) {
+        assert_eq!(word(message, 0), DIFF);
+        let (count, removed) = (word(message, 4) as usize, word(message, 8) as usize);
+        let ids = (0..count).map(|i| word(message, 16 + i * 4)).collect();
+        let gone = (0..removed)
+            .map(|i| word(message, 16 + (count + i) * 4))
+            .collect();
+        (ids, gone)
+    }
+
+    #[test]
+    fn changes_in_the_folder_come_as_a_diff_and_an_order() {
+        let dir = folder_with(&["b.txt", "plan.dwg"]);
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(dir.path()).expect("long path");
+        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        until_end(&receiver);
+        let plan = state(&listings, id)
+            .read()
+            .live_ids()
+            .into_iter()
+            .find(|&entry| state(&listings, id).read().entries().name(entry as usize) == "plan.dwg")
+            .expect("plan.dwg");
+
+        std::fs::write(dir.path().join("a.txt"), b"new").expect("write");
+        std::fs::rename(dir.path().join("plan.dwg"), dir.path().join("გეგმა.dwg")).expect("rename");
+        std::fs::remove_file(dir.path().join("b.txt")).expect("delete");
+
+        // Until the stream shows all three: they may come in one diff or several.
+        let mut changed = BTreeSet::new();
+        let mut gone = BTreeSet::new();
+        let mut last_order = Vec::new();
+        while gone.is_empty() || changed.len() < 2 {
+            let diff = next(&receiver);
+            let (ids, removed) = diff_ids(&diff);
+            assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "ascending");
+            changed.extend(ids);
+            gone.extend(removed);
+            last_order = next(&receiver);
+            assert_eq!(word(&last_order, 0), ORDER, "an order follows every diff");
+        }
+        assert!(changed.contains(&plan), "the renamed file kept its id");
+        assert_eq!(gone.len(), 1);
+        assert_eq!(
+            ordered_names(&listings, id, &last_order),
+            ["a.txt", "გეგმა.dwg"]
+        );
+        // The removed entry no longer opens and has no icon.
+        let gone = *gone.first().expect("one");
+        let removed = ListingTarget::Entry {
+            listing: id,
+            entry: gone,
+        };
+        assert!(listings.resolve(removed).is_err());
+        assert!(listings.entry(id, gone).is_none());
+    }
+
+    #[test]
+    fn a_deleted_folder_ends_the_stream_with_not_found() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let watched = dir.path().join("ნახაზები");
+        std::fs::create_dir(&watched).expect("mkdir");
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        listings.open_folder(
+            1,
+            long_path(&watched).expect("long path"),
+            Sort::default(),
+            channel,
+        );
+        until_end(&receiver);
+
+        std::fs::remove_dir(&watched).expect("a watched folder can be deleted");
+
+        let messages = until_end(&receiver);
+        let error = messages.last().expect("an error");
+        let json: serde_json::Value = serde_json::from_slice(&error[16..]).expect("JSON");
+        assert_eq!(json["code"], "NotFound");
     }
 
     #[test]

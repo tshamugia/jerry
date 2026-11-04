@@ -47,8 +47,9 @@ jerry/
   design/               UI spec, tokens.css, design canvas snapshot
   docs/                 PRD, Tech PRD, assets/, adr/, checklists/ (manual test checklists per phase)
   .github/              CI (workflows/ci.yml: what `pnpm check` runs + bindings check, windows-latest),
-                        PR title check (workflows/pr-title.yml), release on `v*` tags
-                        (workflows/release.yml), PR template
+                        core benchmarks on PRs, base vs head (workflows/bench.yml, scripts/bench.sh,
+                        scripts/bench-compare.mjs), PR title check (workflows/pr-title.yml),
+                        release on `v*` tags (workflows/release.yml), PR template
 ```
 
 Dependency direction: `src-tauri` → `jerry-core`, `jerry-win`. `jerry-core` depends on neither `jerry-win` nor Tauri. When core needs a Shell capability (for example, recycle a replaced file), it defines a trait, `jerry-win` implements it and `src-tauri` wires them together, so core stays testable with fakes.
@@ -142,6 +143,7 @@ Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development w
 | Type check | `pnpm typecheck` |
 | UI tests | `pnpm test` |
 | Rust tests | `cargo nextest run --workspace` |
+| Core benchmarks (listing, sort) | `cargo bench -p jerry-core` (synthetic folders in `%TEMP%\jerry-synth`) |
 | Everything CI checks, before a PR | `pnpm check` |
 | Regenerate IPC bindings | `pnpm bindings` (debug runs of the app also refresh them) |
 | Update CHANGELOG.md for a release | `pnpm changelog --tag vX.Y.Z` (git-cliff, `cliff.toml`) |

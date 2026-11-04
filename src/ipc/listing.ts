@@ -11,12 +11,14 @@ import { HEADER_BYTES, messageHeader, stream } from "./channel";
 /**
  * Folder listings. `listing_open` streams binary messages (ADR-0001, layout in
  * `src-tauri/src/listing.rs`): batches of entries as columns, then their order and one done
- * message, or an error message. `listing_sort` answers with an order message too. Every message
- * starts with the 16-byte header, so the typed-array views below are aligned and copy nothing.
+ * message; then, while the listing is open, a diff and a new order for every change in the
+ * folder; or an error message. `listing_sort` sends its order through the same stream. Every
+ * message starts with the 16-byte header, so the typed-array views below are aligned and copy
+ * nothing.
  */
 
 /** Message kinds: the header's first `u32`. */
-export const ListingKind = { batch: 1, order: 2, done: 3, error: 4 } as const;
+export const ListingKind = { batch: 1, order: 2, done: 3, error: 4, diff: 5 } as const;
 
 /** Columns in the order message's header, by their code. */
 const SORT_COLUMNS: readonly SortColumn[] = [
@@ -32,10 +34,11 @@ const SORT_COLUMNS: readonly SortColumn[] = [
 const DESCENDING = 1;
 const FOLDERS_FIRST = 2;
 
-/** Entries `firstId` to `firstId + names.length - 1` of a listing, as columns. */
-export interface ListingBatch {
-  kind: "batch";
-  firstId: number;
+/**
+ * Entries as columns: entry `i` is `names[i]`, `sizes[i]` and so on. Batches and diffs carry
+ * them the same way.
+ */
+export interface ListingEntries {
   /** For display. An unpaired surrogate (a name that isn't valid Unicode) shows as U+FFFD. */
   names: string[];
   /** Bytes, exact up to 2^53. Folders are 0. */
@@ -51,12 +54,28 @@ export interface ListingBatch {
   iconKeys: Uint32Array;
 }
 
+/** Entries `firstId` to `firstId + names.length - 1` of a listing. */
+export interface ListingBatch extends ListingEntries {
+  kind: "batch";
+  firstId: number;
+}
+
 /**
- * The listing's entries in display order, by `sort`: entry ids, each once. The stream sends one
- * once the whole folder is in, right before done; `sort` returns one for a new sort. Apply only
- * an order whose `sort` is the tab's current one: an order for an earlier sort can still be on
- * its way. An empty order changes nothing (a sort while the folder is still being read: the
- * stream's order follows it).
+ * What changed in the folder, collected over 100 ms. Entry `i` has id `ids[i]`, ascending: an id
+ * the listing already has is that entry changed (a renamed entry keeps its id), the others are
+ * new and continue the listing's ids in order. `removed` ids are gone for good. An order follows.
+ */
+export interface ListingDiff extends ListingEntries {
+  kind: "diff";
+  ids: Uint32Array;
+  removed: Uint32Array;
+}
+
+/**
+ * The entries the folder has, in display order by `sort`: entry ids, each once. The stream sends
+ * one once the whole folder is in, right before done, one after every diff, and one for every
+ * `sort` once the folder is in. Apply only an order whose `sort` is the tab's current one: an
+ * order for an earlier sort can still be on its way.
  */
 export interface ListingOrder {
   kind: "order";
@@ -64,7 +83,7 @@ export interface ListingOrder {
   ids: Uint32Array;
 }
 
-/** The whole folder has arrived. */
+/** The whole folder has arrived. Diffs follow while the listing is open. */
 export interface ListingDone {
   kind: "done";
   count: number;
@@ -73,33 +92,39 @@ export interface ListingDone {
   rustMs: number;
 }
 
-/** Reading the folder failed; nothing follows. */
+/** Reading the folder failed, or the folder went away (`NotFound`, `DeviceGone`); nothing follows. */
 export interface ListingFailed {
   kind: "error";
   error: JerryError;
 }
 
-export type ListingMessage = ListingBatch | ListingOrder | ListingDone | ListingFailed;
+export type ListingMessage =
+  | ListingBatch
+  | ListingOrder
+  | ListingDone
+  | ListingFailed
+  | ListingDiff;
 
 /** An open listing. Call `close` when its tab closes or goes to another folder. */
 export interface OpenListing extends ListingOpened {
   /**
-   * Sorts the listing by `sort` from now on and resolves with its new order, only entry ids.
-   * Fails with `NotFound` once the listing is closed.
+   * Sorts the listing by `sort` from now on. The new order comes through the stream, after any
+   * diff before it; while the folder is still being read, the stream's own order follows the new
+   * sort. Fails with `NotFound` once the listing is closed.
    */
   sort: (
     sort: Sort,
-  ) => Promise<{ status: "ok"; data: ListingOrder } | { status: "error"; error: JerryError }>;
-  /** Stops the listing; messages still on their way are dropped. */
+  ) => Promise<{ status: "ok"; data: null } | { status: "error"; error: JerryError }>;
+  /** Stops the listing and its watcher; messages still on their way are dropped. */
   close: () => Promise<void>;
 }
 
 /**
  * Opens `target` for `tab`, sorted by `sort`, and calls `onMessage` with each message, in
- * order: batches, then the order and one done message, or an error message. Resolves once the
- * listing has started, often after its first batch has arrived. Fails only when `target` can't
- * be used (a relative path, an entry of a closed listing); errors reading the folder arrive as an
- * error message.
+ * order: batches, then the order and one done message, then a diff and an order for every change
+ * in the folder, or an error message. Resolves once the listing has started, often after its
+ * first batch has arrived. Fails only when `target` can't be used (a relative path, an entry of a
+ * closed listing); errors reading the folder arrive as an error message.
  */
 export async function openListing(
   tab: number,
@@ -118,12 +143,7 @@ export async function openListing(
     return result;
   }
   const { id } = result.data;
-  const resort = async (next: Sort) => {
-    const sorted = await commands.listingSort(id, next);
-    return sorted.status === "error"
-      ? sorted
-      : { status: "ok" as const, data: decodeOrder(sorted.data) };
-  };
+  const resort = (next: Sort) => commands.listingSort(id, next);
   const close = () => {
     open = false;
     return commands.listingClose(id);
@@ -141,7 +161,9 @@ export function decodeListingMessage(message: ArrayBuffer): ListingMessage {
   const [kind, a = 0, b = 0, c = 0] = messageHeader(message);
   switch (kind) {
     case ListingKind.batch:
-      return decodeBatch(message, a, b, c);
+      return { kind: "batch", firstId: b, ...decodeEntries(message, HEADER_BYTES, a, c) };
+    case ListingKind.diff:
+      return decodeDiff(message, a, b, c);
     case ListingKind.order:
       return decodeOrder(message);
     case ListingKind.done:
@@ -177,13 +199,31 @@ function decodeOrder(message: ArrayBuffer): ListingOrder {
   };
 }
 
-function decodeBatch(
+function decodeDiff(
   message: ArrayBuffer,
   count: number,
-  firstId: number,
+  removedCount: number,
   nameUnits: number,
-): ListingBatch {
-  let offset = HEADER_BYTES;
+): ListingDiff {
+  const ids = new Uint32Array(message, HEADER_BYTES, count);
+  const removed = new Uint32Array(
+    message,
+    HEADER_BYTES + count * Uint32Array.BYTES_PER_ELEMENT,
+    removedCount,
+  );
+  // Padded so the entries' f64 columns start on 8 bytes.
+  const words = count + removedCount;
+  const entriesAt = HEADER_BYTES + (words + (words % 2)) * Uint32Array.BYTES_PER_ELEMENT;
+  return { kind: "diff", ids, removed, ...decodeEntries(message, entriesAt, count, nameUnits) };
+}
+
+/** `count` entries laid out from `offset` on, as batches and diffs carry them. */
+function decodeEntries(
+  message: ArrayBuffer,
+  offset: number,
+  count: number,
+  nameUnits: number,
+): ListingEntries {
   const sizes = new Float64Array(message, offset, count);
   offset += count * Float64Array.BYTES_PER_ELEMENT;
   const modified = new Float64Array(message, offset, count);
@@ -204,5 +244,5 @@ function decodeBatch(
     names[i] = text.slice(start, end);
     start = end;
   }
-  return { kind: "batch", firstId, names, sizes, modified, attributes, iconKeys };
+  return { names, sizes, modified, attributes, iconKeys };
 }

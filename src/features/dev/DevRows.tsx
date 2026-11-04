@@ -36,7 +36,7 @@ export function DevRows({
   viewport,
 }: {
   entries: DevEntries;
-  /** Entries in so far; a change re-renders. */
+  /** Rows: the order's length, or every entry while there is no order yet. */
   count: number;
   rowHeight: number;
   viewport: RefObject<HTMLDivElement | null>;

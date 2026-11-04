@@ -228,13 +228,12 @@ impl SortKeys {
 }
 
 /// Everything needed to sort a listing's entries by any column without comparing strings
-/// again. Built once per listing.
+/// again. Built once per listing, and again when names change.
 #[derive(Debug, Default, Clone)]
 pub struct SortIndex {
-    /// Entry ids in ascending natural name order.
+    /// The indexed entry ids in ascending natural name order. An entry's position here is its
+    /// name rank.
     by_name: Vec<u32>,
-    /// `name_rank[id]`: the entry's position in `by_name`.
-    name_rank: Vec<u32>,
     /// `extension_rank[id]`: the rank of the entry's extension, from 1 (no extension) up; equal
     /// extensions (case ignored) share a rank. Folders are 0.
     extension_rank: Vec<u32>,
@@ -243,41 +242,51 @@ pub struct SortIndex {
 }
 
 impl SortIndex {
-    /// Builds the keys and ranks of `entries`, in parallel on the rayon pool. CPU work: call it
-    /// on a background thread.
+    /// Builds the keys and ranks of all `entries`, in parallel on the rayon pool. CPU work: call
+    /// it on a background thread.
     pub fn build(entries: &Entries, types: &dyn TypeNames) -> Self {
+        Self::build_for(entries, (0..entries.len() as u32).collect(), types)
+    }
+
+    /// Like [`SortIndex::build`], for entries `ids` only: a live listing leaves out the entries
+    /// its folder no longer has.
+    pub fn build_for(entries: &Entries, mut ids: Vec<u32>, types: &dyn TypeNames) -> Self {
         let started = Instant::now();
         let keys = SortKeys::build(entries);
         let keys_ms = ms_since(started);
 
-        let mut by_name: Vec<u32> = (0..entries.len() as u32).collect();
-        by_name.par_sort_unstable_by(|&a, &b| {
+        ids.par_sort_unstable_by(|&a, &b| {
             let (a, b) = (a as usize, b as usize);
             keys.get(a)
                 .cmp(keys.get(b))
                 .then_with(|| entries.name_utf16(a).cmp(entries.name_utf16(b)))
                 .then(a.cmp(&b))
         });
-        let mut name_rank = vec![0u32; entries.len()];
-        for (rank, &id) in by_name.iter().enumerate() {
-            name_rank[id as usize] = rank as u32;
-        }
         let (extension_rank, type_rank) = extension_and_type_ranks(entries, types);
         tracing::debug!(
-            entries = entries.len(),
+            entries = ids.len(),
             keys_ms,
             ms = ms_since(started),
             "sort index built"
         );
         Self {
-            by_name,
-            name_rank,
+            by_name: ids,
             extension_rank,
             type_rank,
         }
     }
 
-    /// How many entries the index covers: ids `0..len`.
+    /// This index without entries `removed` (ascending ids): what is left keeps its ranks, so
+    /// removing entries needs no new keys.
+    pub fn without(&self, removed: &[u32]) -> Self {
+        let mut index = self.clone();
+        index
+            .by_name
+            .retain(|id| removed.binary_search(id).is_err());
+        index
+    }
+
+    /// How many entries the index covers.
     pub fn len(&self) -> usize {
         self.by_name.len()
     }
@@ -287,7 +296,8 @@ impl SortIndex {
     }
 
     /// The index's entry ids in display order. `entries` must be the ones the index was built
-    /// from; entries added after it are left out. CPU work in parallel: a few ms for 100 000.
+    /// from, their sizes and dates as they are now; entries added after it are left out. CPU work
+    /// in parallel: a few ms for 100 000.
     pub fn order(&self, entries: &Entries, sort: Sort) -> Vec<u32> {
         // One u128 per entry: group (bit 96) | primary value (bits 32..96) | name rank (bits
         // 0..32). The rank is unique, so sorting the integers gives a total order, and the low
@@ -299,10 +309,13 @@ impl SortIndex {
                 (value, rank)
             }
         };
-        let mut packed: Vec<u128> = (0..self.len())
-            .into_par_iter()
+        let mut packed: Vec<u128> = self
+            .by_name
+            .par_iter()
+            .enumerate()
             .with_min_len(ORDER_CHUNK)
-            .map(|id| {
+            .map(|(rank, &id)| {
+                let id = id as usize;
                 let group = u128::from(!(sort.folders_first && entries.is_dir(id)));
                 let value = match sort.column {
                     SortColumn::Name => 0,
@@ -312,7 +325,7 @@ impl SortIndex {
                     SortColumn::Created => entries.created()[id],
                     SortColumn::Extension => u64::from(self.extension_rank[id]),
                 };
-                let (value, rank) = flip(value, self.name_rank[id]);
+                let (value, rank) = flip(value, rank as u32);
                 (group << 96) | (u128::from(value) << 32) | u128::from(rank)
             })
             .collect();
@@ -756,6 +769,31 @@ mod tests {
         assert_eq!(text("ანგარიში.ფაილი"), "ფაილი");
         assert_eq!(text("noext"), "");
         assert_eq!(text("trailing."), "");
+    }
+
+    #[test]
+    fn an_index_without_some_entries_sorts_like_one_built_without_them() {
+        let list = entries(&[
+            "file10.txt",
+            "ნახაზი.dwg",
+            "file2.txt",
+            "ფოლდერი\\",
+            "a.pdf",
+        ]);
+        let full = SortIndex::build(&list, &PlainTypeNames);
+        let removed = full.without(&[1, 4]);
+        let rebuilt = SortIndex::build_for(&list, vec![0, 2, 3], &PlainTypeNames);
+        assert_eq!(removed.len(), 3);
+        for column in COLUMNS {
+            for descending in [false, true] {
+                let sort = by(column, descending);
+                assert_eq!(removed.order(&list, sort), rebuilt.order(&list, sort));
+            }
+        }
+        assert_eq!(
+            names_in(&list, &removed.order(&list, Sort::default())),
+            ["ფოლდერი", "file2.txt", "file10.txt"]
+        );
     }
 
     #[test]
