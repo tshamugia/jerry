@@ -43,6 +43,7 @@ Spike-მა (02–03.11.2026) ხუთი ტექნიკა შეცვ�
 | აპის ჩარჩო: ფანჯრები, IPC, ინსტალერი | Tauri 2 |
 | ენა | Rust stable, edition 2024 |
 | Win32, COM, Shell, OLE, Cloud Files | `windows` crate (Microsoft-ის ოფიციალური bindings) |
+| WebView2-ის პარამეტრები, რომლებსაც Tauri არ აჩენს (browser-ის კლავიშები) | `webview2-com` (იგივე ვერსია, რასაც wry იყენებს) |
 | ასინქრონულობა | tokio (Tauri-ს runtime) |
 | პარალელური გამოთვლები: ძებნა, დალაგება | rayon |
 | შენახვა | rusqlite (bundled SQLite, WAL) + rusqlite\_migration |
@@ -334,7 +335,9 @@ src/
 - Caption ღილაკებს (46×40) React ხატავს, თაგვს კი `jerry-win`-ის უხილავი input ფანჯარა იღებს ღილაკების თავზე (`WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` child, Windows Terminal-ის მოდელი): top-level ფანჯრის `WM_NCHITTEST` გვერდის თავზე არ მოდის, რადგან WebView2-ის ფანჯრები browser process-ს ეკუთვნის. Input ფანჯარა აბრუნებს `HTMINBUTTON` / `HTMAXBUTTON` / `HTCLOSE`-ს (Windows 11-ის Snap Layouts ამას ითხოვს), კლიკზე parent-ს `WM_SYSCOMMAND`-ს უგზავნის, hover / pressed / maximized / active მდგომარეობას კი `Channel`-ით React-ს. Maximize-ის ზომას tao-ს `WM_NCCALCSIZE` სამუშაო არით ზღუდავს. Mica: `transparent: true` + `DWMWA_SYSTEMBACKDROP_TYPE = DWMSBT_MAINWINDOW` build 22621+-ზე; Windows 10-ზე `--jerry-mica` ერთფეროვანი ფერია (spike #7).
 - ყოველი ფანჯარა ცალკე WebView2-ია საერთო browser process-ით.
 - ფანჯარა ჩნდება პირველი რენდერის შემდეგ. ფანჯარასა და WebView2-ს თემის ფონი აქვს (`background_color` = `--jerry-mica`): თემა Rust-ში Windows-იდან ფანჯრის შექმნამდე იკითხება. მხოლოდ დამალვა ჩვენებამდე ციმციმს ვერ აცილებს, რადგან `show`-ის მომენტში Chromium-ს კადრი ჯერ არ აქვს: ფონის გარეშე ფანჯარა 8 გაშვებიდან 8-ში თეთრი ჩანდა, ფონით 11-დან 0-ში (spike #1).
-- WebView2-ის პარამეტრები: `AreBrowserAcceleratorKeysEnabled = false` (Ctrl+P, Ctrl+F, Ctrl+R და F5 Jerry-ს ეკუთვნის), ნაგულისხმევი context menu და zoom გამორთულია.
+- მთავარ ფანჯარას Rust `setup`-ში ქმნის (`create: false`), გამჭვირვალედ (Mica-სთვის), თემის პარამეტრით: `setup` ბაზას 250 ms-მდე ელოდება, მერე ნაგულისხმევ პარამეტრებს იღებს. #22-ში ლოდინი 0 ms იყო: ბაზა Tauri-ის პარალელურად 14–52 ms-ში იხსნება (debug). Mica-ს გარეშე (პარამეტრი გამორთულია ან Windows 10) ფანჯარას `--jerry-mica`-ს ფერი აქვს, Mica-თი ფონი გამჭვირვალეა და Mica ჩანს. UI ფანჯარას (`app_ready`) პარამეტრებისა და `appearance_get`-ის მოსვლის და ჩარჩოს პირველი commit-ის შემდეგ აჩენს, ამიტომ პირველი კადრი უკვე სწორი თემით, სიმჭიდროვით, accent-ით და ზონების ზომებით იხატება.
+- WebView2-ის პარამეტრები: `AreBrowserAcceleratorKeysEnabled = false` (Ctrl+P, Ctrl+F, Ctrl+R და F5 Jerry-ს ეკუთვნის), ნაგულისხმევი context menu და zoom გამორთულია. Tauri პირველ ორს არ ავლენს: Rust ფანჯრის შექმნისას `with_webview`-ით `ICoreWebView2Settings3`-ს ცვლის (`webview2-com`, wry-ის ვერსია). Dev build-ში ნაგულისხმევი context menu რჩება DevTools-ის «Inspect»-ისთვის. Zoom-ს (Ctrl+wheel, Ctrl+±, pinch) Tauri-ის `zoomHotkeysEnabled: false` თიშავს. შემოწმდა #22-ში ნამდვილ ფანჯარაში: F5, Ctrl+R, Ctrl+P და Ctrl+F არაფერს აკეთებს; კონტროლად, ჩართული კლავიშებით, Ctrl+F find bar-ს აჩენს და F5 გვერდს თავიდან ტვირთავს.
+- ზონები: title bar 40, sidebar 232, ორი პანელი 1 px გამყოფით, preview 288, ტრანსფერების პანელი 56 (მხოლოდ ტრანსფერის დროს), status bar 28. Sidebar-ის, preview-ს და პანელების გამყოფის გადათრევა ზომას ცვლის, ხელის აშვებისას კი ინახება (`sidebarWidth`, `previewWidth`, `paneSplit` პარამეტრებში). პანელი მინიმუმ 240 px-ია: ვიწრო ფანჯარაში ჯერ preview იმალება, მერე sidebar (`src/app/layout.ts`).
 
 ### კლავიატურა და ბრძანებები
 
@@ -347,7 +350,10 @@ src/
 ### გარეგნობა
 
 - Design tokens CSS ცვლადებად (Tailwind 4 `@theme`): ფერები, accent, სიმჭიდროვე, შრიფტის მასშტაბი. ცვლილება მყისიერია, გადატვირთვის გარეშე.
-- System თემა: Tauri-ს `theme` და მისი ცვლილების მოვლენა.
+- System თემა: Tauri-ს `theme` და მისი ცვლილების მოვლენა. თემის პარამეტრი ყველა ფანჯრის Tauri `theme`-ს ცვლის (System = `None`, Windows-ს მიჰყვება; Mica-ც მის ფერს იღებს). WebView2-ის `prefers-color-scheme` ფანჯრის თემას მიჰყვება (tauri-runtime-wry მას `ThemeChanged`-ზე ცვლის), ამიტომ UI System თემას ამ media query-დან კითხულობს. UI `<html>`-ზე `data-theme`, `data-density`, `data-accent` და `data-backdrop` ატრიბუტებს სვამს, დანარჩენს `design/tokens.css` აკეთებს.
+- Accent: Match Windows = `UISettings`-ის AccentDark1 ღია ზედაპირზე და AccentLight2 მუქზე (ნაგულისხმევი ლურჯისთვის #005FB8 და #60CDFF, დიზაინის ფერები). Windows-ის accent-ის ცვლილება (`ColorValuesChanged`) ყველა ფანჯარას `appearance:changed`-ით მიდის. Jerry-ის ექვსი ფერი `tokens.css`-შია (`data-accent`).
+- Mica პარამეტრია: გამორთვისას `DWMSBT_NONE`, გვერდი კი Mica-ს ზონებს `--jerry-mica`-ს ფერით ხატავს. თუ `DwmSetWindowAttribute` ვერ მოხერხდა, `appearance:changed` UI-ს ეუბნება, რომ Mica აღარ ჩანს.
+- სიმჭიდროვე: Ctrl+Alt+D ან status bar-ის გადამრთველი. Ctrl+Alt+D ჯერ `src/app/shortcuts.ts`-შია (`KeyboardEvent.code`), #24-ში ბრძანებების რეესტრში გადავა.
 - შრიფტი: Segoe UI Variable. ინტერფეისი ინგლისურია, მაგრამ ფაილის სახელები ხშირად ქართულია. Segoe UI Variable-ში ქართული გლიფი არ არის, ამიტომ ქართულ ასოებს Chromium stack-ის მეორე ოჯახიდან, Segoe UI-დან იღებს (ყველა წონაში: მხედრული, მთავრული, ასომთავრული, ნუსხური); ჩაშენებული ქართული შრიფტი საჭირო არ არის (spike #8). ამიტომ `"Segoe UI"` `--jerry-font`-ში მეორე რჩება. ქართული ლათინურზე \~1.32-ჯერ განიერია, ამიტომ ტაბზე და breadcrumb-ში უფრო ადრე იჭრება.
 
 ### ტექსტები
@@ -380,7 +386,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | ბრძანება (`invoke`) | მოთხოვნა → პასუხი | `rename`, `create_folder`, `delete`, `open`, `settings_set` |
 | ნაკადი (Tauri `Channel`) | ეტაპობრივი შედეგი ერთი მომხმარებლისთვის | listing-ის batch-ები და diff-ები, ძებნის შედეგები |
-| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `clipboard:changed`, `settings:changed`, `history:changed`, `dnd:*` |
+| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
 | Custom protocol | ბინარული მონაცემი `<img>` და `<video>`-სთვის | `icon://`, `thumb://`, asset protocol preview-სთვის |
 
 ### ბრძანებები
@@ -397,7 +403,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | Shell | `open`, `open_with_list`, `open_with`, `show_native_menu`, `show_in_explorer`, `open_terminal`, `properties` |
 | ძებნა | `search_start`, `search_cancel` |
 | სისტემა | `drives_list`, `eject`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
-| მონაცემები | `settings_get`, `settings_set`, `favorites_*`, `session_save`, `export_settings`, `import_settings` |
+| მონაცემები | `settings_get`, `settings_set`, `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_save`, `export_settings`, `import_settings` |
 
 ### ფორმატი და შეცდომები
 

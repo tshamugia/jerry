@@ -9,8 +9,9 @@ pub mod jobs;
 pub mod listing;
 pub mod logging;
 pub mod storage;
+pub mod window;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use specta_typescript::{Typescript, semantic};
 use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
@@ -50,7 +51,8 @@ fn app_version(app: AppHandle) -> String {
 /// only now, so it never flashes white.
 #[tauri::command]
 #[specta::specta]
-fn app_ready(window: WebviewWindow) {
+fn app_ready(app: AppHandle, window: WebviewWindow) {
+    window::before_show(&app);
     show(&window);
 }
 
@@ -72,6 +74,7 @@ macro_rules! commands {
             listing::listing_close,
             storage::settings_get,
             storage::settings_set,
+            window::appearance_get,
             $($dev)*
         ]
     };
@@ -94,7 +97,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
 
     Builder::<tauri::Wry>::new()
         .commands(commands)
-        .events(collect_events![storage::SettingsChanged])
+        .events(collect_events![
+            storage::SettingsChanged,
+            window::AppearanceChanged
+        ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
         .disable_serde_phases()
@@ -122,7 +128,7 @@ pub fn run() -> tauri::Result<()> {
     }
 
     let app = tauri::Builder::default()
-        .manage(db)
+        .manage(db.clone())
         .manage(listing::Listings::default())
         .manage(jerry_win::icons::Icons::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
@@ -138,17 +144,25 @@ pub fn run() -> tauri::Result<()> {
                 tracing::error!(%error, "main thread setup failed: OLE and run_on_main won't work");
             }
 
+            // The window gets its theme and Mica at creation, so it needs the settings now.
+            let waited = Instant::now();
+            let settings = db.settings_within(window::SETTINGS_WAIT);
+            tracing::info!(
+                ms = waited.elapsed().as_millis(),
+                "appearance settings for the main window"
+            );
+            app.manage(window::Look::start(app.handle()));
+            let window = window::create_main(app, &settings.unwrap_or_default())?;
+
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
-            if let Some(window) = app.get_webview_window("main") {
-                std::thread::spawn(move || {
-                    std::thread::sleep(SHOW_FALLBACK);
-                    if !window.is_visible().unwrap_or(true) {
-                        tracing::warn!("UI did not report ready; showing the window anyway");
-                        show(&window);
-                    }
-                });
-            }
+            std::thread::spawn(move || {
+                std::thread::sleep(SHOW_FALLBACK);
+                if !window.is_visible().unwrap_or(true) {
+                    tracing::warn!("UI did not report ready; showing the window anyway");
+                    show(&window);
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())?;

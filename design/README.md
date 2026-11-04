@@ -4,7 +4,7 @@ The visual source of truth for Jerry's UI. The PRD says **what** Jerry does; thi
 
 - **Live canvas (editable source):** https://claude.ai/artifact/SyhnbNFneF1wHCtgTWaB76 ("Jerry — Main Window", Design canvas)
 - **Local snapshot:** `design/project/` (pulled 2026-11-01, version `1793480700-8711`). Re-pull after canvas edits so the copy doesn't drift.
-- **Tokens for the app:** [`tokens.css`](tokens.css): light/dark/compact as CSS variables (`--jerry-*`). When scaffolding the React app, import it and map the colors into Tailwind 4 `@theme` (Tech PRD: "Design tokens as CSS variables").
+- **Tokens for the app:** [`tokens.css`](tokens.css): light/dark/compact as CSS variables (`--jerry-*`), mapped into Tailwind 4 `@theme` in `src/app/styles.css` (Tech PRD: "Design tokens as CSS variables"). The app switches them with attributes on `<html>`: `data-theme`, `data-density`, `data-accent` (Jerry's six colors) and `data-backdrop="mica"` (Mica areas turn transparent); "Match Windows" sets `--jerry-accent-base` / `--jerry-accent-base-dark` from the Windows accent (AccentDark1 / AccentLight2).
 
 The `.dc.html` files are Design Component pages: they render only inside the canvas (they need its `support.js` runtime). Read them as reference markup, not as code to ship. All colors in `Main.dc.html` come from the `c` object in its `renderVals()`, sizes from `d`.
 

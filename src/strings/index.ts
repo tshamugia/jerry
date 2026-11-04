@@ -17,7 +17,39 @@ const sortColumns: Record<SortColumn, string> = {
 
 export const strings = {
   appName: "Jerry",
-  version: (version: string) => `Version ${version}`,
+  /** The window's zones. */
+  frame: {
+    sidebar: "Navigation",
+    leftPane: "Left pane",
+    rightPane: "Right pane",
+    activePane: (pane: string) => `${pane}, active`,
+    preview: "Preview",
+    transfers: "Transfers",
+    resizeSidebar: "Resize sidebar",
+    resizePanes: "Resize panes",
+    resizePreview: "Resize preview",
+  },
+  /** A pane's toolbar. */
+  toolbar: {
+    back: "Back (Alt+Left)",
+    forward: "Forward (Alt+Right)",
+    up: "Up (Alt+Up)",
+    refresh: "Refresh (Ctrl+R)",
+    palette: "Command palette (Ctrl+Shift+P)",
+    filter: "Quick filter",
+    filterPlaceholder: "Filter this folder",
+    filterKey: "Ctrl+F",
+    view: "View",
+    details: "Details view (Ctrl+Shift+1)",
+    list: "List view (Ctrl+Shift+2)",
+    grid: "Grid view (Ctrl+Shift+3)",
+  },
+  /** The status bar. */
+  status: {
+    density: "Row density (Ctrl+Alt+D)",
+    comfortable: "Comfortable rows",
+    compact: "Compact rows",
+  },
   /** The dev panel (dev builds only). */
   dev: {
     title: "Dev checks",

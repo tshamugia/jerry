@@ -4,33 +4,7 @@ import { waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { Settings } from "../ipc";
 import { setSetting, syncSettings, useSettings } from "./settings";
-
-const defaults: Settings = {
-  theme: "system",
-  accent: "windows",
-  density: "comfortable",
-  fontScale: 100,
-  mica: true,
-  dateFormat: "DD.MM.YYYY",
-  startup: { kind: "previousSession" },
-  showHidden: false,
-  showExtensions: true,
-  foldersFirst: true,
-  defaultView: "details",
-  dualPane: true,
-  rememberFolderViews: true,
-  clickToOpen: "double",
-  confirmRecycle: false,
-  dragAction: "windows",
-  springLoadDelayMs: 700,
-  parallelTransfers: true,
-  notifyOnFinish: true,
-  startWithWindows: false,
-  keepRunning: true,
-  globalHotkey: "Ctrl+Alt+J",
-  openInJerry: false,
-  checkUpdates: true,
-};
+import { defaultSettings as defaults } from "./settings.testing";
 
 let stop: (() => void) | undefined;
 

@@ -42,6 +42,8 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "std",
     "tracing-log",
 ] }
+# WebView2 settings Tauri doesn't expose (browser keys off); the version wry already uses.
+webview2-com = "0.39"
 windows = "0.62"
 
 [workspace.lints.rust]

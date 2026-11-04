@@ -1,27 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { DevPanel } from "../features/dev/DevPanel";
 import { commands } from "../ipc";
-import { strings } from "../strings";
+import { useAppearance } from "../stores/appearance";
+import { useSettings } from "../stores/settings";
+import { Frame } from "./Frame";
+import { useDensityShortcut } from "./shortcuts";
 
-/** The window frame. For now an empty Jerry window; zones arrive with #22 and #23. */
+/**
+ * The window. It renders once the settings and the Windows appearance are known, so the first
+ * frame already has the right theme, density, accent and zone sizes; then the core shows the
+ * window, which was created hidden (no flash).
+ */
 export function App() {
-  const [version, setVersion] = useState<string>();
+  const settings = useSettings((state) => state.settings);
+  const appearance = useAppearance((state) => state.appearance);
+  const ready = settings !== undefined && appearance !== undefined;
+  const dev = useMemo(() => (import.meta.env.DEV ? <DevPanel /> : undefined), []);
 
   useEffect(() => {
-    // The window is created hidden; show it once the first render is committed (no white flash).
-    void commands.appReady();
-    void commands.appVersion().then(setVersion);
-  }, []);
+    if (ready) {
+      void commands.appReady();
+    }
+  }, [ready]);
+  useDensityShortcut();
 
-  return (
-    <div className="flex h-full flex-col bg-mica text-fg">
-      <header className="flex h-titlebar shrink-0 items-center px-4 text-small text-fg-2">
-        {strings.appName}
-      </header>
-      <main className="flex flex-1 flex-col items-center justify-center gap-6 bg-pane">
-        {version && <p className="text-fg-3 tabular-nums">{strings.version(version)}</p>}
-        {import.meta.env.DEV && <DevPanel />}
-      </main>
-    </div>
-  );
+  if (!settings || !appearance) {
+    return null;
+  }
+  return <Frame settings={settings} left={dev} />;
 }

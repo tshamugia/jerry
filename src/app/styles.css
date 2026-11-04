@@ -84,6 +84,36 @@
   --spacing-statusbar: var(--jerry-statusbar-h);
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
+  --spacing-active-pane-bar: var(--jerry-active-pane-bar);
+}
+
+/*
+ * With Mica on (Windows 11, `data-backdrop` set from the settings), Mica surfaces stay
+ * transparent so the backdrop shows through. Unlayered, so it beats the token defaults; Windows 10
+ * and "Mica background" off keep the flat color.
+ */
+:root[data-backdrop="mica"] {
+  --jerry-mica: transparent;
+}
+
+/*
+ * WebView2 turns `app-region: drag` into a native caption: move, double-click to maximize,
+ * Aero Snap, system menu. Interactive elements inside a drag region opt out with `no-drag`.
+ */
+@utility drag-region {
+  app-region: drag;
+}
+
+@utility no-drag {
+  app-region: no-drag;
+}
+
+/*
+ * The window's columns, shared by the title bar and the body, so each pane's tabs (#23) sit
+ * right over that pane and follow the divider. `--frame-columns` is set by the frame.
+ */
+@utility frame-columns {
+  grid-template-columns: var(--frame-columns);
 }
 
 @layer base {

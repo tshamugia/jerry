@@ -3,14 +3,14 @@
 //! storage itself is `jerry_core::storage`.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use jerry_core::JerryError;
 use jerry_core::job::run_job;
 use jerry_core::settings::Settings;
 use jerry_core::storage::Storage;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
@@ -27,25 +27,32 @@ pub fn db_path() -> Result<PathBuf, JerryError> {
 
 /// The database, once it is open. Clones share it.
 #[derive(Clone, Default)]
-pub struct Db(Arc<OnceLock<Result<Mutex<Storage>, JerryError>>>);
+pub struct Db(Arc<Shared>);
+
+#[derive(Default)]
+struct Shared {
+    storage: OnceLock<Result<Mutex<Storage>, JerryError>>,
+    /// Signalled once `storage` is set, for [`Db::settings_within`].
+    opened: (Mutex<()>, Condvar),
+}
 
 impl Db {
     /// Starts opening the database at `path` on its own thread and returns at once. If the file
     /// can't be used, Jerry runs on the defaults in memory, saves nothing and logs why.
     pub fn open(path: Result<PathBuf, JerryError>) -> Self {
         let db = Self::default();
-        let cell = Arc::clone(&db.0);
+        let shared = Arc::clone(&db.0);
         let opening = std::thread::Builder::new()
             .name("jerry-storage".into())
             .spawn(move || {
                 let started = Instant::now();
                 let storage = run_job("open storage", || open_or_in_memory(path));
                 tracing::info!(ms = started.elapsed().as_millis(), "storage ready");
-                let _ = cell.set(storage.map(Mutex::new));
+                shared.set(storage.map(Mutex::new));
             });
         if let Err(error) = opening {
             tracing::error!(%error, "can't start the storage thread");
-            let _ = db.0.set(Err(JerryError::internal()));
+            db.0.set(Err(JerryError::internal()));
         }
         db
     }
@@ -56,8 +63,35 @@ impl Db {
         &self,
         job: impl FnOnce(&mut Storage) -> Result<T, JerryError>,
     ) -> Result<T, JerryError> {
-        let storage = self.0.wait().as_ref().map_err(JerryError::clone)?;
+        let storage = self.0.storage.wait().as_ref().map_err(JerryError::clone)?;
         job(&mut storage.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// The settings, if the database opens within `timeout`; `None` (and a log line) if not.
+    /// For the window's start, which needs the theme but must not hang on a slow disk.
+    pub fn settings_within(&self, timeout: Duration) -> Option<Settings> {
+        let (lock, opened) = &self.0.opened;
+        let guard = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let (_guard, wait) = opened
+            .wait_timeout_while(guard, timeout, |()| self.0.storage.get().is_none())
+            .unwrap_or_else(PoisonError::into_inner);
+        if wait.timed_out() {
+            tracing::warn!(
+                ms = timeout.as_millis(),
+                "the database isn't open yet; using the default settings"
+            );
+            return None;
+        }
+        self.with(|storage| Ok(storage.settings().clone())).ok()
+    }
+}
+
+impl Shared {
+    fn set(&self, storage: Result<Mutex<Storage>, JerryError>) {
+        let _ = self.storage.set(storage);
+        // Taking the lock orders the set before a waiter's check, so no wake-up is lost.
+        drop(self.opened.0.lock().unwrap_or_else(PoisonError::into_inner));
+        self.opened.1.notify_all();
     }
 }
 
@@ -68,8 +102,9 @@ fn open_or_in_memory(path: Result<PathBuf, JerryError>) -> Result<Storage, Jerry
     })
 }
 
-/// Sent to every window when a setting changes, with all the settings.
-#[derive(Debug, Clone, Serialize, Type, Event)]
+/// Sent to every window when a setting changes, with all the settings. Rust hears it too
+/// (`window::apply`).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[tauri_specta(event_name = "settings:changed")]
 pub struct SettingsChanged(pub Settings);
 
@@ -128,6 +163,20 @@ mod tests {
 
         let theme = Db::open(Ok(path)).with(|storage| Ok(storage.settings().theme));
         assert_eq!(theme, Ok(Theme::Dark));
+    }
+
+    #[test]
+    fn settings_within_waits_for_the_database_but_not_forever() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = Db::open(Ok(dir.path().join("jerry.db")));
+        let settings = db.settings_within(Duration::from_secs(10));
+        assert_eq!(settings, Some(Settings::default()));
+
+        // A database that never opens: the wait ends with the timeout.
+        let never = Db::default();
+        let started = Instant::now();
+        assert_eq!(never.settings_within(Duration::from_millis(50)), None);
+        assert!(started.elapsed() >= Duration::from_millis(50));
     }
 
     #[test]
