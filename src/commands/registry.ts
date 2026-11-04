@@ -1,3 +1,4 @@
+import { focusFilter } from "../features/filter/focus";
 import { openOverlay } from "../stores/overlay";
 import { toggleDensity, toggleHidden, useSettings } from "../stores/settings";
 import { strings } from "../strings";
@@ -121,7 +122,7 @@ export const COMMANDS: readonly Command[] = [
   { id: "paste", group: "clipboard", keys: ["Ctrl+V"], context: "list" },
 
   // Search.
-  { id: "filter", group: "search", keys: ["Ctrl+F"], context: "global" },
+  { id: "filter", group: "search", keys: ["Ctrl+F"], context: "global", run: focusFilter },
   { id: "search", group: "search", keys: ["Ctrl+Shift+F"], context: "global" },
   { id: "openFileLocation", group: "search", keys: ["Ctrl+Shift+E"], context: "list" },
 

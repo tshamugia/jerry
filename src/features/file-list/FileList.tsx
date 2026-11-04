@@ -10,7 +10,6 @@ import {
 } from "react";
 import { type Density, entryIconUrl, IconKey } from "../../ipc";
 import { shownColumns } from "../../stores/columns";
-import { visibleRows } from "../../stores/entries";
 import { type Folder, useFolder } from "../../stores/folder";
 import { useSetting } from "../../stores/settings";
 import { type PaneSide, useWindow } from "../../stores/window";
@@ -18,6 +17,7 @@ import { errorText, strings } from "../../strings";
 import { ColumnHeader } from "./ColumnHeader";
 import { columnWidths } from "./cells";
 import { FileRow } from "./FileRow";
+import { useShownRows } from "./rows";
 
 /** Rows rendered past each edge of the view. */
 const OVERSCAN = 8;
@@ -44,15 +44,13 @@ export const FileList = memo(function FileList({
   const status = useFolder(folder, (state) => state.status);
   const error = useFolder(folder, (state) => state.error);
   const entries = useFolder(folder, (state) => state.entries);
-  const order = useFolder(folder, (state) => state.order);
-  const version = useFolder(folder, (state) => state.version);
+  const filter = useFolder(folder, (state) => state.filter);
   const listing = useFolder(folder, (state) => state.listing);
   const sort = useFolder(folder, (state) => state.sort);
   const layout = useFolder(folder, (state) => state.columns);
   const selected = useFolder(folder, (state) => state.selected);
   const focused = useFolder(folder, (state) => state.focused);
   const activePane = useWindow((state) => state.activePane === pane);
-  const showHidden = useSetting("showHidden") ?? false;
   const showExtensions = useSetting("showExtensions") ?? true;
   const foldersFirst = useSetting("foldersFirst") ?? true;
   const dateFormat = useSetting("dateFormat") ?? "DD.MM.YYYY";
@@ -61,12 +59,8 @@ export const FileList = memo(function FileList({
 
   useEffect(() => folder.setFoldersFirst(foldersFirst), [folder, foldersFirst]);
 
-  // `entries` and `order` change in place: `version` says when.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: version tracks in-place changes.
-  const rows = useMemo(
-    () => (status === "failed" ? new Uint32Array(0) : visibleRows(entries, order, showHidden)),
-    [status, entries, order, version, showHidden],
-  );
+  // Selection (#30) works on these rows, so it never reaches entries the filter hides.
+  const { rows, total } = useShownRows(folder);
   const columns = useMemo(() => shownColumns(layout), [layout]);
   // The same array while only widths change, so dragging an edge repaints no row.
   // biome-ignore lint/correctness/useExhaustiveDependencies: compared by content.
@@ -129,7 +123,9 @@ export const FileList = memo(function FileList({
           {strings.fileList.retry}
         </button>
       </>
-    ) : rows.length > 0 ? null : status === "ready" ? (
+    ) : rows.length > 0 ? null : filter !== "" && total > 0 ? (
+      strings.fileList.noMatch
+    ) : status === "ready" ? (
       strings.fileList.empty
     ) : slow ? (
       strings.fileList.loading
