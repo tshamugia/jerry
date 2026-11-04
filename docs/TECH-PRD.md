@@ -2,7 +2,7 @@
 
 ტექნიკური სპეციფიკაცია · Oct 31, 2026 · @Tengo
 
-> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 04.11.2026).
+> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 05.11.2026).
 
 ## მიმოხილვა
 
@@ -408,6 +408,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | ძებნა | `search_start`, `search_cancel` |
 | სისტემა | `drives_list`, `eject`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
 | მონაცემები | `settings_get`, `settings_set`, `keybindings_get` (შეცვლილი shortcut-ები), `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_save`, `export_settings`, `import_settings` |
+| ფანჯარა | `title_bar_attach` (caption ღილაკების მდგომარეობა, `Channel`), `title_bar_set_buttons`, `title_bar_press` (Narrator და კლავიატურა) |
 
 ### ფორმატი და შეცდომები
 
@@ -554,7 +555,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 **#6 Windows options:** ტექნიკა შემოწმდა 03.11.2026 ([#16](https://github.com/tshamugia/jerry/issues/16#issuecomment-6587473737)): ნამდვილ jerry.exe-ში "Send to → Compressed (zipped) folder" და WinRAR-ის ქვემენიუ ერთ ფაილზე, რამდენიმე ფაილზე, საქაღალდეზე, ქართულ სახელსა და MAX\_PATH-ზე გრძელ გზაზე მუშაობს; Properties, Esc და Jerry-ის საკუთარი verb-ები სწორად იქცევა. 7-Zip ამ კომპიუტერზე დაყენებული არ არის: WinRAR-ის ქვემენიუც გახსნისას ივსება, 7-Zip-ის შემოწმება კი ხელით დარჩა, ნამდვილ მაუსთან და კლავიატურასთან ერთად. ტექნიკა «Context menu» და «Thread-ების მოდელი» სექციებშია.
 
-**#7 Title bar:** ტექნიკა არჩეულია და ავტომატურად შემოწმდა 02.11.2026 ([#17](https://github.com/tshamugia/jerry/issues/17#issuecomment-6586199502)): hit-test კოდები, ფანჯრის სტილები, Mica და maximize-ის ზუსტი ზომა (client = სამუშაო არე) probe-ით და unit test-ებით დადასტურდა, ზოლი პანელების საზღვარზე იყოფა. ხელით ჯერ დარჩა მთავარი კითხვა: აღწევს თუ არა რეალური თაგვი layered input ფანჯრამდე (hover, კლიკი, Snap Layouts flyout); ასევე Aero Snap, system menu, auto-hide taskbar და DPI-ის ცვლილება. Windows 10-ზე არ შემოწმებულა. ტექნიკა «ფანჯარა და ტაბები» სექციაშია.
+**#7 Title bar:** ტექნიკა არჩეულია და ავტომატურად შემოწმდა 02.11.2026 ([#17](https://github.com/tshamugia/jerry/issues/17#issuecomment-6586199502)): hit-test კოდები, ფანჯრის სტილები, Mica და maximize-ის ზუსტი ზომა (client = სამუშაო არე) probe-ით და unit test-ებით დადასტურდა, ზოლი პანელების საზღვარზე იყოფა. ნამდვილი თაგვით შემოწმდა #23-ში, 05.11.2026: hover, კლიკი, Snap Layouts flyout, Aero Snap და system menu მუშაობს. Layered ფანჯარას SetLayeredWindowAttributes სჭირდებოდა, რომ თაგვს დაენახა (ADR-0004). Auto-hide taskbar და DPI-ის ცვლილება v0.1-ის ჩეკლისტზეა (#47). Windows 10-ზე არ შემოწმებულა. ტექნიკა «ფანჯარა და ტაბები» სექციაშია.
 
 **#8 ქართული:** ავტომატურად გავლილია 02.11.2026 ([#18](https://github.com/tshamugia/jerry/issues/18#issuecomment-6587064115)): ქართული სუფთად ჩანს სიაში, ტაბზე, breadcrumb-ში, sidebar-სა და ფანჯრის სათაურში, ჩაშენებული შრიფტი არ დასჭირდა. Ctrl+C, Ctrl+V, Ctrl+F და Ctrl+Shift+N ქართულ განლაგებაზე ინგლისურის იდენტურად მუშაობს (სინთეტიკური კლავიშები ნამდვილი «Georgian (QWERTY)»-ის მნიშვნელობებით), ბუნებრივი დალაგება `StrCmpLogicalW`-ს ემთხვევა. ხელით ჯერ დარჩა თვალით შემოწმება 125–150 %-ზე და ნამდვილი კლავიატურა. ტექნიკა «გარეგნობა», «ტექსტები», «კლავიატურა და ბრძანებები» და «დალაგება» სექციებშია.
 
@@ -573,7 +574,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 | რისკი | რას აზიანებს | შემცირება |
 | --- | --- | --- |
 | OLE drag & drop WebView2-ზე | გადათრევის სცენარები | spike #3 (გარეთ) გავლილია, fallback არ დასჭირდა; spike #4 (შიგნით) გავლილია fallback-ით: გამჭვირვალე ფანჯარა drag-ის დროს. WebView2-ის განახლებამ ეს ქცევა შეიძლება შეცვალოს: E2E ტესტი CI-ში |
-| Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7: caption ღილაკებზე `jerry-win`-ის layered input ფანჯარა `HTMAXBUTTON`-ს აბრუნებს; რეალური თაგვით ჯერ შესამოწმებელია, სათადარიგოა ჩვეულებრივი child ფანჯარა (`JERRY_PLAIN_INPUT`) |
+| Snap Layouts custom title bar-ზე | Windows 11-ის ჩვეული ქცევა | spike #7, #23: caption ღილაკებზე `jerry-win`-ის layered input ფანჯარა `HTMAXBUTTON`-ს აბრუნებს; ნამდვილი თაგვით შემოწმდა 05.11.2026 (hover, კლიკი, Snap Layouts flyout) |
 | Hybrid GPU (Intel + NVIDIA ლეპტოპი) | გაშვება < 1 წმ | WebView2-ის GPU პროცესი მძინარე NVIDIA-ს აღვიძებს: +0.4–1.45 წმ (spike #1), ფლაგებით ვერ აიცილება. Jerry ფონზე რჩება (პარამეტრი, ნაგულისხმევად ჩართული): ბოლო ფანჯრის დახურვა მას მალავს, შემდეგი გახსნა 19–56 ms-ია; ცივი გაშვება hybrid GPU-ზე ~1.9 წმ რჩება |
 | მესამე მხარის Shell extension-ის ჩამოკიდება ან crash | thumbnail-ები, context menu | timeout-ები; საჭიროებისას thumbnail-ები ცალკე helper პროცესში. Context menu მთავარ thread-ზეა და timeout-ს ვერ იღებს (როგორც Explorer-ში); ცივ ჩატვირთვას prewarm ფონზე აკეთებს (spike #6) |
 | OneDrive ფაილის შემთხვევითი ჩამოტვირთვა | ტრაფიკი, ნელი UI | `SIIGBF_INCACHEONLY`; cloud-only შიგთავსი არასოდეს იკითხება; ცალკე ტესტი |
