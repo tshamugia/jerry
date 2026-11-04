@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   commands,
@@ -11,16 +11,19 @@ import {
   type Sort,
   type SortColumn,
 } from "../../ipc";
-import { errorText, sizeText, strings } from "../../strings";
+import { errorText, strings } from "../../strings";
 import { DevButton } from "./DevButton";
+import { DevIcons } from "./DevIcons";
+import { type DevEntries, DevRows, emptyEntries } from "./DevRows";
 import { afterNextPaint } from "./paint";
+import { type ScrollResult, scrollTest } from "./scrollTest";
 
 /** The dev panel's own tab: each listing it opens replaces the previous one. */
 const DEV_TAB = 0;
-/** Rows the view paints; the rest are only counted. */
-const SHOWN_ROWS = 20;
-const SYNTH_SIZES = [1_000, 100_000] as const;
+const SYNTH_SIZES = [1_000, 10_000, 100_000] as const;
 const FILE_ATTRIBUTE_DIRECTORY = 0x10;
+/** Comfortable density, until settings (#41) choose it. */
+const FALLBACK_ROW_PX = 30;
 const SORT_COLUMNS: readonly SortColumn[] = [
   "name",
   "modified",
@@ -30,13 +33,6 @@ const SORT_COLUMNS: readonly SortColumn[] = [
   "extension",
 ];
 const DEFAULT_SORT: Sort = { column: "name", descending: false, foldersFirst: true };
-
-interface Row {
-  id: number;
-  name: string;
-  size: number;
-  folder: boolean;
-}
 
 /** One listing's timings, in ms from just before `listing_open` is invoked. */
 export interface ListingTimings {
@@ -74,11 +70,12 @@ export type SortOutcome =
 
 declare global {
   interface Window {
-    /** Dev builds: for scripts that time listings over the DevTools protocol. */
+    /** Dev builds: for scripts that time listings, sorts and scrolling over the DevTools protocol. */
     jerryDev?: {
       listing: (path: string) => Promise<ListingOutcome>;
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
       sort: (sort: Sort) => Promise<SortOutcome>;
+      scroll: (durationMs?: number) => Promise<ScrollResult | undefined>;
       /** The next diff, once painted; `paintedAt` is `Date.now()` then, to time from outside. */
       nextChange: () => Promise<PaintedChange>;
     };
@@ -86,34 +83,30 @@ declare global {
 }
 
 /**
- * Dev builds only: lists a folder through `listing_open`, paints the first rows and times it
- * (the PRD's "1 000 items shown < 0.2 s" and "100 000 items: first rows < 0.3 s"), then re-sorts
- * it through `listing_sort` and times that ("100 000 items: sort < 100 ms"). The listing stays
- * live: changes made in Explorer arrive as diffs and repaint the rows. Not the file list (#29):
- * just enough to receive the batches, diffs and orders and paint them.
+ * Dev builds only: lists a folder through `listing_open`, shows every entry with its icon in a
+ * virtualized list and times it (the PRD's "1 000 items shown < 0.2 s", "100 000 items: first
+ * rows < 0.3 s" and "scrolling 10 000+ items at 60 fps"), then re-sorts it through
+ * `listing_sort` and times that ("100 000 items: sort < 100 ms"). The listing stays live:
+ * changes made in Explorer arrive as diffs and repaint the rows. Not the file list (#29).
  */
 export function DevListing() {
   const [path, setPath] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
-  const [count, setCount] = useState(0);
   const [sort, setSort] = useState(DEFAULT_SORT);
   const [status, setStatus] = useState<string>();
   const [change, setChange] = useState<string>();
   const [changeWaiters] = useState(() => new Set<(change: PaintedChange) => void>());
+  const viewport = useRef<HTMLDivElement>(null);
+  const [rowHeight] = useState(rowPx);
+  const [, changed] = useReducer((version: number) => version + 1, 0);
   const [lister] = useState(() =>
-    createLister(
-      (shown, total) => {
-        setRows(shown);
-        setCount(total);
-      },
-      (live) => {
-        setChange(strings.dev.changed(live));
-        const painted = { ...live, paintedAt: Date.now() };
-        for (const waiter of changeWaiters) waiter(painted);
-        changeWaiters.clear();
-      },
-    ),
+    createLister(changed, (live) => {
+      setChange(strings.dev.changed(live));
+      const painted = { ...live, paintedAt: Date.now() };
+      for (const waiter of changeWaiters) waiter(painted);
+      changeWaiters.clear();
+    }),
   );
+  const entries = lister.entries();
 
   const report = (outcome: ListingOutcome) => {
     setStatus(outcome.status === "ok" ? strings.dev.listed(outcome.timings) : outcome.text);
@@ -147,6 +140,15 @@ export function DevListing() {
       column,
       descending: column === sort.column && !sort.descending,
     });
+  const scroll = async (durationMs?: number) => {
+    if (!viewport.current) {
+      return undefined;
+    }
+    setStatus(strings.dev.scrolling);
+    const result = await scrollTest(viewport.current, rowHeight, durationMs);
+    setStatus(strings.dev.scrolled(result));
+    return result;
+  };
 
   useEffect(() => () => lister.close(), [lister]);
   useEffect(() => {
@@ -154,6 +156,7 @@ export function DevListing() {
       listing: listPath,
       synthFolder: listSynth,
       sort: sortBy,
+      scroll,
       nextChange: () => new Promise((resolve) => changeWaiters.add(resolve)),
     };
     return () => {
@@ -168,6 +171,7 @@ export function DevListing() {
 
   return (
     <section aria-label={strings.dev.listingTitle} className="flex w-full max-w-xl flex-col gap-2">
+      <DevIcons />
       <form onSubmit={submit} className="flex gap-2">
         <input
           aria-label={strings.dev.listingPath}
@@ -188,20 +192,25 @@ export function DevListing() {
             {strings.dev.sortColumn(column, column === sort.column ? sort.descending : undefined)}
           </DevButton>
         ))}
+        <DevButton onClick={() => void scroll()}>{strings.dev.scrollTest}</DevButton>
       </fieldset>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
       {change && <p className="text-small text-fg-2 tabular-nums">{change}</p>}
-      <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(count)}</p>
-      <ul className="flex flex-col">
-        {rows.map((row) => (
-          <li key={row.id} className="flex h-row items-center justify-between gap-4">
-            <span className="truncate">{row.name}</span>
-            <span className="text-fg-2 tabular-nums">{row.folder ? "" : sizeText(row.size)}</span>
-          </li>
-        ))}
-      </ul>
+      <p className="text-small text-fg-3 tabular-nums">{strings.dev.items(lister.count())}</p>
+      <DevRows
+        entries={entries}
+        count={entries.order?.length ?? entries.names.length}
+        rowHeight={rowHeight}
+        viewport={viewport}
+      />
     </section>
   );
+}
+
+/** The row height of the current density, from the design tokens. */
+function rowPx(): number {
+  const token = getComputedStyle(document.documentElement).getPropertyValue("--jerry-row-h");
+  return Number.parseFloat(token) || FALLBACK_ROW_PX;
 }
 
 /** The last diff: what it changed, and how long from its arrival to the paint. */
@@ -220,50 +229,28 @@ const sameSort = (a: Sort, b: Sort) =>
   a.column === b.column && a.descending === b.descending && a.foldersFirst === b.foldersFirst;
 
 /**
- * Opens listings one at a time and shows the first rows of each batch, diff and order with
- * `show` the moment it arrives (`flushSync`), so the paint that follows is the one the timings
- * report. `changed` hears about every diff once it is painted.
+ * Opens listings one at a time and shows each batch, diff and order with `show` the moment it
+ * arrives (`flushSync`), so the paint that follows is the one the timings report. `changed`
+ * hears about every diff once it is painted.
  */
-function createLister(
-  show: (rows: Row[], count: number) => void,
-  changed: (change: LiveChange) => void,
-) {
+function createLister(show: () => void, changed: (change: LiveChange) => void) {
   let current: OpenListing | undefined;
   let generation = 0;
-  // Every entry the current listing has had by id, the removed ones, and the display order.
-  let names: string[] = [];
-  let sizes: number[] = [];
-  let folders: boolean[] = [];
+  // Every entry the current listing has had by id, its display order, and the removed ids.
+  let entries: DevEntries = emptyEntries();
   let removed = new Set<number>();
-  let order: Uint32Array | undefined;
   let done = false;
   let wanted = DEFAULT_SORT;
   /** A re-sort waiting for its order on the stream. */
   let sorting: { sort: Sort; started: number; resolve: (outcome: SortOutcome) => void } | undefined;
 
-  const firstRows = (): Row[] => {
-    const rows: Row[] = [];
-    const count = order?.length ?? names.length;
-    for (let i = 0; i < count && rows.length < SHOWN_ROWS; i++) {
-      const id = order?.[i] ?? i;
-      if (!removed.has(id)) {
-        rows.push({
-          id,
-          name: names[id] ?? "",
-          size: sizes[id] ?? 0,
-          folder: folders[id] ?? false,
-        });
-      }
-    }
-    return rows;
-  };
-  const paint = () => flushSync(() => show(firstRows(), names.length - removed.size));
+  const paint = () => flushSync(show);
   /** Applies `next` if it is for the sort asked for last. */
   const apply = (next: ListingOrder) => {
     if (!sameSort(next.sort, wanted)) {
       return;
     }
-    order = next.ids;
+    entries.order = next.ids;
     paint();
     if (sorting && sameSort(sorting.sort, next.sort)) {
       const { sort, started, resolve } = sorting;
@@ -281,15 +268,21 @@ function createLister(
   const applyDiff = (diff: ListingDiff, at: number) => {
     let added = 0;
     diff.ids.forEach((id, i) => {
-      if (id >= names.length) {
+      if (id >= entries.names.length) {
         added += 1;
       }
-      names[id] = diff.names[i] ?? "";
-      sizes[id] = diff.sizes[i] ?? 0;
-      folders[id] = ((diff.attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0;
+      entries.names[id] = diff.names[i] ?? "";
+      entries.sizes[id] = diff.sizes[i] ?? 0;
+      entries.modified[id] = diff.modified[i] ?? 0;
+      entries.folders[id] = ((diff.attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0;
+      entries.iconKeys[id] = diff.iconKeys[i] ?? 0;
     });
-    for (const id of diff.removed) {
-      removed.add(id);
+    if (diff.removed.length > 0) {
+      for (const id of diff.removed) {
+        removed.add(id);
+      }
+      // The order that follows leaves them out; until it comes, so does this one.
+      entries.order = entries.order?.filter((id) => !removed.has(id));
     }
     paint();
     const counts = { added, changed: diff.ids.length - added, removed: diff.removed.length };
@@ -300,11 +293,8 @@ function createLister(
     generation += 1;
     void current?.close();
     current = undefined;
-    names = [];
-    sizes = [];
-    folders = [];
+    entries = emptyEntries();
     removed = new Set();
-    order = undefined;
     done = false;
     sorting?.resolve({ status: "error", text: strings.dev.sortPending });
     sorting = undefined;
@@ -330,11 +320,13 @@ function createLister(
         const at = performance.now();
         switch (message.kind) {
           case "batch": {
-            const { names: batchNames, sizes: batchSizes, attributes } = message;
-            for (let i = 0; i < batchNames.length; i++) {
-              names.push(batchNames[i] ?? "");
-              sizes.push(batchSizes[i] ?? 0);
-              folders.push(((attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0);
+            const { names, sizes, modified, attributes, iconKeys } = message;
+            for (let i = 0; i < names.length; i++) {
+              entries.names.push(names[i] ?? "");
+              entries.sizes.push(sizes[i] ?? 0);
+              entries.modified.push(modified[i] ?? 0);
+              entries.folders.push(((attributes[i] ?? 0) & FILE_ATTRIBUTE_DIRECTORY) !== 0);
+              entries.iconKeys.push(iconKeys[i] ?? 0);
             }
             batches += 1;
             paint();
@@ -381,6 +373,8 @@ function createLister(
           resolve({ status: "error", text: errorText(result.error) });
         } else if (mine === generation) {
           current = result.data;
+          entries.listing = result.data.id;
+          paint();
         } else {
           void result.data.close();
         }
@@ -413,5 +407,12 @@ function createLister(
     return ordered;
   };
 
-  return { list, sort, close };
+  return {
+    list,
+    sort,
+    close,
+    entries: () => entries,
+    /** How many entries the folder has now. */
+    count: () => entries.names.length - removed.size,
+  };
 }

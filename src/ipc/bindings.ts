@@ -68,6 +68,8 @@ export const commands = {
 	 *  there already, and returns its path as display text, for timing listings in the dev panel.
 	 */
 	devSynthFolder: (count: number) => typedError<string, JerryError>(__TAURI_INVOKE("dev_synth_folder", { count })),
+	/**  The icon counters, for the dev panel's scroll measurement. */
+	devIconStats: () => typedError<IconStats, JerryError>(__TAURI_INVOKE("dev_icon_stats")),
 	/**
 	 *  Opens another window on the same UI, so events can be checked across windows before Jerry
 	 *  has windows of its own (v1.0). It has Windows' title bar, to move and close it with the mouse.
@@ -130,6 +132,17 @@ export type ErrorCode =
 } } | 
 /**  Jerry's own bug, for example a job that panicked. The details are in the log. */
 { code: "Internal" };
+
+/**  Icon counters since start: whether rows are served from memory or need the Shell. */
+export type IconStats = {
+	/**  Served from memory, with no Shell call. */
+	fromMemory: number,
+	/**  Sent to the Shell pool. */
+	fromShell: number,
+	/**  PNGs rendered. */
+	rendered: number,
+	failed: number,
+};
 
 /**  An error from a core or Windows operation. */
 export type JerryError = {

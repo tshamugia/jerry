@@ -47,6 +47,11 @@ export interface ListingEntries {
   modified: Float64Array;
   /** `FILE_ATTRIBUTE_*` flags. */
   attributes: Uint32Array;
+  /**
+   * `icon://` keys (`./icons`): `IconKey.own` for an entry with its own icon (asked for by
+   * entry), its type's key otherwise.
+   */
+  iconKeys: Uint32Array;
 }
 
 /** Entries `firstId` to `firstId + names.length - 1` of a listing. */
@@ -225,6 +230,8 @@ function decodeEntries(
   offset += count * Float64Array.BYTES_PER_ELEMENT;
   const attributes = new Uint32Array(message, offset, count);
   offset += count * Uint32Array.BYTES_PER_ELEMENT;
+  const iconKeys = new Uint32Array(message, offset, count);
+  offset += count * Uint32Array.BYTES_PER_ELEMENT;
   const ends = new Uint32Array(message, offset, count);
   offset += count * Uint32Array.BYTES_PER_ELEMENT;
   // One decode for all names, then slices. An unpaired surrogate decodes to one U+FFFD, a unit
@@ -237,5 +244,5 @@ function decodeEntries(
     names[i] = text.slice(start, end);
     start = end;
   }
-  return { names, sizes, modified, attributes };
+  return { names, sizes, modified, attributes, iconKeys };
 }
