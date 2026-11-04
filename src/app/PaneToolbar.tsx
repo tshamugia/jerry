@@ -1,11 +1,13 @@
 import { memo } from "react";
-import { useCommandLabel, useShortcut } from "../stores/keymap";
+import { FilterField } from "../features/filter/FilterField";
+import type { Folder } from "../stores/folder";
+import { useCommandLabel } from "../stores/keymap";
+import type { PaneSide } from "../stores/window";
 import { strings } from "../strings";
 import { IconButton } from "../ui/IconButton";
 import {
   BackIcon,
   DetailsIcon,
-  FilterIcon,
   ForwardIcon,
   GridIcon,
   ListIcon,
@@ -18,11 +20,17 @@ const t = strings.toolbar;
 
 /**
  * A pane's toolbar, laid out as the design: Back, Forward, Up, the address bar and the command
- * palette button; under them the quick filter and the view switcher. A skeleton for now: its
- * controls stay disabled until their features arrive (navigation, address bar, filter, palette,
- * List and Grid views). Its buttons are commands, so their tooltips show the shortcuts in force.
+ * palette button; under them the quick filter of `folder` and the view switcher. Controls stay
+ * disabled until their features arrive (navigation, address bar, palette, List and Grid views).
+ * Its buttons are commands, so their tooltips show the shortcuts in force.
  */
-export const PaneToolbar = memo(function PaneToolbar() {
+export const PaneToolbar = memo(function PaneToolbar({
+  folder,
+  pane,
+}: {
+  folder: Folder;
+  pane: PaneSide;
+}) {
   const labels = {
     back: useCommandLabel("back"),
     forward: useCommandLabel("forward"),
@@ -33,7 +41,6 @@ export const PaneToolbar = memo(function PaneToolbar() {
     listView: useCommandLabel("listView"),
     gridView: useCommandLabel("gridView"),
   };
-  const filterKey = useShortcut("filter");
   return (
     <div className="flex shrink-0 flex-col gap-1.5 bg-bar px-2 pt-1.5 pb-2">
       <div className="flex items-center gap-0.5">
@@ -57,21 +64,7 @@ export const PaneToolbar = memo(function PaneToolbar() {
         </IconButton>
       </div>
       <div className="flex items-center gap-2">
-        <label className="flex h-filter min-w-0 flex-1 items-center gap-2 rounded-ctrl border border-ctrl-border bg-ctrl px-2 text-fg-2">
-          <FilterIcon />
-          <input
-            type="text"
-            disabled
-            aria-label={t.filter}
-            placeholder={t.filterPlaceholder}
-            className="min-w-0 flex-1 bg-transparent text-fg text-small outline-none placeholder:text-fg-3"
-          />
-          {filterKey && (
-            <kbd className="rounded-kbd border border-ctrl-border px-1.25 font-sans text-caption text-fg-3">
-              {filterKey}
-            </kbd>
-          )}
-        </label>
+        <FilterField folder={folder} pane={pane} />
         <fieldset
           aria-label={t.view}
           className="flex gap-0.5 rounded-ctrl border border-ctrl-border bg-ctrl p-0.5"

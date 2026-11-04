@@ -118,6 +118,20 @@ export function visibleRows(
   return rows;
 }
 
+/** The `rows` whose names `matches` (the quick filter), in the same order. */
+export function matchingRows(
+  entries: FolderEntries,
+  rows: Uint32Array,
+  matches: (name: string) => boolean,
+): Uint32Array {
+  const kept = new Uint32Array(rows.length);
+  let at = 0;
+  for (const id of rows) {
+    if (matches(entries.names[id] ?? "")) kept[at++] = id;
+  }
+  return kept.subarray(0, at);
+}
+
 function arrivalOrder(entries: FolderEntries): Uint32Array {
   const ids = new Uint32Array(entries.count - entries.removed.size);
   let at = 0;
