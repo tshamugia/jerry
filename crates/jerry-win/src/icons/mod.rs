@@ -287,7 +287,9 @@ mod tests {
     #[test]
     fn first_requests_on_every_worker_at_once_all_succeed() {
         // nextest runs each test in its own process: these are the process's first Shell calls,
-        // on every worker at once, as when Jerry's window first shows its sidebar.
+        // on every worker at once, as when Jerry's window first shows its sidebar. As in Jerry,
+        // the main STA is another thread; this one never pumps messages, so no icon may need it.
+        crate::main_thread::enter_sta().expect("an STA");
         let icons = Icons::new();
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
         let drive = IconSource::Drive(system.as_bytes()[0]);
@@ -298,7 +300,13 @@ mod tests {
             IconSource::Type(key_of("a.pdf")),
             IconSource::Type(FOLDER),
         ];
-        sources.extend(Place::ALL.map(IconSource::Place));
+        // The places the sidebar would show: OneDrive only where it is set up.
+        sources.extend(
+            Place::ALL
+                .into_iter()
+                .filter(|place| place.exists())
+                .map(IconSource::Place),
+        );
         sources.push(drive);
         let (sender, results) = mpsc::channel();
         for source in sources {
@@ -367,7 +375,19 @@ mod tests {
             code(IconSource::Drive(b'A' + missing as u8)),
             Err(ErrorCode::NotFound)
         );
-        assert_eq!(icons.stats().failed, 3);
+        // OneDrive where it isn't set up, as on CI runners.
+        let absent: Vec<Place> = Place::ALL
+            .into_iter()
+            .filter(|place| !place.exists())
+            .collect();
+        for &place in &absent {
+            assert_eq!(
+                code(IconSource::Place(place)),
+                Err(ErrorCode::NotFound),
+                "{place:?}"
+            );
+        }
+        assert_eq!(icons.stats().failed, 3 + absent.len() as u64);
     }
 
     #[test]
@@ -377,16 +397,13 @@ mod tests {
         let letter = system.as_bytes()[0];
         let drive = render(&icons, IconSource::Drive(letter), 32).expect("system drive");
         assert_eq!(png_size(&drive), (32, 32));
-        for place in [
-            Place::Desktop,
-            Place::Documents,
-            Place::Downloads,
-            Place::Pictures,
-            Place::RecycleBin,
-            Place::NetworkShare,
-        ] {
-            let png = render(&icons, IconSource::Place(place), 24);
-            assert_eq!(png_size(&png.expect("an icon")), (24, 24), "{place:?}");
+        for place in Place::ALL {
+            // Every place but OneDrive exists for every user.
+            assert!(place.exists() || place == Place::OneDrive, "{place:?}");
+            if place.exists() {
+                let png = render(&icons, IconSource::Place(place), 24);
+                assert_eq!(png_size(&png.expect("an icon")), (24, 24), "{place:?}");
+            }
         }
         assert!(
             Place::ALL

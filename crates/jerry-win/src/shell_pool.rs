@@ -22,6 +22,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::Threading::{CreateSemaphoreW, INFINITE, ReleaseSemaphore};
 
+use crate::main_thread::is_main_sta;
+
 /// Fewest and most workers (Tech PRD «Thread-ების მოდელი»).
 const MIN_WORKERS: usize = 2;
 const MAX_WORKERS: usize = 4;
@@ -269,6 +271,12 @@ fn worker(pool: &Pool, id: u64) {
         pool.state().workers.remove(&id);
         return;
     }
+    if is_main_sta() {
+        tracing::warn!(
+            "a Shell pool worker is the process's main STA: the pool started before the main \
+             thread entered its STA (main_thread::enter_sta)"
+        );
+    }
     while let Some(run) = pool.next_job(id) {
         // `run` delivers its own result, and a panic in the job is caught inside it; this also
         // keeps a panicking `done` from ending the worker.
@@ -401,9 +409,12 @@ impl Drop for Semaphore {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Barrier;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use windows::Win32::System::Com::{APTTYPE, APTTYPE_STA, APTTYPEQUALIFIER, CoGetApartmentType};
+    use windows::Win32::System::Com::{
+        APTTYPE, APTTYPE_MAINSTA, APTTYPE_STA, APTTYPEQUALIFIER, CoGetApartmentType,
+    };
 
     use super::*;
 
@@ -417,16 +428,44 @@ mod tests {
     }
 
     #[test]
-    fn jobs_run_on_sta_workers() {
-        let pool = ShellPool::new();
-        let (kind, name) = pool
-            .run("apartment", LONG, || {
-                let name = std::thread::current().name().map(str::to_owned);
-                Ok((apartment(), name))
-            })
-            .expect("runs");
-        assert_eq!(kind, APTTYPE_STA);
-        assert!(name.is_some_and(|name| name.starts_with("jerry-shell-")));
+    fn jobs_run_on_sta_workers_and_none_is_the_main_sta() {
+        // As Jerry's `run` does, before any pool starts. nextest runs each test in its own
+        // process, so this is the process's first STA.
+        crate::main_thread::enter_sta().expect("an STA");
+        assert_eq!(apartment(), APTTYPE_MAINSTA);
+
+        // One job on every worker at once: they meet at the barrier.
+        const WORKERS: usize = 4;
+        let pool = ShellPool::with_workers(WORKERS, MAX_QUEUED);
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        let (sender, results) = mpsc::channel();
+        for _ in 0..WORKERS {
+            let (barrier, sender) = (barrier.clone(), sender.clone());
+            pool.submit(
+                "apartment",
+                LONG,
+                move || {
+                    barrier.wait();
+                    let name = std::thread::current().name().map(str::to_owned);
+                    Ok((apartment(), name))
+                },
+                move |result| {
+                    let _ = sender.send(result);
+                },
+            );
+        }
+        drop(sender);
+        let mut names = Vec::new();
+        for result in results.iter() {
+            let (kind, name) = result.expect("runs");
+            assert_eq!(kind, APTTYPE_STA);
+            let name = name.expect("a named worker");
+            assert!(name.starts_with("jerry-shell-"), "{name}");
+            names.push(name);
+        }
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), WORKERS, "every worker ran one");
     }
 
     #[test]
