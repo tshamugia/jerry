@@ -1,4 +1,5 @@
 import { memo, type PointerEvent } from "react";
+import { useCommandLabel } from "../../stores/keymap";
 import { activateTab, closeTab, type TabView, useTabs } from "../../stores/tabs";
 import { activatePane, type PaneSide, useWindow } from "../../stores/window";
 import { strings } from "../../strings";
@@ -20,6 +21,7 @@ interface Props {
 export const TabStrip = memo(function TabStrip({ pane, className = "" }: Props) {
   const { tabs, active } = useTabs((state) => state[pane]);
   const activePane = useWindow((state) => state.activePane === pane);
+  const newTab = useCommandLabel("newTab");
   const name = pane === "left" ? strings.frame.leftPane : strings.frame.rightPane;
 
   const show = (id: number) => {
@@ -46,7 +48,7 @@ export const TabStrip = memo(function TabStrip({ pane, className = "" }: Props) 
         />
       ))}
       {/* Opens a tab with #31. */}
-      <IconButton label={strings.titleBar.newTab} disabled className="mb-0.5 size-7 rounded-ctrl">
+      <IconButton label={newTab} disabled className="mb-0.5 size-7 rounded-ctrl">
         <PlusIcon />
       </IconButton>
     </div>

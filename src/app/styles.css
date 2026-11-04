@@ -94,6 +94,7 @@
   --spacing-col-header: var(--jerry-col-header-h);
   --spacing-transfer: var(--jerry-transfer-h);
   --spacing-statusbar: var(--jerry-statusbar-h);
+  --spacing-palette: var(--jerry-palette-w);
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
   --spacing-active-pane-bar: var(--jerry-active-pane-bar);

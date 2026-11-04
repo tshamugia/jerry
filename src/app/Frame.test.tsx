@@ -148,12 +148,7 @@ test("the status bar switches the density", () => {
 test("the toolbar skeleton is in place, its controls disabled until their features arrive", () => {
   render(<Frame settings={defaultSettings} />);
   const left = screen.getByRole("region", { name: "Left pane, active" });
-  for (const name of [
-    "Back (Alt+Left)",
-    "Forward (Alt+Right)",
-    "Up (Alt+Up)",
-    "Refresh (Ctrl+R)",
-  ]) {
+  for (const name of ["Back (Alt+←)", "Forward (Alt+→)", "Up (Alt+↑)", "Refresh (Ctrl+R)"]) {
     expect(left.querySelector(`button[aria-label="${name}"]`)).toBeDisabled();
   }
   expect(left.querySelector('input[aria-label="Quick filter"]')).toHaveAttribute(

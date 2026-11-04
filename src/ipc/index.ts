@@ -26,6 +26,7 @@ export type {
   ErrorCode,
   FrameState,
   JerryError,
+  Keybinding,
   ListingTarget,
   Settings,
   Sort,

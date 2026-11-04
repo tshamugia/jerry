@@ -75,6 +75,7 @@ macro_rules! commands {
             listing::listing_close,
             storage::settings_get,
             storage::settings_set,
+            storage::keybindings_get,
             title_bar::title_bar_attach,
             title_bar::title_bar_set_buttons,
             title_bar::title_bar_press,

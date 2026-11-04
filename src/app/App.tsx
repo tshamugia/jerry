@@ -1,10 +1,11 @@
 import { useEffect, useMemo } from "react";
+import { useCommandKeys } from "../commands/dispatch";
+import { ShortcutTable } from "../commands/ShortcutTable";
 import { DevPanel } from "../features/dev/DevPanel";
 import { commands } from "../ipc";
 import { useAppearance } from "../stores/appearance";
 import { useSettings } from "../stores/settings";
 import { Frame } from "./Frame";
-import { useDensityShortcut } from "./shortcuts";
 
 /**
  * The window. It renders once the settings and the Windows appearance are known, so the first
@@ -22,10 +23,15 @@ export function App() {
       void commands.appReady();
     }
   }, [ready]);
-  useDensityShortcut();
+  useCommandKeys();
 
   if (!settings || !appearance) {
     return null;
   }
-  return <Frame settings={settings} left={dev} />;
+  return (
+    <>
+      <Frame settings={settings} left={dev} />
+      <ShortcutTable />
+    </>
+  );
 }

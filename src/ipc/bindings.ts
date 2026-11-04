@@ -41,6 +41,8 @@ export const commands = {
 	 *  anything, every window gets `settings:changed`, this one included.
 	 */
 	settingsSet: (key: string, value: unknown) => typedError<null, JerryError>(__TAURI_INVOKE("settings_set", { key, value })),
+	/**  The shortcuts the user changed (`keybindings`); every other command keeps its default. */
+	keybindingsGet: () => typedError<Keybinding[], JerryError>(__TAURI_INVOKE("keybindings_get")),
 	/**  Starts streaming the window's [`FrameState`] to the page; the current state comes first. */
 	titleBarAttach: (updates: Channel<FrameState>) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_attach", { updates })),
 	/**  Tells the native hit-test where the page drew the caption buttons. */
@@ -200,6 +202,17 @@ export type JerryError = {
 	/**  The file or folder it happened on. Exact here; the UI gets display text only. */
 	path: string | null,
 } & ErrorCode;
+
+/**
+ *  A shortcut the user changed (the `keybindings` table). The command registry and the default
+ *  shortcuts live in the UI (`src/commands/`); the core only keeps the changes.
+ */
+export type Keybinding = {
+	/**  The command's id in the registry, for example `newFolder`. */
+	command: string,
+	/**  The shortcut with US key names (`Ctrl+Shift+N`), or none: the user removed the default. */
+	shortcut: string | null,
+};
 
 /**  An opened listing: its id, and its folder as display text. */
 export type ListingOpened = {

@@ -341,11 +341,15 @@ src/
 
 ### კლავიატურა და ბრძანებები
 
-- ერთი ბრძანებების რეესტრი: id, სათაური, ნაგულისხმევი shortcut, კონტექსტი (სია, გადარქმევა, დიალოგი), handler. მას იყენებს palette, context menu, toolbar, პარამეტრები და F1-ის ცხრილი.
-- Shortcut-ები ფიზიკური კლავიშით მოწმდება (`KeyboardEvent.code`), `key`-ით არასოდეს. ქართულ QWERTY-ზე Ctrl+C მოდის `key` `ც`-ით და `code` `KeyC`-ით, Ctrl+Shift+C `key` `ჩ`-ით (spike #8). ასე ქართულ განლაგებაზეც Ctrl+C რჩება Ctrl+C.
-- სიის shortcut-ები (Ctrl+C, Ctrl+V, Ctrl+Shift+N) ტექსტურ ველში ჩუმდება, რომ ველმა ტექსტი თვითონ დააკოპიროს და ჩასვას; Ctrl+F ყველგან მუშაობს.
+- ერთი ბრძანებების რეესტრი (`src/commands/registry.ts`): id, ჯგუფი, ნაგულისხმევი shortcut-ები, კონტექსტი, `repeat`, `enabled`, handler; სათაური `strings.commands[id]`-ია. მას იყენებს palette, context menu, toolbar (tooltip-ის shortcut-იც რეესტრიდანაა), პარამეტრები და F1-ის ცხრილი. ახალი ბრძანება ერთი ჩანაწერია (და სათაური `src/strings/`-ში) და F1-ის ცხრილში თავისით ჩნდება. Handler-ის გარეშე ბრძანება ჯერ დაუწერელია: shortcut-ი მისთვის დაკავებულია, მაგრამ ის გამორთულია და ცხრილში არ ჩანს.
+- Shortcut-ები ფიზიკური კლავიშით და ზუსტი modifier-ებით მოწმდება (`KeyboardEvent.code`), `key`-ით არასოდეს. ქართულ QWERTY-ზე Ctrl+C მოდის `key` `ც`-ით და `code` `KeyC`-ით, Ctrl+Shift+C `key` `ჩ`-ით (spike #8). ასე ქართულ განლაგებაზეც Ctrl+C რჩება Ctrl+C. Shortcut-ის ტექსტი US კლავიატურის სახელებითაა (`Ctrl+Shift+N`, `Alt+←`); `?` არის Shift+/.
+- კონტექსტები: `global` (ყველგან, დიალოგის გარდა), `list` (ფანჯარაში, ტექსტური ველის გარეთ), `rename` (inline გადარქმევის ველი, `data-command-scope="rename"`), `dialog` (`role="dialog"` ან `alertdialog`; დიალოგში სხვა ბრძანება არ მუშაობს). სიის shortcut-ები (Ctrl+C, Ctrl+V, Ctrl+Shift+N) ტექსტურ ველში ჩუმდება, რომ ველმა ტექსტი თვითონ დააკოპიროს და ჩასვას; Ctrl+F ყველგან მუშაობს.
+- ტექსტური ველი თავის კლავიშებს global ბრძანებასაც არ უთმობს: ყველაფერს Ctrl-ისა და Alt-ის გარეშე, F-კლავიშების გარდა (`?` იწერება, F1 ცხრილს ხსნის; Backspace ველში შლის, ველის გარეთ Back-ია, როგორც Explorer-ში). ფოკუსიან ღილაკს Space და Enter რჩება.
 - AltGr Windows-ში Ctrl+Alt-ად მოდის, ქართულ QWERTY-ზე კი ასოებს წერს (AltGr+C `©`, AltGr+N `ჼ`). ტექსტურ ველში `getModifierState("AltGraph")`-ისას shortcut არ ირთვება (spike #8).
-- Shortcut-ის შეცვლისას კონფლიქტი მოწმდება იმავე კონტექსტში.
+- Dispatch: ერთი `keydown` listener ფანჯარაზე (`useCommandKeys`). ჩართული ბრძანების კლავიში სხვას არაფერს აკეთებს (`preventDefault`); გამორთული ბრძანების კლავიში ჩვეულებრივ მუშაობს. კომპონენტის მიერ უკვე დამუშავებულ კლავიშს (`defaultPrevented`) და IME-ის აკრეფას dispatch არ ეხება. დაჭერილ shortcut-ს მხოლოდ `repeat` ბრძანება იმეორებს (Back, Forward, Up, Ctrl+Tab, Undo, Redo).
+- შეცვლილი shortcut-ები `keybindings`-შია; UI მათ ფანჯრის გახსნისას `keybindings_get`-ით კითხულობს, მანამდე ნაგულისხმევი მუშაობს. შეცვლილ ბრძანებას ზუსტად მომხმარებლის shortcut-ი აქვს, `NULL`-ით არცერთი. მომხმარებლის shortcut-ი იმარჯვებს ნაგულისხმევზე, რომელსაც ეჯახება: ის აღარ მუშაობს. უცნობი ბრძანება და არასწორი ტექსტი იგნორირდება.
+- კონფლიქტი: ორი shortcut, რომელსაც ერთი დაჭერა ერთსა და იმავე ადგილას (კონტექსტი და ფოკუსი) გაუშვებდა. Shortcut-ის შეცვლისას კონფლიქტი მოწმდება იმავე კონტექსტში (`conflictsWith`, რედაქტორი #83). ნაგულისხმევ keymap-ს კონფლიქტი არ აქვს (Vitest).
+- F1 ან `?`: shortcut-ების ცხრილი Radix Dialog-ში, palette-ის ზომით (640 px, ზემოდან 96 px). Radix-ის modal Dialog (`react-remove-scroll`) scroll-ის ჩასაკეტად runtime-ში `<style>`-ს ამატებს; release-ის CSP (`style-src 'self'`) მას ბლოკავს, რაც უვნებელია: `body` ისედაც `overflow: hidden`-ია.
 
 ### გარეგნობა
 
@@ -353,7 +357,7 @@ src/
 - System თემა: Tauri-ს `theme` და მისი ცვლილების მოვლენა. თემის პარამეტრი ყველა ფანჯრის Tauri `theme`-ს ცვლის (System = `None`, Windows-ს მიჰყვება; Mica-ც მის ფერს იღებს). WebView2-ის `prefers-color-scheme` ფანჯრის თემას მიჰყვება (tauri-runtime-wry მას `ThemeChanged`-ზე ცვლის), ამიტომ UI System თემას ამ media query-დან კითხულობს. UI `<html>`-ზე `data-theme`, `data-density`, `data-accent` და `data-backdrop` ატრიბუტებს სვამს, დანარჩენს `design/tokens.css` აკეთებს.
 - Accent: Match Windows = `UISettings`-ის AccentDark1 ღია ზედაპირზე და AccentLight2 მუქზე (ნაგულისხმევი ლურჯისთვის #005FB8 და #60CDFF, დიზაინის ფერები). Windows-ის accent-ის ცვლილება (`ColorValuesChanged`) ყველა ფანჯარას `appearance:changed`-ით მიდის. Jerry-ის ექვსი ფერი `tokens.css`-შია (`data-accent`).
 - Mica პარამეტრია: გამორთვისას `DWMSBT_NONE`, გვერდი კი Mica-ს ზონებს `--jerry-mica`-ს ფერით ხატავს. თუ `DwmSetWindowAttribute` ვერ მოხერხდა, `appearance:changed` UI-ს ეუბნება, რომ Mica აღარ ჩანს.
-- სიმჭიდროვე: Ctrl+Alt+D ან status bar-ის გადამრთველი. Ctrl+Alt+D ჯერ `src/app/shortcuts.ts`-შია (`KeyboardEvent.code`), #24-ში ბრძანებების რეესტრში გადავა.
+- სიმჭიდროვე: Ctrl+Alt+D ან status bar-ის გადამრთველი. Ctrl+Alt+D რეესტრის ბრძანებაა (`toggleDensity`, `KeyboardEvent.code`).
 - შრიფტი: Segoe UI Variable. ინტერფეისი ინგლისურია, მაგრამ ფაილის სახელები ხშირად ქართულია. Segoe UI Variable-ში ქართული გლიფი არ არის, ამიტომ ქართულ ასოებს Chromium stack-ის მეორე ოჯახიდან, Segoe UI-დან იღებს (ყველა წონაში: მხედრული, მთავრული, ასომთავრული, ნუსხური); ჩაშენებული ქართული შრიფტი საჭირო არ არის (spike #8). ამიტომ `"Segoe UI"` `--jerry-font`-ში მეორე რჩება. ქართული ლათინურზე \~1.32-ჯერ განიერია, ამიტომ ტაბზე და breadcrumb-ში უფრო ადრე იჭრება.
 
 ### ტექსტები
@@ -403,7 +407,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | Shell | `open`, `open_with_list`, `open_with`, `show_native_menu`, `show_in_explorer`, `open_terminal`, `properties` |
 | ძებნა | `search_start`, `search_cancel` |
 | სისტემა | `drives_list`, `eject`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
-| მონაცემები | `settings_get`, `settings_set`, `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_save`, `export_settings`, `import_settings` |
+| მონაცემები | `settings_get`, `settings_set`, `keybindings_get` (შეცვლილი shortcut-ები), `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_save`, `export_settings`, `import_settings` |
 
 ### ფორმატი და შეცდომები
 

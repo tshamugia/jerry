@@ -4,6 +4,7 @@ import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
 import { reportLongTasks } from "./features/dev/longTasks";
 import { syncAppearance } from "./stores/appearance";
+import { loadKeymap } from "./stores/keymap";
 import { syncSettings } from "./stores/settings";
 import "./app/styles.css";
 
@@ -18,6 +19,7 @@ if (import.meta.env.DEV) {
 followAppearance();
 syncSettings();
 syncAppearance();
+void loadKeymap();
 createRoot(root).render(
   <StrictMode>
     <App />
