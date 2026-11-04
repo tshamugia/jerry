@@ -1,4 +1,5 @@
 import type { Selection } from "../../stores/folder";
+import { wildcardMatcher } from "../filter/wildcard";
 
 /**
  * The selection model, as Explorer behaves: pure functions from a selection, the rows the list
@@ -154,13 +155,25 @@ export function clear(selection: Selection): Selection {
   return selection.selected.size === 0 ? selection : { ...selection, selected: new Set() };
 }
 
-/** Select by pattern: exactly the rows `matches` accepts. */
-export function selectWhere(
+/**
+ * Select by pattern: exactly the rows whose names match `pattern` (the quick filter's
+ * `wildcardMatcher`: `*.pdf`, `*_rev*`, or a part of the name), in place of the selection.
+ * The focus and anchor stay.
+ */
+export function selectMatching(
   selection: Selection,
   rows: Uint32Array,
-  matches: (id: number) => boolean,
+  names: readonly string[],
+  pattern: string,
 ): Selection {
-  return { ...selection, selected: new Set(rows.filter(matches)) };
+  const matches = wildcardMatcher(pattern);
+  const selected = new Set<number>();
+  for (const id of rows) {
+    if (matches(names[id] ?? "")) {
+      selected.add(id);
+    }
+  }
+  return { ...selection, selected };
 }
 
 /**

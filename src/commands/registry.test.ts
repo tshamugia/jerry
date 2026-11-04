@@ -118,6 +118,7 @@ describe("the shortcut table", () => {
         rows: [
           { id: "selectAll", title: "Select all", keys: ["Ctrl+A"] },
           { id: "invertSelection", title: "Invert selection", keys: ["Ctrl+I"] },
+          { id: "selectByPattern", title: "Select by pattern…", keys: ["Ctrl+Shift+A"] },
           { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
           { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
         ],
@@ -177,6 +178,7 @@ describe("the shortcut table", () => {
         rows: [
           { id: "selectAll", title: "Select all", keys: ["Ctrl+A"] },
           { id: "invertSelection", title: "Invert selection", keys: ["Ctrl+I"] },
+          { id: "selectByPattern", title: "Select by pattern…", keys: ["Ctrl+Shift+A"] },
           { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
           { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
         ],

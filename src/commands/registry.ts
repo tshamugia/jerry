@@ -110,7 +110,13 @@ export const COMMANDS: readonly Command[] = [
     context: "list",
     run: invertSelection,
   },
-  { id: "selectByPattern", group: "selection", keys: ["Ctrl+Shift+A"], context: "list" },
+  {
+    id: "selectByPattern",
+    group: "selection",
+    keys: ["Ctrl+Shift+A"],
+    context: "list",
+    run: () => openOverlay("selectByPattern"),
+  },
   {
     id: "toggleSelection",
     group: "selection",

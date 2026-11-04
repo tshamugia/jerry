@@ -169,6 +169,17 @@ export const strings = {
     title: "Keyboard shortcuts",
     close: "Esc",
   },
+  /** Select by pattern (Ctrl+Shift+A). */
+  selectByPattern: {
+    title: "Select by pattern",
+    close: "Esc",
+    pattern: "Pattern",
+    placeholder: "*.pdf, *_rev*, or a part of the name",
+    hint: "* stands for any characters, ? for one.",
+    /** Before Enter: how many of the shown items the pattern would select. */
+    matches: (count: number, total: number) =>
+      `${integer.format(count)} of ${integer.format(total)} match. Enter selects them.`,
+  },
   /** The dev panel (dev builds only). */
   dev: {
     title: "Dev checks",

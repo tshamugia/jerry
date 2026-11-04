@@ -11,7 +11,7 @@ import {
   rowForKey,
   rowsCrossed,
   selectAll,
-  selectWhere,
+  selectMatching,
   toggleFocused,
 } from "./model";
 
@@ -135,17 +135,23 @@ describe("select all, invert, clear, pattern", () => {
     expect(clear(none)).toBe(none);
   });
 
-  it("select by pattern selects exactly the matching rows", () => {
-    const names: Record<number, string> = {
-      40: "ELV-001.pdf",
-      10: "plan_rev2.dwg",
-      30: "შენიშვნები.PDF",
-      20: "notes.txt",
-      50: "plan_rev3.pdf",
-      60: "readme",
-    };
-    const endsPdf = (id: number) => names[id]?.toLowerCase().endsWith(".pdf") ?? false;
-    expect(ids(selectWhere(sel([20], 20, 20), rows, endsPdf))).toEqual([30, 40, 50]);
+  it("select by pattern selects exactly the shown rows that match, in place of the selection", () => {
+    const names: string[] = [];
+    names[40] = "ELV-001.pdf";
+    names[10] = "plan_rev2.dwg";
+    names[30] = "შენიშვნები.PDF";
+    names[20] = "notes.txt";
+    names[50] = "plan_rev3.pdf";
+    names[60] = "readme";
+    names[99] = "hidden.pdf";
+    const by = (pattern: string) => ids(selectMatching(sel([20], 20, 20), rows, names, pattern));
+    // Case doesn't count; an entry the list doesn't show (99) isn't selected.
+    expect(by("*.pdf")).toEqual([30, 40, 50]);
+    expect(by("*_rev*")).toEqual([10, 50]);
+    // Without wildcards, a part of the name, as in the quick filter.
+    expect(by("rev")).toEqual([10, 50]);
+    expect(by("*.zip")).toEqual([]);
+    expect(selectMatching(sel([20], 20, 20), rows, names, "*.pdf").focused).toBe(20);
   });
 });
 
