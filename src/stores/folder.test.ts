@@ -117,7 +117,7 @@ test("the selection survives changes in the folder; a removed focus passes to th
   const folder = new Folder(7);
   await folder.open(work);
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
-  expect([...folder.rows(false)]).toEqual([0, 1, 2, 3]);
+  expect([...folder.shown(false).rows]).toEqual([0, 1, 2, 3]);
   folder.setSelection({ selected: new Set([0, 1, 3]), anchor: 0, focused: 1 });
   const before = folder.store.getState().selected;
 
@@ -152,14 +152,14 @@ test("the shown rows leave out hidden entries and are the same array until somet
   await folder.open(work);
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
 
-  const rows = folder.rows(false);
+  const rows = folder.shown(false).rows;
   expect([...rows]).toEqual([0]);
-  expect(folder.rows(false)).toBe(rows);
-  expect([...folder.rows(true)]).toEqual([0, 1]);
+  expect(folder.shown(false).rows).toBe(rows);
+  expect([...folder.shown(true).rows]).toEqual([0, 1]);
 
   // Hiding hidden files again drops them from the selection.
   folder.setSelection({ selected: new Set([0, 1]), anchor: 1, focused: 1 });
-  folder.keepShown(folder.rows(false));
+  folder.keepShown(folder.shown(false).rows);
   expect(folder.store.getState()).toMatchObject({
     selected: new Set([0]),
     anchor: undefined,

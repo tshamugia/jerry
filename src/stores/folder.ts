@@ -1,5 +1,6 @@
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
+import { wildcardMatcher } from "../features/filter/wildcard";
 import {
   commands,
   type JerryError,
@@ -11,7 +12,7 @@ import {
   type SortColumn,
 } from "../ipc";
 import { type ColumnLayout, DEFAULT_COLUMNS } from "./columns";
-import { FolderEntries, visibleRows } from "./entries";
+import { FolderEntries, matchingRows, visibleRows } from "./entries";
 import type { PaneSide } from "./window";
 
 /**
@@ -43,6 +44,16 @@ export interface FolderState {
   anchor: number | undefined;
   /** The entry with the keyboard focus. */
   focused: number | undefined;
+  /** The quick filter's pattern (`wildcardMatcher`); "" when off. Another folder clears it. */
+  filter: string;
+}
+
+/** What the list shows: its rows, and how many there would be without the filter. */
+export interface ShownRows {
+  /** Entry ids in display order. */
+  rows: Uint32Array;
+  /** The rows without the filter: "Showing 12 of 340". */
+  total: number;
 }
 
 /** The selection part of a folder's state. */
@@ -64,15 +75,8 @@ function emptyFolder() {
     selected: new Set<number>(),
     anchor: undefined,
     focused: undefined,
+    filter: "",
   };
-}
-
-/** The shown rows, for the state they were computed from. */
-interface ShownRows {
-  version: number;
-  failed: boolean;
-  showHidden: boolean;
-  rows: Uint32Array;
 }
 
 /**
@@ -88,7 +92,9 @@ export class Folder {
   private generation = 0;
   private target: ListingTarget | undefined;
   private readonly listeners = new Set<(message: ListingMessage) => void>();
-  private shown: ShownRows | undefined;
+  private shownCache:
+    | { key: readonly unknown[]; showHidden: boolean; shown: ShownRows }
+    | undefined;
 
   /** `tab`: the core keeps one listing per tab; opening another folder closes the previous. */
   constructor(readonly tab: number) {
@@ -179,23 +185,6 @@ export class Folder {
     this.store.setState({ columns });
   }
 
-  /**
-   * The rows the list shows, as entry ids in display order: what it draws, and all that the
-   * selection works on (Ctrl+A selects only these). `showHidden` is the setting. The same array
-   * until the folder or the setting changes.
-   */
-  rows(showHidden: boolean): Uint32Array {
-    const { status, entries, order, version } = this.store.getState();
-    const failed = status === "failed";
-    const shown = this.shown;
-    if (shown?.version === version && shown.failed === failed && shown.showHidden === showHidden) {
-      return shown.rows;
-    }
-    const rows = failed ? new Uint32Array(0) : visibleRows(entries, order, showHidden);
-    this.shown = { version, failed, showHidden, rows };
-    return rows;
-  }
-
   /** Puts in a new selection (`src/features/selection/model.ts` makes them). */
   setSelection(selection: Selection): void {
     const state = this.store.getState();
@@ -234,6 +223,33 @@ export class Folder {
       anchor: kept(anchor),
       focused: kept(focused),
     });
+  }
+
+  /** Shows only the entries whose names match `filter` (`wildcardMatcher`); "" shows them all. */
+  setFilter(filter: string): void {
+    if (filter !== this.store.getState().filter) {
+      this.store.setState({ filter });
+      this.unselectFiltered();
+    }
+  }
+
+  /**
+   * The rows the list shows: `visibleRows` narrowed by the filter, none after a failure. The same
+   * object until the folder, its filter or `showHidden` change, so the list, the filter field and
+   * the status bar share one pass over the entries.
+   */
+  shown(showHidden: boolean): ShownRows {
+    const { status, entries, order, version, filter } = this.store.getState();
+    const key = [status, entries, order, version, filter, showHidden];
+    const cached = this.shownCache;
+    if (cached?.key.every((part, i) => part === key[i])) {
+      return cached.shown;
+    }
+    const all = status === "failed" ? new Uint32Array(0) : visibleRows(entries, order, showHidden);
+    const rows = filter === "" ? all : matchingRows(entries, all, wildcardMatcher(filter));
+    const shown = { rows, total: all.length };
+    this.shownCache = { key, showHidden, shown };
+    return shown;
   }
 
   /** Stops the listing: the view shows no folder. */
@@ -280,7 +296,7 @@ export class Folder {
         const selected = [...state.selected].some((id) => gone.has(id))
           ? new Set([...state.selected].filter((id) => !gone.has(id)))
           : state.selected;
-        const before = this.shown;
+        const before = this.shownCache;
         const lost = (id: number | undefined) => id !== undefined && gone.has(id);
         this.store.setState({
           order,
@@ -291,8 +307,8 @@ export class Folder {
         });
         // As in Explorer, the focus goes to the row that takes the removed one's place.
         if (lost(state.focused) && before) {
-          const at = before.rows.indexOf(state.focused ?? 0);
-          const rows = this.rows(before.showHidden);
+          const at = before.shown.rows.indexOf(state.focused ?? 0);
+          const { rows } = this.shown(before.showHidden);
           const focused = at < 0 ? undefined : rows[Math.min(at, rows.length - 1)];
           this.store.setState({ focused, anchor: lost(state.anchor) ? focused : state.anchor });
         }
@@ -305,8 +321,33 @@ export class Folder {
         this.store.setState({ status: "failed", error: message.error });
         break;
     }
+    if (message.kind === "diff") {
+      // A selected entry renamed (in Explorer, say) to a name the filter hides.
+      this.unselectFiltered();
+    }
     for (const listener of this.listeners) {
       listener(message);
+    }
+  }
+
+  /**
+   * Entries the filter hides leave the selection and lose the focus, so a file operation never
+   * acts on files the list doesn't show.
+   */
+  private unselectFiltered(): void {
+    const { filter, entries, selected, focused } = this.store.getState();
+    if (filter === "") {
+      return;
+    }
+    const matches = wildcardMatcher(filter);
+    const shown = (id: number) => matches(entries.names[id] ?? "");
+    const kept = [...selected].filter(shown);
+    const keepFocus = focused === undefined || shown(focused);
+    if (kept.length < selected.size || !keepFocus) {
+      this.store.setState({
+        selected: kept.length < selected.size ? new Set(kept) : selected,
+        focused: keepFocus ? focused : undefined,
+      });
     }
   }
 }

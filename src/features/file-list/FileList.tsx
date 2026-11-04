@@ -35,6 +35,7 @@ import { usePointerSelection } from "../selection/usePointerSelection";
 import { ColumnHeader } from "./ColumnHeader";
 import { columnWidths } from "./cells";
 import { FileRow } from "./FileRow";
+import { useShownRows } from "./rows";
 
 /** Rows rendered past each edge of the view. */
 const OVERSCAN = 8;
@@ -61,13 +62,10 @@ export const FileList = memo(function FileList({
   folder: Folder;
   pane: PaneSide;
 }) {
-  const showHidden = useSetting("showHidden") ?? false;
   const status = useFolder(folder, (state) => state.status);
   const error = useFolder(folder, (state) => state.error);
   const entries = useFolder(folder, (state) => state.entries);
-  // `entries` changes in place: `version` says when, so rows repaint.
-  useFolder(folder, (state) => state.version);
-  const rows = useFolder(folder, () => folder.rows(showHidden));
+  const filter = useFolder(folder, (state) => state.filter);
   const listing = useFolder(folder, (state) => state.listing);
   const sort = useFolder(folder, (state) => state.sort);
   const layout = useFolder(folder, (state) => state.columns);
@@ -81,6 +79,9 @@ export const FileList = memo(function FileList({
   const density = useSetting("density") ?? "comfortable";
 
   useEffect(() => folder.setFoldersFirst(foldersFirst), [folder, foldersFirst]);
+
+  // Selection (#30) works on these rows, so it never reaches entries the filter hides.
+  const { rows, total } = useShownRows(folder);
   // Rows hidden again or filtered out leave the selection.
   useEffect(() => folder.keepShown(rows), [folder, rows]);
 
@@ -214,7 +215,9 @@ export const FileList = memo(function FileList({
           {strings.fileList.retry}
         </button>
       </>
-    ) : rows.length > 0 ? null : status === "ready" ? (
+    ) : rows.length > 0 ? null : filter !== "" && total > 0 ? (
+      strings.fileList.noMatch
+    ) : status === "ready" ? (
       strings.fileList.empty
     ) : slow ? (
       strings.fileList.loading

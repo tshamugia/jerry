@@ -123,6 +123,11 @@ describe("the shortcut table", () => {
         ],
       },
       {
+        group: "search",
+        title: "Search",
+        rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
+      },
+      {
         group: "other",
         title: "Other",
         rows: [{ id: "shortcuts", title: "Keyboard shortcuts", keys: ["F1", "?"] }],
@@ -140,7 +145,13 @@ describe("the shortcut table", () => {
     };
     const commands = [...COMMANDS.filter((command) => command.id !== "newFolder"), newFolder];
     const table = shortcutTable(buildKeymap(commands), commands);
-    expect(table.map((group) => group.group)).toEqual(["view", "selection", "files", "other"]);
+    expect(table.map((group) => group.group)).toEqual([
+      "view",
+      "selection",
+      "files",
+      "search",
+      "other",
+    ]);
     expect(table[2]?.rows).toEqual([
       { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
     ]);
@@ -169,6 +180,11 @@ describe("the shortcut table", () => {
           { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
           { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
         ],
+      },
+      {
+        group: "search",
+        title: "Search",
+        rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
       },
     ]);
   });

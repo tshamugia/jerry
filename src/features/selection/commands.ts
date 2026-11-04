@@ -10,7 +10,7 @@ export function activeFolder(): Folder {
 
 /** The rows `folder`'s list shows now: what every selection command works on. */
 export function shownRows(folder: Folder): Uint32Array {
-  return folder.rows(useSettings.getState().settings?.showHidden ?? false);
+  return folder.shown(useSettings.getState().settings?.showHidden ?? false).rows;
 }
 
 export function selectionOf({ selected, anchor, focused }: FolderState): Selection {
