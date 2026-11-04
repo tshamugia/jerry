@@ -23,6 +23,7 @@ export type {
   DragAction,
   ErrorCode,
   JerryError,
+  Keybinding,
   ListingTarget,
   Settings,
   Sort,

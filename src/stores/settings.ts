@@ -45,3 +45,11 @@ export function syncSettings(): () => void {
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]) {
   return commands.settingsSet(key, value);
 }
+
+/** Switches the row density: Comfortable (30 px) ↔ Compact (24 px). */
+export function toggleDensity() {
+  const density = useSettings.getState().settings?.density;
+  if (density) {
+    void setSetting("density", density === "compact" ? "comfortable" : "compact");
+  }
+}
