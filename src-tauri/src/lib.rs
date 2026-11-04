@@ -117,6 +117,11 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
 /// Builds and runs the app until it exits.
 pub fn run() -> tauri::Result<()> {
     logging::init();
+    // Before the Shell pool starts below: this thread must be the process's main STA, not a pool
+    // worker (`enter_sta` says why).
+    if let Err(error) = jerry_win::main_thread::enter_sta() {
+        tracing::error!(%error, "the main thread couldn't enter its STA");
+    }
     // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
     let db = storage::Db::open(storage::db_path());
     let builder = specta_builder();

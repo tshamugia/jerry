@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 use jerry_core::JerryError;
 use jerry_core::job::run_job;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::Com::{
+    APTTYPE, APTTYPE_MAINSTA, APTTYPEQUALIFIER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    CoGetApartmentType, CoInitializeEx,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -32,12 +36,34 @@ const WM_RUN_TASK: u32 = WM_APP + 1;
 /// The message-only window, kept as an integer so other threads can post to it.
 static WINDOW: OnceLock<isize> = OnceLock::new();
 
+/// Makes the calling thread, Jerry's main thread, an STA. Call it first thing, before anything
+/// starts a Shell pool: the first thread in a process to enter an STA becomes its main STA, where
+/// COM creates objects registered without a threading model (old shell extensions among them).
+/// That has to be the UI thread, which always pumps messages. A Shell pool worker can't pump
+/// while it runs a job, and a hung one is abandoned, which would leave every such object hung.
+///
+/// wry and [`init`] enter the same STA again later. It stays for the life of the process.
+pub fn enter_sta() -> Result<(), JerryError> {
+    // SAFETY: no reserved pointer. Entering the STA a thread is already in only returns S_FALSE;
+    // the matching CoUninitialize never comes, as the main thread's apartment lasts as long as
+    // the process.
+    unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.ok()?;
+    Ok(())
+}
+
+/// Whether the calling thread is the process's main STA (see [`enter_sta`]).
+pub(crate) fn is_main_sta() -> bool {
+    let (mut kind, mut qualifier) = (APTTYPE::default(), APTTYPEQUALIFIER::default());
+    // SAFETY: two valid out pointers; on a thread without COM this fails and nothing is written.
+    let known = unsafe { CoGetApartmentType(&mut kind, &mut qualifier) }.is_ok();
+    known && kind == APTTYPE_MAINSTA
+}
+
 /// Initializes OLE on the calling thread, which must be Jerry's main (STA) thread, and creates
 /// the window [`run_on_main`] posts to. Call it once, from Tauri's `setup`.
 ///
-/// wry already made the thread an STA with `CoInitializeEx`, but OLE drag & drop, the clipboard
-/// and some context menu handlers need `OleInitialize`. OLE stays initialized for the life of the
-/// process.
+/// [`enter_sta`] already made the thread an STA, but OLE drag & drop, the clipboard and some
+/// context menu handlers need `OleInitialize`. OLE stays initialized for the life of the process.
 pub fn init() -> Result<(), JerryError> {
     // SAFETY: no reserved pointer. A second call on the same thread only returns S_FALSE.
     unsafe { OleInitialize(None) }?;

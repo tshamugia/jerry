@@ -89,6 +89,25 @@ impl Place {
     pub fn from_name(name: &str) -> Option<Place> {
         Place::ALL.into_iter().find(|place| place.name() == name)
     }
+
+    /// Whether the place exists for the current user: OneDrive only once it is set up. The
+    /// sidebar shows only the places that exist; the icon of one that doesn't is `NotFound`.
+    pub fn exists(self) -> bool {
+        self.folder()
+            .is_none_or(|folder| known_folder(folder).is_ok())
+    }
+
+    /// The known folder of a place in the file system; Recycle Bin and a share have none.
+    fn folder(self) -> Option<&'static GUID> {
+        match self {
+            Place::Desktop => Some(&FOLDERID_Desktop),
+            Place::Documents => Some(&FOLDERID_Documents),
+            Place::Downloads => Some(&FOLDERID_Downloads),
+            Place::Pictures => Some(&FOLDERID_Pictures),
+            Place::OneDrive => Some(&FOLDERID_SkyDrive),
+            Place::RecycleBin | Place::NetworkShare => None,
+        }
+    }
 }
 
 /// Sets up the Shell's system image lists once, on one thread, before any lookup: when several
@@ -199,16 +218,15 @@ pub fn drive_glyph(letter: u8) -> Result<Glyph, JerryError> {
         .ok_or_else(|| JerryError::new(ErrorCode::DeviceGone))
 }
 
-/// A standard place's icon. Recycle Bin's shows whether it is empty or full.
+/// A standard place's icon. Recycle Bin's shows whether it is empty or full. `NotFound` for a
+/// place that doesn't exist ([`Place::exists`]).
 pub fn place_glyph(place: Place) -> Result<Glyph, JerryError> {
     let folder = match place {
         Place::NetworkShare => return stock_glyph(SIID_SERVERSHARE),
         Place::RecycleBin => return pidl_glyph(&FOLDERID_RecycleBinFolder),
-        Place::Desktop => &FOLDERID_Desktop,
-        Place::Documents => &FOLDERID_Documents,
-        Place::Downloads => &FOLDERID_Downloads,
-        Place::Pictures => &FOLDERID_Pictures,
-        Place::OneDrive => &FOLDERID_SkyDrive,
+        _ => place
+            .folder()
+            .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?,
     };
     // The folder's icon comes from its desktop.ini. Inside OneDrive that can be cloud-only; then
     // the plain folder icon is shown rather than download it.
