@@ -204,7 +204,6 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
     };
     pointer.current = { x: event.clientX, y: event.clientY };
     dragged.current = false;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
   const onPointerMove = (event: PointerEvent<HTMLElement>) => {
@@ -222,6 +221,8 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
       }
       p.dragging = true;
       p.initial = selectionOf(folder.store.getState());
+      // Only now: a captured pointer's click and double click go to the list, not to the row.
+      event.currentTarget.setPointerCapture?.(event.pointerId);
     }
     update();
   };

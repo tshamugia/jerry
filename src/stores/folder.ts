@@ -293,9 +293,15 @@ export class Folder {
         }
         // The order that follows leaves them out; until it comes, so does this one.
         const order = state.order?.filter((id) => !gone.has(id));
-        const selected = [...state.selected].some((id) => gone.has(id))
-          ? new Set([...state.selected].filter((id) => !gone.has(id)))
-          : state.selected;
+        // The removed ids are few; the selection can be the whole folder.
+        let selected = state.selected;
+        if (message.removed.some((id) => state.selected.has(id))) {
+          const kept = new Set(state.selected);
+          for (const id of gone) {
+            kept.delete(id);
+          }
+          selected = kept;
+        }
         const before = this.shownCache;
         const lost = (id: number | undefined) => id !== undefined && gone.has(id);
         this.store.setState({
