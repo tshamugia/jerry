@@ -10,6 +10,8 @@ export interface TestEntry {
   size?: number;
   modified?: number;
   attributes?: number;
+  /** Defaults to the folder key for folders, a type key otherwise. */
+  iconKey?: number;
 }
 
 export function batchMessage(firstId: number, entries: TestEntry[]): ArrayBuffer {
@@ -38,7 +40,7 @@ function unitCount(entries: TestEntry[]): number {
 }
 
 function entriesBytes(count: number, units: number): number {
-  return count * 24 + units * 2;
+  return count * 28 + units * 2;
 }
 
 function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
@@ -54,7 +56,12 @@ function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
   offset += count * 8;
   new Float64Array(buffer, offset, count).set(entries.map((entry) => entry.modified ?? 0));
   offset += count * 8;
-  new Uint32Array(buffer, offset, count).set(entries.map((entry) => entry.attributes ?? 0x20));
+  const attributes = entries.map((entry) => entry.attributes ?? 0x20);
+  new Uint32Array(buffer, offset, count).set(attributes);
+  offset += count * 4;
+  new Uint32Array(buffer, offset, count).set(
+    entries.map((entry, i) => entry.iconKey ?? ((attributes[i] ?? 0) & 0x10 ? 1 : 3)),
+  );
   offset += count * 4;
   new Uint32Array(buffer, offset, count).set(ends);
   offset += count * 4;

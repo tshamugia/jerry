@@ -1,0 +1,63 @@
+# Listing and sort benchmarks (#44) on pull requests that touch the core. The base and the head
+# run on the same runner in turns, and a benchmark more than 20% slower than the base gets a
+# warning (never a failure). The comparison is in the job summary. .github/scripts/bench.sh runs
+# the benchmarks, bench-compare.mjs next to it compares them.
+name: Benchmarks
+
+on:
+  pull_request:
+    paths:
+      - "crates/jerry-core/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
+      - ".github/scripts/bench*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Bash stops at the first failing command; the default pwsh only checks the last one.
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    name: Listing and sort
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The merge commit and both parents: the base it merges into and the PR's head.
+          fetch-depth: 2
+
+      - name: Check out the base next to it
+        run: git worktree add --detach "$RUNNER_TEMP/base" HEAD^1
+
+      - name: Install the toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+
+      # The head's target folder; the base builds from scratch in its own.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Benchmark base and head in turns
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR: ${{ github.event.pull_request.number }}
+          ROUNDS: 3
+          THRESHOLD: 0.2
+        run: |
+          export BASE="$RUNNER_TEMP/base" CRITERION_HOME="$RUNNER_TEMP/criterion"
+          export BASE_LABEL="$BASE_REF $(git rev-parse --short HEAD^1)"
+          export HEAD_LABEL="#$PR $(git rev-parse --short HEAD^2)"
+          bash .github/scripts/bench.sh

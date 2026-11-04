@@ -8,8 +8,10 @@
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then the entries: `f64 size[count]` (bytes),
 //!   `f64 modified[count]` (ms since the Unix epoch), `u32 attributes[count]`,
-//!   `u32 nameEnd[count]` (where each name ends in this message's names, in UTF-16 units) and the
-//!   names as UTF-16 code units. The entries' ids are `firstId + i`.
+//!   `u32 iconKey[count]` (the `icon://` key: 0 for an entry with its own icon, else its type's;
+//!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this message's
+//!   names, in UTF-16 units) and the names as UTF-16 code units. The entries' ids are
+//!   `firstId + i`.
 //! - Order (2): `[2, count, column, flags]`, then `u32 id[count]`: the entries the folder has, in
 //!   display order, sorted by `column` (0 name, 1 modified, 2 type, 3 size, 4 created,
 //!   5 extension), descending if `flags` bit 0 is set, folders first if bit 1 is. One comes for
@@ -40,6 +42,7 @@ use jerry_core::path::long_path;
 use jerry_core::sort::{PlainTypeNames, Sort, SortColumn, SortIndex};
 use jerry_core::watcher::{Changes, Event, Subscription, Watchers, refresh};
 use jerry_core::{ErrorCode, JerryError};
+use jerry_win::icons::keys::keys as icon_keys;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::ipc::Channel;
@@ -317,6 +320,17 @@ impl Listings {
         }
     }
 
+    /// The exact path, attributes and last write time (FILETIME) of entry `entry` of the open
+    /// listing `listing`: for the `icon://` protocol, which asks for an entry's own icon by id.
+    pub fn entry(&self, listing: u32, entry: u32) -> Option<(PathBuf, u32, u64)> {
+        let state = self.open().get(&listing)?.state.clone();
+        let listing = state.read();
+        let id = entry as usize;
+        let entries = listing.entries();
+        let (attributes, modified) = (*entries.attributes().get(id)?, *entries.modified().get(id)?);
+        Some((listing.path(id)?, attributes, modified))
+    }
+
     fn close_tab(&self, tab: u32) {
         let mut open = self.open();
         open.retain(|_, listing| {
@@ -453,7 +467,7 @@ fn diff_message(listing: &Listing, diff: &Diff) -> Bytes {
 
 /// The size of `count` entries with `units` name units, as [`push_entries`] writes them.
 fn entries_bytes(count: usize, units: usize) -> usize {
-    count * 24 + units * 2
+    count * 28 + units * 2
 }
 
 /// Writes `entries` as batches and diffs carry them: each column in turn, then the names.
@@ -466,6 +480,9 @@ fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
     }
     for &attributes in entries.attributes() {
         out.extend_from_slice(&attributes.to_le_bytes());
+    }
+    for key in icon_keys(entries) {
+        out.extend_from_slice(&key.to_le_bytes());
     }
     for &end in entries.name_ends() {
         out.extend_from_slice(&(end as u32).to_le_bytes());
@@ -642,6 +659,7 @@ mod tests {
         // FILETIME of 2026-01-01T00:00:00Z.
         batch.push(&units[0], 1 << 40, 0, 134_116_992_000_000_000, 0x20);
         batch.push(&units[1], 0, 0, 116_444_736_000_000_000, 0x10);
+        let txt = jerry_win::icons::keys::key(&units[0], 0x20);
 
         let Bytes(bytes) = batch_message(7, &batch);
 
@@ -659,8 +677,12 @@ mod tests {
             [1_767_225_600_000.0, 0.0]
         );
         assert_eq!([word(&bytes, 48), word(&bytes, 52)], [0x20, 0x10]);
-        assert_eq!([word(&bytes, 56), word(&bytes, 60)], [10, 16]);
-        let names_at = 64;
+        assert_eq!(
+            [word(&bytes, 56), word(&bytes, 60)],
+            [txt, jerry_win::icons::keys::FOLDER]
+        );
+        assert_eq!([word(&bytes, 64), word(&bytes, 68)], [10, 16]);
+        let names_at = 72;
         let (pairs, rest) = bytes[names_at..].as_chunks::<2>();
         assert!(rest.is_empty());
         let decoded: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
@@ -761,7 +783,16 @@ mod tests {
             [5.0, (1_u64 << 33) as f64]
         );
         assert_eq!(float(&bytes, entries_at + 24), 1_767_225_600_000.0);
-        let ends_at = entries_at + 32 + 8;
+        let keys_at = entries_at + 32 + 8;
+        let key = |name: &str| {
+            let units: Vec<u16> = name.encode_utf16().collect();
+            jerry_win::icons::keys::key(&units, 0x20)
+        };
+        assert_eq!(
+            [word(&bytes, keys_at), word(&bytes, keys_at + 4)],
+            [key("b.txt"), key("გეგმა.pdf")]
+        );
+        let ends_at = keys_at + 8;
         assert_eq!([word(&bytes, ends_at), word(&bytes, ends_at + 4)], [5, 14]);
         let (pairs, rest) = bytes[ends_at + 8..].as_chunks::<2>();
         assert!(rest.is_empty());
@@ -886,6 +917,12 @@ mod tests {
             subfolder,
             long_path(&dir.path().join("ქვესაქაღალდე")).expect("path")
         );
+        // The icon protocol finds entries the same way.
+        let (path, attributes, modified) = listings.entry(id, sub).expect("entry");
+        assert_eq!((path, attributes & 0x10), (subfolder, 0x10));
+        assert_eq!(modified, entries.modified()[sub as usize]);
+        assert!(listings.entry(id, 4).is_none());
+        assert!(listings.entry(id + 1, 0).is_none());
     }
 
     #[test]
@@ -1099,12 +1136,14 @@ mod tests {
             ordered_names(&listings, id, &last_order),
             ["a.txt", "გეგმა.dwg"]
         );
-        // The removed entry no longer opens.
+        // The removed entry no longer opens and has no icon.
+        let gone = *gone.first().expect("one");
         let removed = ListingTarget::Entry {
             listing: id,
-            entry: *gone.first().expect("one"),
+            entry: gone,
         };
         assert!(listings.resolve(removed).is_err());
+        assert!(listings.entry(id, gone).is_none());
     }
 
     #[test]

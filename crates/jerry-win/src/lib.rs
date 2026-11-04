@@ -8,7 +8,9 @@
 
 pub mod appearance;
 pub mod folders;
+pub mod icons;
 pub mod main_thread;
+pub mod shell_pool;
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
