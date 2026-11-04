@@ -1,8 +1,10 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { commands, type ListingTarget, type Sort } from "../../ipc";
 import { type Folder, paneFolder, useFolder } from "../../stores/folder";
 import { useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
+import { selectAllRows, selectionOf } from "../selection/commands";
 import { DevButton } from "./DevButton";
 import { DevIcons } from "./DevIcons";
 import { afterNextPaint } from "./paint";
@@ -46,6 +48,15 @@ export type SortOutcome =
   | { status: "ok"; timings: SortTimings }
   | { status: "error"; text: string };
 
+/** Select all's timings, in ms from just before Ctrl+A's command runs. */
+export interface SelectTimings {
+  count: number;
+  /** The new selection in the store. */
+  selectMs: number;
+  /** The selected rows painted: what "Ctrl+A on 100 000 entries is instant" measures. */
+  paintMs: number;
+}
+
 /** The last diff: what it changed, and how long from its arrival to the paint. */
 export interface LiveChange {
   added: number;
@@ -66,6 +77,8 @@ declare global {
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
       sort: (sort: Sort) => Promise<SortOutcome>;
       scroll: (durationMs?: number) => Promise<ScrollResult | undefined>;
+      /** Ctrl+A's command on the active pane, from nothing selected, timed to the paint. */
+      selectAll: () => Promise<SelectTimings>;
       /** The next diff, once painted; `paintedAt` is `Date.now()` then, to time from outside. */
       nextChange: () => Promise<PaintedChange>;
     };
@@ -119,6 +132,12 @@ export function DevListing() {
     return result;
   };
 
+  const selectAll = async () => {
+    const timings = await timeSelectAll(folder);
+    setStatus(strings.dev.selectedAll(timings));
+    return timings;
+  };
+
   useEffect(
     () =>
       watchChanges(folder, (live) => {
@@ -132,6 +151,7 @@ export function DevListing() {
       synthFolder: listSynth,
       sort,
       scroll,
+      selectAll,
       nextChange: () =>
         new Promise((resolve) => {
           const stop = watchChanges(folder, (live) => {
@@ -166,6 +186,7 @@ export function DevListing() {
           </DevButton>
         ))}
         <DevButton onClick={() => void scroll()}>{strings.dev.scrollTest}</DevButton>
+        <DevButton onClick={() => void selectAll()}>{strings.dev.timeSelectAll}</DevButton>
       </form>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
       {change && <p className="text-small text-fg-2 tabular-nums">{change}</p>}
@@ -264,6 +285,20 @@ function timeSort(folder: Folder, sort: Sort): Promise<SortOutcome> {
     });
     folder.setSort(sort);
   });
+}
+
+/** Clears `folder`'s selection, then runs Ctrl+A's command and resolves once it is painted. */
+async function timeSelectAll(folder: Folder): Promise<SelectTimings> {
+  flushSync(() =>
+    folder.setSelection({ ...selectionOf(folder.store.getState()), selected: new Set() }),
+  );
+  await afterNextPaint();
+  const started = performance.now();
+  flushSync(selectAllRows);
+  const selectMs = performance.now() - started;
+  const painted = await afterNextPaint();
+  const count = folder.store.getState().selected.size;
+  return { count, selectMs, paintMs: painted - started };
 }
 
 /** Calls `changed` with every diff in `folder` once it is painted. Returns a function that stops. */

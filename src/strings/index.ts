@@ -264,6 +264,10 @@ export const strings = {
       `${timings.sort.descending ? "descending" : "ascending"}: painted ${decimal.format(timings.paintMs)} ms ` +
       `(order in JS ${decimal.format(timings.orderMs)} ms).`,
     nothingToSort: "List a folder first, and wait until it is all in.",
+    timeSelectAll: "Time select all",
+    selectedAll: (timings: { count: number; selectMs: number; paintMs: number }) =>
+      `Selected ${integer.format(timings.count)} items: painted ${decimal.format(timings.paintMs)} ms ` +
+      `(selection ${decimal.format(timings.selectMs)} ms).`,
     /** The last change the watcher sent, and how long it took to paint. */
     changed: (change: { added: number; changed: number; removed: number; paintMs: number }) =>
       `Live: ${integer.format(change.added)} new, ${integer.format(change.changed)} changed, ` +
