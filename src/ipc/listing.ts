@@ -45,6 +45,8 @@ export interface ListingEntries {
   sizes: Float64Array;
   /** Last write time, ms since the Unix epoch. */
   modified: Float64Array;
+  /** Creation time, ms since the Unix epoch. */
+  created: Float64Array;
   /** `FILE_ATTRIBUTE_*` flags. */
   attributes: Uint32Array;
   /**
@@ -228,6 +230,8 @@ function decodeEntries(
   offset += count * Float64Array.BYTES_PER_ELEMENT;
   const modified = new Float64Array(message, offset, count);
   offset += count * Float64Array.BYTES_PER_ELEMENT;
+  const created = new Float64Array(message, offset, count);
+  offset += count * Float64Array.BYTES_PER_ELEMENT;
   const attributes = new Uint32Array(message, offset, count);
   offset += count * Uint32Array.BYTES_PER_ELEMENT;
   const iconKeys = new Uint32Array(message, offset, count);
@@ -244,5 +248,5 @@ function decodeEntries(
     names[i] = text.slice(start, end);
     start = end;
   }
-  return { names, sizes, modified, attributes, iconKeys };
+  return { names, sizes, modified, created, attributes, iconKeys };
 }

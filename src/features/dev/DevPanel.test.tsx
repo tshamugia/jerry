@@ -37,10 +37,21 @@ test("shows the settings from the store and changes them through the core", asyn
   mockIPC((cmd, args) => {
     if (cmd === "settings_set") sent.push(args);
   });
-  useSettings.setState({ settings: { theme: "dark", showHidden: true } as Settings });
+  useSettings.setState({
+    settings: {
+      theme: "dark",
+      showHidden: true,
+      showExtensions: true,
+      clickToOpen: "double",
+    } as Settings,
+  });
   render(<DevPanel />);
 
-  expect(screen.getByText("Settings: hidden files shown, theme dark.")).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      "Settings: hidden files shown, extensions shown, double click to open, theme dark.",
+    ),
+  ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Toggle hidden files" }));
   fireEvent.click(screen.getByRole("button", { name: "Next theme" }));
 

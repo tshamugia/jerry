@@ -18,8 +18,11 @@ import { TitleBar } from "./TitleBar";
 
 interface Props {
   settings: Settings;
-  /** The left pane's content. */
+  /** Each pane's content: its file list. */
   left?: ReactNode;
+  right?: ReactNode;
+  /** The preview panel's content (dev builds: the dev panel, until previews come in v0.3). */
+  previewContent?: ReactNode;
   /** The transfer panel's content; the 56 px zone shows only while a transfer runs. */
   transfers?: ReactNode;
 }
@@ -31,7 +34,7 @@ interface Props {
  * sizes are saved in the settings. In a narrow window the preview and then the sidebar hide
  * (`layout.ts`).
  */
-export function Frame({ settings, left, transfers }: Props) {
+export function Frame({ settings, left, right, previewContent, transfers }: Props) {
   const width = useWindowWidth();
   const sidebar = useDraggedSize("sidebarWidth", settings.sidebarWidth);
   const preview = useDraggedSize("previewWidth", settings.previewWidth);
@@ -74,11 +77,11 @@ export function Frame({ settings, left, transfers }: Props) {
                 onDrop={split.drop}
               />
             </div>
-            <Pane side="right" />
+            <Pane side="right">{right}</Pane>
           </>
         )}
         {zones.preview > 0 && (
-          <Preview>
+          <Preview content={previewContent}>
             <Splitter
               label={strings.frame.resizePreview}
               className="-left-1"
@@ -107,16 +110,17 @@ const Sidebar = memo(function Sidebar() {
 });
 
 /** The preview panel; it shows the selected file from v0.3. */
-function Preview({ children }: { children: ReactNode }) {
+function Preview({ children, content }: { children: ReactNode; content: ReactNode }) {
   return (
     <aside
       aria-label={strings.frame.preview}
-      className="relative flex min-w-0 flex-col border-stroke border-l bg-bar"
+      className="relative flex min-h-0 min-w-0 flex-col border-stroke border-l bg-bar"
     >
       {children}
       <div className="flex h-11 shrink-0 items-center pr-2 pl-4 font-semibold text-fg-2 text-small">
         {strings.frame.preview}
       </div>
+      {content && <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">{content}</div>}
     </aside>
   );
 }

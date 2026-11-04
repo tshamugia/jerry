@@ -155,6 +155,24 @@ export function PinIcon({ className }: { className?: string }) {
   );
 }
 
+/** The sorted column's arrow in the list header: up for ascending, down for descending. */
+export function SortIcon({ descending }: { descending: boolean }) {
+  return (
+    <Icon size={10} stroke={1.6}>
+      <path d={descending ? "M4 6l4 4 4-4" : "M4 10l4-4 4 4"} />
+    </Icon>
+  );
+}
+
+/** A menu item's check mark. */
+export function CheckIcon() {
+  return (
+    <Icon size={14} stroke={1.3}>
+      <path d="M3 8.5l3 3 7-7" />
+    </Icon>
+  );
+}
+
 /** The design's two-tone yellow folder. */
 export function FolderIcon() {
   return (

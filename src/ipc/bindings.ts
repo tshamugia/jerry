@@ -228,7 +228,12 @@ export type ListingTarget =
  *  Subfolder `entry` of the open listing `listing`, opened by its exact path in core, so
  *  names that aren't valid Unicode open too.
  */
-{ kind: "entry"; listing: number; entry: number };
+{ kind: "entry"; listing: number; entry: number } | 
+/**
+ *  The folder of the open listing `listing` again, by its exact path: to retry after an
+ *  error message, or to refresh.
+ */
+{ kind: "listing"; listing: number };
 
 /**  Every setting, defaults filled in. */
 export type Settings = {

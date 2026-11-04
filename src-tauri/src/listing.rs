@@ -7,7 +7,8 @@
 //!
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then the entries: `f64 size[count]` (bytes),
-//!   `f64 modified[count]` (ms since the Unix epoch), `u32 attributes[count]`,
+//!   `f64 modified[count]` and `f64 created[count]` (ms since the Unix epoch),
+//!   `u32 attributes[count]`,
 //!   `u32 iconKey[count]` (the `icon://` key: 0 for an entry with its own icon, else its type's;
 //!   see `jerry_win::icons::keys`), `u32 nameEnd[count]` (where each name ends in this message's
 //!   names, in UTF-16 units) and the names as UTF-16 code units. The entries' ids are
@@ -66,6 +67,9 @@ pub enum ListingTarget {
     /// Subfolder `entry` of the open listing `listing`, opened by its exact path in core, so
     /// names that aren't valid Unicode open too.
     Entry { listing: u32, entry: u32 },
+    /// The folder of the open listing `listing` again, by its exact path: to retry after an
+    /// error message, or to refresh.
+    Listing { listing: u32 },
 }
 
 /// An opened listing: its id, and its folder as display text.
@@ -221,6 +225,11 @@ impl Listings {
                     .and_then(|open| open.state.read().path(entry as usize))
                     .ok_or_else(|| JerryError::new(ErrorCode::NotFound))
             }
+            ListingTarget::Listing { listing } => self
+                .open()
+                .get(&listing)
+                .map(|open| open.state.folder.clone())
+                .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
         }
     }
 
@@ -467,7 +476,7 @@ fn diff_message(listing: &Listing, diff: &Diff) -> Bytes {
 
 /// The size of `count` entries with `units` name units, as [`push_entries`] writes them.
 fn entries_bytes(count: usize, units: usize) -> usize {
-    count * 28 + units * 2
+    count * 36 + units * 2
 }
 
 /// Writes `entries` as batches and diffs carry them: each column in turn, then the names.
@@ -477,6 +486,9 @@ fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
     }
     for &modified in entries.modified() {
         out.extend_from_slice(&filetime_to_unix_ms(modified).to_le_bytes());
+    }
+    for &created in entries.created() {
+        out.extend_from_slice(&filetime_to_unix_ms(created).to_le_bytes());
     }
     for &attributes in entries.attributes() {
         out.extend_from_slice(&attributes.to_le_bytes());
@@ -656,9 +668,21 @@ mod tests {
         let mut batch = Entries::default();
         let names = ["file10.txt", "ნახაზი"];
         let units: Vec<Vec<u16>> = names.iter().map(|n| n.encode_utf16().collect()).collect();
-        // FILETIME of 2026-01-01T00:00:00Z.
-        batch.push(&units[0], 1 << 40, 0, 134_116_992_000_000_000, 0x20);
-        batch.push(&units[1], 0, 0, 116_444_736_000_000_000, 0x10);
+        // FILETIMEs of 2026-01-01T00:00:00Z and of the Unix epoch.
+        batch.push(
+            &units[0],
+            1 << 40,
+            116_444_736_000_000_000,
+            134_116_992_000_000_000,
+            0x20,
+        );
+        batch.push(
+            &units[1],
+            0,
+            134_116_992_000_000_000,
+            116_444_736_000_000_000,
+            0x10,
+        );
         let txt = jerry_win::icons::keys::key(&units[0], 0x20);
 
         let Bytes(bytes) = batch_message(7, &batch);
@@ -674,15 +698,21 @@ mod tests {
         );
         assert_eq!(
             [float(&bytes, 32), float(&bytes, 40)],
-            [1_767_225_600_000.0, 0.0]
+            [1_767_225_600_000.0, 0.0],
+            "modified"
         );
-        assert_eq!([word(&bytes, 48), word(&bytes, 52)], [0x20, 0x10]);
         assert_eq!(
-            [word(&bytes, 56), word(&bytes, 60)],
+            [float(&bytes, 48), float(&bytes, 56)],
+            [0.0, 1_767_225_600_000.0],
+            "created"
+        );
+        assert_eq!([word(&bytes, 64), word(&bytes, 68)], [0x20, 0x10]);
+        assert_eq!(
+            [word(&bytes, 72), word(&bytes, 76)],
             [txt, jerry_win::icons::keys::FOLDER]
         );
-        assert_eq!([word(&bytes, 64), word(&bytes, 68)], [10, 16]);
-        let names_at = 72;
+        assert_eq!([word(&bytes, 80), word(&bytes, 84)], [10, 16]);
+        let names_at = 88;
         let (pairs, rest) = bytes[names_at..].as_chunks::<2>();
         assert!(rest.is_empty());
         let decoded: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
@@ -753,7 +783,13 @@ mod tests {
         listing.append(&batch);
         let mut present = Entries::default();
         let units: Vec<u16> = "გეგმა.pdf".encode_utf16().collect();
-        present.push(&units, 1 << 33, 0, 134_116_992_000_000_000, 0x20);
+        present.push(
+            &units,
+            1 << 33,
+            134_116_992_000_000_000,
+            134_116_992_000_000_000,
+            0x20,
+        );
         let units: Vec<u16> = "b.txt".encode_utf16().collect();
         present.push(&units, 5, 0, 116_444_736_000_000_000, 0x20);
         let diff = listing.apply(&jerry_core::listing::Observed {
@@ -782,8 +818,17 @@ mod tests {
             [float(&bytes, entries_at), float(&bytes, entries_at + 8)],
             [5.0, (1_u64 << 33) as f64]
         );
-        assert_eq!(float(&bytes, entries_at + 24), 1_767_225_600_000.0);
-        let keys_at = entries_at + 32 + 8;
+        assert_eq!(
+            float(&bytes, entries_at + 24),
+            1_767_225_600_000.0,
+            "modified"
+        );
+        assert_eq!(
+            float(&bytes, entries_at + 40),
+            1_767_225_600_000.0,
+            "created"
+        );
+        let keys_at = entries_at + 48 + 8;
         let key = |name: &str| {
             let units: Vec<u16> = name.encode_utf16().collect();
             jerry_win::icons::keys::key(&units, 0x20)
@@ -934,13 +979,17 @@ mod tests {
         let missing = listings
             .resolve(path_target(&dir.path().join("აღარ არის")))
             .expect("resolves");
-        listings.open_folder(1, missing, Sort::default(), channel);
+        let id = listings.open_folder(1, missing.clone(), Sort::default(), channel);
         let messages = until_end(&receiver);
 
         assert_eq!(messages.len(), 1);
         let json: serde_json::Value = serde_json::from_slice(&messages[0][16..]).expect("JSON");
         assert_eq!(json["code"], "NotFound");
         assert_eq!(listings.0.watchers.watched(), 0, "nothing to watch");
+
+        // Retry: the failed listing's folder opens again by its exact path.
+        let again = listings.resolve(ListingTarget::Listing { listing: id });
+        assert_eq!(again.expect("the listing is still open"), missing);
     }
 
     #[test]
@@ -956,6 +1005,9 @@ mod tests {
             entry: 0,
         };
         let error = listings.resolve(stale).expect_err("no such listing");
+        assert_eq!(error.code, ErrorCode::NotFound);
+        let closed = ListingTarget::Listing { listing: 99 };
+        let error = listings.resolve(closed).expect_err("no such listing");
         assert_eq!(error.code, ErrorCode::NotFound);
     }
 

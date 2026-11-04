@@ -28,6 +28,7 @@ test("a batch decodes into columns without copying", () => {
       name: "ნახაზი 2.dwg",
       size: 2 ** 40 + 1,
       modified: 1_767_225_600_000,
+      created: 1_700_000_000_000,
       attributes: 0x20,
       iconKey: 7,
     },
@@ -43,6 +44,7 @@ test("a batch decodes into columns without copying", () => {
   expect(decoded.names).toEqual(["ნახაზი 2.dwg", "Folder", "setup.exe"]);
   expect([...decoded.sizes]).toEqual([2 ** 40 + 1, 0, 1]);
   expect([...decoded.modified]).toEqual([1_767_225_600_000, 0, 0]);
+  expect([...decoded.created]).toEqual([1_700_000_000_000, 0, 0]);
   expect([...decoded.attributes]).toEqual([0x20, 0x10, 0x20]);
   expect([...decoded.iconKeys]).toEqual([7, IconKey.folder, IconKey.own]);
   expect(decoded.sizes.buffer).toBe(message);
