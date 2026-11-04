@@ -43,6 +43,7 @@ Spike-მა (02–03.11.2026) ხუთი ტექნიკა შეცვ�
 | აპის ჩარჩო: ფანჯრები, IPC, ინსტალერი | Tauri 2 |
 | ენა | Rust stable, edition 2024 |
 | Win32, COM, Shell, OLE, Cloud Files | `windows` crate (Microsoft-ის ოფიციალური bindings) |
+| WebView2-ის პარამეტრები, რომლებსაც Tauri არ აჩენს (browser-ის კლავიშები) | `webview2-com` (იგივე ვერსია, რასაც wry იყენებს) |
 | ასინქრონულობა | tokio (Tauri-ს runtime) |
 | პარალელური გამოთვლები: ძებნა, დალაგება | rayon |
 | შენახვა | rusqlite (bundled SQLite, WAL) + rusqlite\_migration |
