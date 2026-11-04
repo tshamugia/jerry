@@ -1,8 +1,8 @@
 /**
- * The body's zones across the window: sidebar, two panes with a 1 px divider, preview. The
- * sidebar and preview keep the width the user dragged them to; in a narrow window they hide on
- * their own (preview first) before a pane gets narrower than `MIN_PANE` (PRD «ინტერფეისის
- * სტრუქტურა»). All sizes in CSS pixels.
+ * The body's zones across the window: sidebar, the panes (two with a 1 px divider, or one in
+ * single-pane mode), preview. The sidebar and preview keep the width the user dragged them to;
+ * in a narrow window they hide on their own (preview first) before a pane gets narrower than
+ * `MIN_PANE` (PRD «ინტერფეისის სტრუქტურა»). All sizes in CSS pixels.
  */
 
 /** The narrowest a pane gets: its toolbar still fits. */
@@ -10,7 +10,6 @@ export const MIN_PANE = 240;
 export const SIDEBAR_LIMITS = { min: 160, max: 400 } as const;
 export const PREVIEW_LIMITS = { min: 200, max: 480 } as const;
 const DIVIDER = 1;
-const PANES = 2 * MIN_PANE + DIVIDER;
 
 /** The sizes the user chose (settings, or a drag in progress). */
 export interface ZoneSizes {
@@ -26,17 +25,25 @@ export interface Zones {
   sidebar: number;
   /** 0 when hidden. */
   preview: number;
-  /** The left pane's share, so that both panes keep `MIN_PANE`. */
+  /** The left pane's share, so that both panes keep `MIN_PANE`; unused with one pane. */
   split: number;
+  /** Two panes (the default), or one ("Dual-pane mode" off). */
+  dual: boolean;
 }
 
-export function layoutZones(width: number, wanted: ZoneSizes): Zones {
+/** The narrowest the panes get together. */
+function minPanes(dual: boolean): number {
+  return dual ? 2 * MIN_PANE + DIVIDER : MIN_PANE;
+}
+
+export function layoutZones(width: number, wanted: ZoneSizes, dual = true): Zones {
   const sidebar = clamp(wanted.sidebar, SIDEBAR_LIMITS.min, SIDEBAR_LIMITS.max);
   const preview = clamp(wanted.preview, PREVIEW_LIMITS.min, PREVIEW_LIMITS.max);
-  const showSidebar = width - sidebar >= PANES;
-  const showPreview = width - sidebar - preview >= PANES;
+  const panes = minPanes(dual);
+  const showSidebar = width - sidebar >= panes;
+  const showPreview = width - sidebar - preview >= panes;
   const zones = { sidebar: showSidebar ? sidebar : 0, preview: showPreview ? preview : 0 };
-  return { ...zones, split: clampSplit(wanted.split, panesWidth(width, zones)) };
+  return { ...zones, split: clampSplit(wanted.split, panesWidth(width, zones)), dual };
 }
 
 /** The grid columns for `--frame-columns`, shared by the title bar and the body. */
@@ -45,7 +52,7 @@ export function frameColumns(zones: Zones): string {
   const right = round(1 - left);
   return [
     zones.sidebar > 0 ? `${zones.sidebar}px` : "",
-    `minmax(0, ${left}fr) ${DIVIDER}px minmax(0, ${right}fr)`,
+    zones.dual ? `minmax(0, ${left}fr) ${DIVIDER}px minmax(0, ${right}fr)` : "minmax(0, 1fr)",
     zones.preview > 0 ? `${zones.preview}px` : "",
   ]
     .join(" ")
@@ -54,13 +61,13 @@ export function frameColumns(zones: Zones): string {
 
 /** The sidebar's width for a drag of its edge to `x`; the panes keep `MIN_PANE`. */
 export function dragSidebar(x: number, width: number, zones: Zones): number {
-  const max = Math.min(SIDEBAR_LIMITS.max, width - zones.preview - PANES);
+  const max = Math.min(SIDEBAR_LIMITS.max, width - zones.preview - minPanes(zones.dual));
   return Math.round(clamp(x, SIDEBAR_LIMITS.min, max));
 }
 
 /** The preview's width for a drag of its edge to `x`; the panes keep `MIN_PANE`. */
 export function dragPreview(x: number, width: number, zones: Zones): number {
-  const max = Math.min(PREVIEW_LIMITS.max, width - zones.sidebar - PANES);
+  const max = Math.min(PREVIEW_LIMITS.max, width - zones.sidebar - minPanes(zones.dual));
   return Math.round(clamp(width - x, PREVIEW_LIMITS.min, max));
 }
 

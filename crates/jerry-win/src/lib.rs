@@ -1,6 +1,6 @@
 //! Jerry's Windows integration: icons, thumbnails, Recycle Bin, clipboard, drag & drop,
 //! context menu, OneDrive, drives, registry and toast, plus the Windows look the window follows
-//! (theme, accent, Mica).
+//! (theme, accent, Mica) and the native half of its title bar (caption-button hit-testing).
 //!
 //! This is the only crate that touches Shell, COM or OLE. OLE, clipboard, drag & drop and the
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
@@ -11,6 +11,7 @@ pub mod folders;
 pub mod icons;
 pub mod main_thread;
 pub mod shell_pool;
+pub mod title_bar;
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;

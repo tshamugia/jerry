@@ -8,6 +8,7 @@ import {
   type Theme,
 } from "../../ipc";
 import { setSetting, useSettings } from "../../stores/settings";
+import { setTabs, useTabs } from "../../stores/tabs";
 import { errorText, strings } from "../../strings";
 import { DevButton } from "./DevButton";
 import { DevListing } from "./DevListing";
@@ -50,6 +51,14 @@ export function DevPanel() {
         <DevButton onClick={run(() => saved(commands.devOpenWindow()))}>
           {strings.dev.openWindow}
         </DevButton>
+        <DevButton onClick={run(async () => toggleSampleTabs())}>
+          {strings.dev.sampleTabs}
+        </DevButton>
+        <DevButton
+          onClick={run(() => saved(setSetting("dualPane", !(settings?.dualPane ?? true))))}
+        >
+          {strings.dev.toggleDualPane}
+        </DevButton>
       </div>
       <p className="text-small text-fg-2">
         {settings
@@ -64,6 +73,19 @@ export function DevPanel() {
       <DevListing />
     </section>
   );
+}
+
+/** Fills both tab strips with the design's tabs, a pinned one and long Georgian names; or empties them. */
+function toggleSampleTabs(): undefined {
+  if (useTabs.getState().left.tabs.length > 0) {
+    setTabs("left", []);
+    setTabs("right", []);
+    return;
+  }
+  const [projects, drawings, downloads, issued, files, documents] = strings.dev.sampleTabNames;
+  const tab = (id: number, name: string, pinned = false) => ({ id, name, pinned });
+  setTabs("left", [tab(1, projects, true), tab(2, drawings), tab(3, downloads)], 2);
+  setTabs("right", [tab(4, issued), tab(5, files), tab(6, documents)], 4);
 }
 
 function nextTheme(theme: Theme | undefined): Theme {

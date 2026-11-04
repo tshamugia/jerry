@@ -95,3 +95,8 @@ Where the mockup is wrong and the build follows the PRD:
 4. **No "Copy newer files to other pane"** (`Ctrl+Shift+F5`): sync is out of scope. Compare panes + `F5` covers it.
 5. **Font size** (PRD Appearance setting, default 100 %) still needs a control on the Settings screen.
 6. **Checksum** row in the preview metadata isn't in the PRD; compute on demand or leave out.
+
+Where the mockup breaks its own rules, and the build follows the rule:
+
+1. **App mark** in the title bar is filled with Jerry blue (`--jerry-brand`, the app icon's tile), not the accent: the accent is only for selection, progress, focus and the active-pane bar.
+2. **Caption buttons** use Windows' own glyphs (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10) and Windows 11's hover colors (`--jerry-subtle-hover`, `--jerry-caption-close`), which the canvas doesn't draw.

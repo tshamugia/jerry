@@ -9,6 +9,7 @@ pub mod jobs;
 pub mod listing;
 pub mod logging;
 pub mod storage;
+pub mod title_bar;
 pub mod window;
 
 use std::time::{Duration, Instant};
@@ -75,6 +76,9 @@ macro_rules! commands {
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,
+            title_bar::title_bar_attach,
+            title_bar::title_bar_set_buttons,
+            title_bar::title_bar_press,
             window::appearance_get,
             $($dev)*
         ]

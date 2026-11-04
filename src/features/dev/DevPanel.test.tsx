@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, test } from "vitest";
 import type { Settings } from "../../ipc";
 import { useSettings } from "../../stores/settings";
+import { useTabs } from "../../stores/tabs";
 import { DevPanel } from "./DevPanel";
 
 test("shows a command's JerryError as text", async () => {
@@ -50,4 +51,20 @@ test("shows the settings from the store and changes them through the core", asyn
     ]),
   );
   useSettings.setState({ settings: undefined });
+});
+
+test("fills both tab strips with sample tabs and empties them again", () => {
+  mockIPC(() => undefined);
+  render(<DevPanel />);
+  const sampleTabs = screen.getByRole("button", { name: "Sample tabs" });
+
+  fireEvent.click(sampleTabs);
+  const { left, right } = useTabs.getState();
+  expect(left.tabs.map((tab) => tab.name)).toEqual(["PROJECTS", "Drawings", "Downloads"]);
+  expect(left.tabs[0]?.pinned).toBe(true);
+  expect(right.tabs.map((tab) => tab.name)).toContain("ფაილები და ნახაზები");
+
+  fireEvent.click(sampleTabs);
+  expect(useTabs.getState().left.tabs).toEqual([]);
+  expect(useTabs.getState().right.tabs).toEqual([]);
 });
