@@ -41,6 +41,15 @@ export const commands = {
 	 *  anything, every window gets `settings:changed`, this one included.
 	 */
 	settingsSet: (key: string, value: unknown) => typedError<null, JerryError>(__TAURI_INVOKE("settings_set", { key, value })),
+	/**  Starts streaming the window's [`FrameState`] to the page; the current state comes first. */
+	titleBarAttach: (updates: Channel<FrameState>) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_attach", { updates })),
+	/**  Tells the native hit-test where the page drew the caption buttons. */
+	titleBarSetButtons: (buttons: CaptionButtonRect[]) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_set_buttons", { buttons })),
+	/**
+	 *  Does what a click on the caption button does. The mouse never reaches the page's buttons
+	 *  (the input window does that); the keyboard and screen readers press them through this.
+	 */
+	titleBarPress: (button: CaptionButton) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_press", { button })),
 	/**  Whether Mica can show and the Windows accent. */
 	appearanceGet: () => __TAURI_INVOKE<Appearance>("appearance_get"),
 	/**
@@ -105,6 +114,19 @@ export type Appearance = {
 /**  Sent to every window when the Windows accent changes or Mica stops working. */
 export type AppearanceChanged = Appearance;
 
+/**  One of the three window buttons. */
+export type CaptionButton = "minimize" | "maximize" | "close";
+
+/**  Where the page drew a caption button, in CSS pixels from the top-right corner of the window. */
+export type CaptionButtonRect = {
+	button: CaptionButton,
+	/**  Distance from the window's right edge to the button's right edge. */
+	right: number,
+	top: number,
+	width: number,
+	height: number,
+};
+
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
 
@@ -149,6 +171,18 @@ export type ErrorCode =
 } } | 
 /**  Jerry's own bug, for example a job that panicked. The details are in the log. */
 { code: "Internal" };
+
+/**
+ *  What the page needs to draw the caption buttons like native ones: which one the mouse is over
+ *  or holds down (only the native hit-test sees that), whether the window is maximized (the
+ *  maximize button shows Restore) and whether it is the active window (inactive glyphs dim).
+ */
+export type FrameState = {
+	hovered: CaptionButton | null,
+	pressed: CaptionButton | null,
+	maximized: boolean,
+	active: boolean,
+};
 
 /**  Icon counters since start: whether rows are served from memory or need the Shell. */
 export type IconStats = {

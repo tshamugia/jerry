@@ -29,6 +29,17 @@ export const strings = {
     resizePanes: "Resize panes",
     resizePreview: "Resize preview",
   },
+  /** The title bar: each pane's tabs and the window's caption buttons. */
+  titleBar: {
+    tabs: (pane: string) => `${pane} tabs`,
+    newTab: "New tab (Ctrl+T)",
+    closeTab: "Close tab",
+    pinnedTab: (name: string) => `${name} (pinned tab)`,
+    minimize: "Minimize",
+    maximize: "Maximize",
+    restore: "Restore down",
+    close: "Close",
+  },
   /** A pane's toolbar. */
   toolbar: {
     back: "Back (Alt+Left)",
@@ -67,6 +78,16 @@ export const strings = {
     toggleHidden: "Toggle hidden files",
     nextTheme: "Next theme",
     openWindow: "Open another window",
+    sampleTabs: "Sample tabs",
+    sampleTabNames: [
+      "PROJECTS",
+      "Drawings",
+      "Downloads",
+      "04_Issued",
+      "ფაილები და ნახაზები",
+      "პროექტის დოკუმენტაცია 2026",
+    ],
+    toggleDualPane: "Toggle dual pane",
     settingsLoading: "Settings: loading…",
     settings: (showHidden: boolean, theme: string) =>
       `Settings: hidden files ${showHidden ? "shown" : "hidden"}, theme ${theme}.`,

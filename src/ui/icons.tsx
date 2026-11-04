@@ -9,7 +9,7 @@ function Icon({
   stroke = 1.2,
   children,
 }: {
-  size?: 14 | 16;
+  size?: 10 | 14 | 16;
   stroke?: number;
   children: ReactNode;
 }) {
@@ -119,5 +119,51 @@ export function CompactIcon() {
     <Icon size={14} stroke={1.3}>
       <path d="M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12" />
     </Icon>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <Icon size={14} stroke={1.3}>
+      <path d="M8 3v10M3 8h10" />
+    </Icon>
+  );
+}
+
+/** The 10 px cross of a tab's close button. */
+export function CloseIcon() {
+  return (
+    <Icon size={10} stroke={1.6}>
+      <path d="M3 3l10 10M13 3L3 13" />
+    </Icon>
+  );
+}
+
+/** The 9 px pin on a pinned tab, filled with the text color. */
+export function PinIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      width={9}
+      height={9}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M10 1l5 5-2.2.6-2.6 2.6.4 3.3-1.6 1.6-3.2-3.2L2 15l-1-1 4.1-3.8L1.9 7l1.6-1.6 3.3.4 2.6-2.6z" />
+    </svg>
+  );
+}
+
+/** The design's two-tone yellow folder. */
+export function FolderIcon() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 16 16" className="shrink-0" aria-hidden="true">
+      <path
+        d="M1.5 3.5a1 1 0 0 1 1-1h3.6l1.5 1.5h5.9a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"
+        className="fill-folder-back"
+      />
+      <rect x="1.5" y="5.5" width="13" height="8" rx="1" className="fill-folder-front" />
+    </svg>
   );
 }

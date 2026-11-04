@@ -11,7 +11,10 @@ let calls: { cmd: string; args: unknown }[];
 beforeEach(() => {
   calls = [];
   mockIPC((cmd, args) => {
-    calls.push({ cmd, args });
+    // The title bar's own IPC has its tests in TitleBar.test.tsx.
+    if (!cmd.startsWith("title_bar_")) {
+      calls.push({ cmd, args });
+    }
   });
   resizeTo(1440);
 });
@@ -44,6 +47,14 @@ test("the zones show at the design's sizes", () => {
   expect(columns()).toBe("232px minmax(0, 0.5fr) 1px minmax(0, 0.5fr) 288px");
   // The transfer panel shows only while a transfer runs.
   expect(screen.queryByRole("region", { name: "Transfers" })).toBeNull();
+});
+
+test("single-pane mode shows one pane, without the divider", () => {
+  render(<Frame settings={{ ...defaultSettings, dualPane: false }} />);
+  expect(screen.getByRole("region", { name: "Left pane, active" })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Right pane" })).toBeNull();
+  expect(screen.queryByRole("separator", { name: "Resize panes" })).toBeNull();
+  expect(columns()).toBe("232px minmax(0, 1fr) 288px");
 });
 
 test("the zones use the saved sizes", () => {

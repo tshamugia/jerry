@@ -14,8 +14,22 @@ const design = { sidebar: 232, preview: 288, split: 0.5 };
 describe("layoutZones", () => {
   test("the design's window shows every zone at the design's sizes", () => {
     const zones = layoutZones(1440, design);
-    expect(zones).toEqual({ sidebar: 232, preview: 288, split: 0.5 });
+    expect(zones).toEqual({ sidebar: 232, preview: 288, split: 0.5, dual: true });
     expect(frameColumns(zones)).toBe("232px minmax(0, 0.5fr) 1px minmax(0, 0.5fr) 288px");
+  });
+
+  test("single-pane mode has one pane column, which needs only one pane's minimum", () => {
+    const zones = layoutZones(1440, design, false);
+    expect(frameColumns(zones)).toBe("232px minmax(0, 1fr) 288px");
+    expect(layoutZones(232 + 288 + 240, design, false)).toMatchObject({
+      sidebar: 232,
+      preview: 288,
+    });
+    expect(layoutZones(232 + 288 + 239, design, false)).toMatchObject({ sidebar: 232, preview: 0 });
+    expect(frameColumns(layoutZones(400, design, false))).toBe("minmax(0, 1fr)");
+    // Its edges leave the pane its minimum too.
+    expect(dragSidebar(400, 760, zones)).toBe(760 - 288 - 240);
+    expect(dragPreview(0, 760, zones)).toBe(760 - 232 - 240);
   });
 
   test("a narrow window hides the preview first, then the sidebar", () => {

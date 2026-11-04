@@ -10,17 +10,11 @@ import {
 import type { Settings } from "../ipc";
 import { setSetting } from "../stores/settings";
 import { strings } from "../strings";
-import {
-  dragPreview,
-  dragSidebar,
-  dragSplit,
-  frameColumns,
-  layoutZones,
-  type Zones,
-} from "./layout";
+import { dragPreview, dragSidebar, dragSplit, frameColumns, layoutZones } from "./layout";
 import { Pane } from "./Pane";
 import { Splitter } from "./Splitter";
 import { StatusBar } from "./StatusBar";
+import { TitleBar } from "./TitleBar";
 
 interface Props {
   settings: Settings;
@@ -31,26 +25,27 @@ interface Props {
 }
 
 /**
- * The window's zones, top to bottom: the 40 px title bar (tabs and caption buttons: #23), the
- * body (sidebar, two panes, preview), the transfer panel while a transfer runs, and the status
- * bar. The sidebar, the pane divider and the preview resize by drag; the sizes are saved in the
- * settings. In a narrow window the preview and then the sidebar hide (`layout.ts`).
+ * The window's zones, top to bottom: the 40 px title bar (each pane's tabs and the caption
+ * buttons), the body (sidebar, two panes or one, preview), the transfer panel while a transfer
+ * runs, and the status bar. The sidebar, the pane divider and the preview resize by drag; the
+ * sizes are saved in the settings. In a narrow window the preview and then the sidebar hide
+ * (`layout.ts`).
  */
 export function Frame({ settings, left, transfers }: Props) {
   const width = useWindowWidth();
   const sidebar = useDraggedSize("sidebarWidth", settings.sidebarWidth);
   const preview = useDraggedSize("previewWidth", settings.previewWidth);
   const split = useDraggedSize("paneSplit", settings.paneSplit);
-  const zones = layoutZones(width, {
-    sidebar: sidebar.value,
-    preview: preview.value,
-    split: split.value,
-  });
+  const zones = layoutZones(
+    width,
+    { sidebar: sidebar.value, preview: preview.value, split: split.value },
+    settings.dualPane,
+  );
   const style = { "--frame-columns": frameColumns(zones) } as CSSProperties;
 
   return (
     <div className="flex h-full flex-col bg-mica text-fg" style={style}>
-      <TitleBar zones={visible(zones)} />
+      <TitleBar sidebar={zones.sidebar > 0} preview={zones.preview > 0} dual={zones.dual} />
       <div className="frame-columns grid min-h-0 flex-1">
         {zones.sidebar > 0 && <Sidebar />}
         <Pane
@@ -69,15 +64,19 @@ export function Frame({ settings, left, transfers }: Props) {
         >
           {left}
         </Pane>
-        <div className="relative bg-stroke">
-          <Splitter
-            label={strings.frame.resizePanes}
-            className="-left-1"
-            onDrag={(x) => split.drag(dragSplit(x, width, zones))}
-            onDrop={split.drop}
-          />
-        </div>
-        <Pane side="right" />
+        {zones.dual && (
+          <>
+            <div className="relative bg-stroke">
+              <Splitter
+                label={strings.frame.resizePanes}
+                className="-left-1"
+                onDrag={(x) => split.drag(dragSplit(x, width, zones))}
+                onDrop={split.drop}
+              />
+            </div>
+            <Pane side="right" />
+          </>
+        )}
         {zones.preview > 0 && (
           <Preview>
             <Splitter
@@ -101,40 +100,6 @@ export function Frame({ settings, left, transfers }: Props) {
     </div>
   );
 }
-
-/** Which zones show; the title bar's columns follow the body's. */
-interface Visible {
-  sidebar: boolean;
-  preview: boolean;
-}
-
-function visible(zones: Zones): Visible {
-  return { sidebar: zones.sidebar > 0, preview: zones.preview > 0 };
-}
-
-/**
- * The 40 px title bar on Mica, a drag region: WebView2 moves the window, snaps and maximizes it
- * natively. Its columns are the body's, so each pane's tabs (#23) will sit over that pane.
- */
-const TitleBar = memo(
-  function TitleBar({ zones }: { zones: Visible }) {
-    return (
-      <header className="drag-region frame-columns grid h-titlebar shrink-0">
-        {zones.sidebar && (
-          <div className="flex min-w-0 items-center px-3.5 text-fg-2 text-small">
-            {strings.appName}
-          </div>
-        )}
-        <div />
-        <div className="mt-2.5 bg-stroke" />
-        <div />
-        {zones.preview && <div />}
-      </header>
-    );
-  },
-  (before, after) =>
-    before.zones.sidebar === after.zones.sidebar && before.zones.preview === after.zones.preview,
-);
 
 /** The sidebar on Mica; its favorites, places and drives arrive with #34. */
 const Sidebar = memo(function Sidebar() {

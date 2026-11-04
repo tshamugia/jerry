@@ -23,6 +23,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use windows::core::Interface;
 
 use crate::storage::{Db, SettingsChanged};
+use crate::title_bar;
 
 /// The main window's label (`tauri.conf.json`).
 pub const MAIN: &str = "main";
@@ -158,7 +159,7 @@ pub fn create_main(app: &tauri::App, settings: &Settings) -> tauri::Result<Webvi
 }
 
 /// Builds a Jerry window, hidden until its page reports ready (`app_ready`), with `settings`'
-/// theme and Mica, and WebView2's browser behavior turned off.
+/// theme and Mica, WebView2's browser behavior turned off, and the native half of the title bar.
 pub fn build<M: Manager<Wry>>(
     builder: WebviewWindowBuilder<'_, Wry, M>,
     settings: &Settings,
@@ -177,6 +178,7 @@ pub fn build<M: Manager<Wry>>(
         set_mica(&window, true);
     }
     lock_down(&window);
+    title_bar::install(&window);
     Ok(window)
 }
 

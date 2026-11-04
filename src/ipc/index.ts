@@ -18,10 +18,13 @@
 export type {
   Accent,
   Appearance,
+  CaptionButton,
+  CaptionButtonRect,
   ClickToOpen,
   Density,
   DragAction,
   ErrorCode,
+  FrameState,
   JerryError,
   ListingTarget,
   Settings,

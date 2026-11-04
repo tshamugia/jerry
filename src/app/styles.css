@@ -32,6 +32,13 @@
   --color-nav-sel: var(--jerry-nav-sel);
   --color-sel-inactive: var(--jerry-sel-inactive);
   --color-focus: var(--jerry-focus);
+  --color-subtle-hover: var(--jerry-subtle-hover);
+  --color-subtle-pressed: var(--jerry-subtle-pressed);
+  --color-caption-close: var(--jerry-caption-close);
+  --color-caption-close-pressed: var(--jerry-caption-close-pressed);
+  --color-on-caption-close: var(--jerry-on-caption-close);
+  --color-brand: var(--jerry-brand);
+  --color-on-brand: var(--jerry-on-brand);
   --color-track: var(--jerry-track);
   --color-red: var(--jerry-red);
   --color-green: var(--jerry-green);
@@ -50,9 +57,11 @@
 
   --font-*: initial;
   --font-sans: var(--jerry-font);
+  --font-glyph: var(--jerry-font-glyph);
 
   /* Type scale from design/README.md ("Look"). Body follows density (13 / 12 px). */
   --text-*: initial;
+  --text-glyph: var(--jerry-glyph-size);
   --text-caption: 11px;
   --text-small: 12px;
   --text-body: var(--jerry-font-size);
@@ -73,7 +82,10 @@
   /* Fixed layout sizes and density-dependent row heights (h-titlebar, w-sidebar, h-row, ...). */
   --spacing-titlebar: var(--jerry-titlebar-h);
   --spacing-tab: var(--jerry-tab-h);
+  --spacing-tab-active: var(--jerry-tab-w-active);
+  --spacing-tab-inactive: var(--jerry-tab-w);
   --spacing-caption-btn: var(--jerry-caption-btn-w);
+  --spacing-caption-btns: calc(3 * var(--jerry-caption-btn-w));
   --spacing-sidebar: var(--jerry-sidebar-w);
   --spacing-preview: var(--jerry-preview-w);
   --spacing-toolbar-btn: var(--jerry-toolbar-btn);
@@ -109,8 +121,8 @@
 }
 
 /*
- * The window's columns, shared by the title bar and the body, so each pane's tabs (#23) sit
- * right over that pane and follow the divider. `--frame-columns` is set by the frame.
+ * The window's columns, shared by the title bar and the body, so each pane's tabs sit right
+ * over that pane and follow the divider. `--frame-columns` is set by the frame.
  */
 @utility frame-columns {
   grid-template-columns: var(--frame-columns);
