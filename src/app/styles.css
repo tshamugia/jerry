@@ -32,6 +32,7 @@
   --color-nav-sel: var(--jerry-nav-sel);
   --color-sel-inactive: var(--jerry-sel-inactive);
   --color-focus: var(--jerry-focus);
+  --color-marquee: var(--jerry-marquee);
   --color-subtle-hover: var(--jerry-subtle-hover);
   --color-subtle-pressed: var(--jerry-subtle-pressed);
   --color-caption-close: var(--jerry-caption-close);

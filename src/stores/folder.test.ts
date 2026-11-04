@@ -91,7 +91,7 @@ test("a diff updates entries; removed ones leave the order and the selection at 
   const folder = new Folder(7);
   await folder.open(work);
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
-  folder.select(0);
+  folder.setSelection({ selected: new Set([0]), anchor: 0, focused: 0 });
 
   core.send(diffMessage([1, 2], [0], [{ name: "b.txt", size: 9 }, { name: "ნახაზი.dwg" }]));
 
@@ -100,9 +100,71 @@ test("a diff updates entries; removed ones leave the order and the selection at 
   expect(state.entries.sizes[1]).toBe(9);
   expect(state.selected.size).toBe(0);
   expect(state.focused).toBeUndefined();
+  expect(state.anchor).toBeUndefined();
 
   core.send(orderMessage([1, 2]));
   expect(names(folder)).toEqual(["b.txt", "ნახაზი.dwg"]);
+});
+
+test("the selection survives changes in the folder; a removed focus passes to the next row", async () => {
+  const core = fakeListings({
+    messages: () => [
+      batchMessage(0, [{ name: "a.txt" }, { name: "b.txt" }, { name: "c.txt" }, { name: "d.txt" }]),
+      orderMessage([0, 1, 2, 3]),
+      doneMessage(4, 1, 1),
+    ],
+  });
+  const folder = new Folder(7);
+  await folder.open(work);
+  await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
+  expect([...folder.rows(false)]).toEqual([0, 1, 2, 3]);
+  folder.setSelection({ selected: new Set([0, 1, 3]), anchor: 0, focused: 1 });
+  const before = folder.store.getState().selected;
+
+  // A change and an addition keep the very same selection: no row repaints for it.
+  core.send(diffMessage([2, 4], [], [{ name: "c.txt", size: 5 }, { name: "e.txt" }]));
+  core.send(orderMessage([0, 1, 2, 3, 4]));
+  expect(folder.store.getState().selected).toBe(before);
+
+  // The focused row goes: b.txt's place is c.txt's now.
+  core.send(diffMessage([], [1], []));
+  expect(folder.store.getState()).toMatchObject({
+    selected: new Set([0, 3]),
+    anchor: 0,
+    focused: 2,
+  });
+
+  // The last row goes while focused: the focus stays on the last row.
+  folder.setSelection({ selected: new Set([4]), anchor: 4, focused: 4 });
+  core.send(diffMessage([], [4], []));
+  expect(folder.store.getState()).toMatchObject({ selected: new Set(), anchor: 3, focused: 3 });
+});
+
+test("the shown rows leave out hidden entries and are the same array until something changes", async () => {
+  fakeListings({
+    messages: () => [
+      batchMessage(0, [{ name: "a.txt" }, { name: "desktop.ini", attributes: 0x2 | 0x4 }]),
+      orderMessage([0, 1]),
+      doneMessage(2, 1, 1),
+    ],
+  });
+  const folder = new Folder(7);
+  await folder.open(work);
+  await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
+
+  const rows = folder.rows(false);
+  expect([...rows]).toEqual([0]);
+  expect(folder.rows(false)).toBe(rows);
+  expect([...folder.rows(true)]).toEqual([0, 1]);
+
+  // Hiding hidden files again drops them from the selection.
+  folder.setSelection({ selected: new Set([0, 1]), anchor: 1, focused: 1 });
+  folder.keepShown(folder.rows(false));
+  expect(folder.store.getState()).toMatchObject({
+    selected: new Set([0]),
+    anchor: undefined,
+    focused: undefined,
+  });
 });
 
 test("an error ends the listing; Retry opens the same folder by the failed listing", async () => {

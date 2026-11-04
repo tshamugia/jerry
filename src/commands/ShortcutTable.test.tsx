@@ -45,7 +45,7 @@ test("F1 shows the shortcuts from the registry; Esc closes them", () => {
   expect(within(other).getByText("F1")).toBeInTheDocument();
   expect(within(other).getByText("?")).toBeInTheDocument();
   // Commands that aren't built yet stay out.
-  expect(within(dialog).queryByText("Select all")).toBeNull();
+  expect(within(dialog).queryByText("Duplicate")).toBeNull();
 
   // The window's shortcuts don't work under the dialog.
   fireEvent.keyDown(dialog, { code: "KeyD", ctrlKey: true, altKey: true });

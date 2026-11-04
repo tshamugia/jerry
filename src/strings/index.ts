@@ -116,6 +116,8 @@ export const strings = {
     selectAll: "Select all",
     invertSelection: "Invert selection",
     selectByPattern: "Select by pattern…",
+    toggleSelection: "Toggle focused item",
+    clearSelection: "Clear selection",
     newFolder: "New folder",
     newFile: "New file",
     rename: "Rename",

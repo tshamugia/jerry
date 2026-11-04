@@ -11,7 +11,7 @@ import {
   type SortColumn,
 } from "../ipc";
 import { type ColumnLayout, DEFAULT_COLUMNS } from "./columns";
-import { FolderEntries } from "./entries";
+import { FolderEntries, visibleRows } from "./entries";
 import type { PaneSide } from "./window";
 
 /**
@@ -37,11 +37,16 @@ export interface FolderState {
   /** Changes whenever `entries` or `order` change. */
   version: number;
   columns: ColumnLayout;
-  /** The selected entries. Clicking selects one; #30 brings the rest of the selection model. */
+  /** The selected entries. A new set on every change (`src/features/selection/model.ts`). */
   selected: ReadonlySet<number>;
+  /** Where Shift ranges start: the row last clicked or moved to without Shift. */
+  anchor: number | undefined;
   /** The entry with the keyboard focus. */
   focused: number | undefined;
 }
+
+/** The selection part of a folder's state. */
+export type Selection = Pick<FolderState, "selected" | "anchor" | "focused">;
 
 const DEFAULT_SORT: Sort = { column: "name", descending: false, foldersFirst: true };
 
@@ -57,8 +62,17 @@ function emptyFolder() {
     entries: new FolderEntries(),
     order: undefined,
     selected: new Set<number>(),
+    anchor: undefined,
     focused: undefined,
   };
+}
+
+/** The shown rows, for the state they were computed from. */
+interface ShownRows {
+  version: number;
+  failed: boolean;
+  showHidden: boolean;
+  rows: Uint32Array;
 }
 
 /**
@@ -74,6 +88,7 @@ export class Folder {
   private generation = 0;
   private target: ListingTarget | undefined;
   private readonly listeners = new Set<(message: ListingMessage) => void>();
+  private shown: ShownRows | undefined;
 
   /** `tab`: the core keeps one listing per tab; opening another folder closes the previous. */
   constructor(readonly tab: number) {
@@ -164,9 +179,61 @@ export class Folder {
     this.store.setState({ columns });
   }
 
-  /** Selects entry `id` alone and gives it the focus. */
-  select(id: number): void {
-    this.store.setState({ selected: new Set([id]), focused: id });
+  /**
+   * The rows the list shows, as entry ids in display order: what it draws, and all that the
+   * selection works on (Ctrl+A selects only these). `showHidden` is the setting. The same array
+   * until the folder or the setting changes.
+   */
+  rows(showHidden: boolean): Uint32Array {
+    const { status, entries, order, version } = this.store.getState();
+    const failed = status === "failed";
+    const shown = this.shown;
+    if (shown?.version === version && shown.failed === failed && shown.showHidden === showHidden) {
+      return shown.rows;
+    }
+    const rows = failed ? new Uint32Array(0) : visibleRows(entries, order, showHidden);
+    this.shown = { version, failed, showHidden, rows };
+    return rows;
+  }
+
+  /** Puts in a new selection (`src/features/selection/model.ts` makes them). */
+  setSelection(selection: Selection): void {
+    const state = this.store.getState();
+    if (
+      selection.selected !== state.selected ||
+      selection.anchor !== state.anchor ||
+      selection.focused !== state.focused
+    ) {
+      this.store.setState(selection);
+    }
+  }
+
+  /**
+   * Drops the selection, anchor and focus on entries `rows` leaves out: hidden again, or filtered
+   * out. Later operations never act on entries the list doesn't show.
+   */
+  keepShown(rows: Uint32Array): void {
+    const { entries, selected, anchor, focused } = this.store.getState();
+    if (selected.size === 0 && anchor === undefined && focused === undefined) {
+      return;
+    }
+    const shown = new Uint8Array(entries.count);
+    for (const id of rows) {
+      shown[id] = 1;
+    }
+    const kept = (id: number | undefined) => (id !== undefined && shown[id] ? id : undefined);
+    let dropped = false;
+    for (const id of selected) {
+      if (!shown[id]) {
+        dropped = true;
+        break;
+      }
+    }
+    this.setSelection({
+      selected: dropped ? new Set([...selected].filter((id) => shown[id])) : selected,
+      anchor: kept(anchor),
+      focused: kept(focused),
+    });
   }
 
   /** Stops the listing: the view shows no folder. */
@@ -210,10 +277,25 @@ export class Folder {
         }
         // The order that follows leaves them out; until it comes, so does this one.
         const order = state.order?.filter((id) => !gone.has(id));
-        const selected = new Set([...state.selected].filter((id) => !gone.has(id)));
-        const focused =
-          state.focused !== undefined && gone.has(state.focused) ? undefined : state.focused;
-        this.store.setState({ order, selected, focused, version });
+        const selected = [...state.selected].some((id) => gone.has(id))
+          ? new Set([...state.selected].filter((id) => !gone.has(id)))
+          : state.selected;
+        const before = this.shown;
+        const lost = (id: number | undefined) => id !== undefined && gone.has(id);
+        this.store.setState({
+          order,
+          selected,
+          anchor: lost(state.anchor) ? undefined : state.anchor,
+          focused: lost(state.focused) ? undefined : state.focused,
+          version,
+        });
+        // As in Explorer, the focus goes to the row that takes the removed one's place.
+        if (lost(state.focused) && before) {
+          const at = before.rows.indexOf(state.focused ?? 0);
+          const rows = this.rows(before.showHidden);
+          const focused = at < 0 ? undefined : rows[Math.min(at, rows.length - 1)];
+          this.store.setState({ focused, anchor: lost(state.anchor) ? focused : state.anchor });
+        }
         break;
       }
       case "done":
