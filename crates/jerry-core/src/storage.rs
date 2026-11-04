@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use rusqlite::{Connection, params};
 use rusqlite_migration::{M, Migrations};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use specta::Type;
 
 use crate::error::{ErrorCode, JerryError};
 use crate::settings::Settings;
@@ -28,6 +30,16 @@ pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
 
 /// How long a statement waits for another connection's lock (a second Jerry) before failing.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A shortcut the user changed (the `keybindings` table). The command registry and the default
+/// shortcuts live in the UI (`src/commands/`); the core only keeps the changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct Keybinding {
+    /// The command's id in the registry, for example `newFolder`.
+    pub command: String,
+    /// The shortcut with US key names (`Ctrl+Shift+N`), or none: the user removed the default.
+    pub shortcut: Option<String>,
+}
 
 /// The open database, with the settings read from it.
 pub struct Storage {
@@ -77,6 +89,21 @@ impl Storage {
         }
         self.settings = next;
         Ok(true)
+    }
+
+    /// The shortcuts the user changed, by command id. Every other command keeps its default.
+    pub fn keybindings(&self) -> Result<Vec<Keybinding>, JerryError> {
+        let rows = self
+            .conn
+            .prepare("SELECT command, shortcut FROM keybindings ORDER BY command")?
+            .query_map([], |row| {
+                Ok(Keybinding {
+                    command: row.get(0)?,
+                    shortcut: row.get(1)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
     }
 
     pub(crate) fn open_with(path: &Path, migrations: &Migrations<'_>) -> Result<Self, JerryError> {
@@ -318,6 +345,32 @@ mod tests {
                 .iter()
                 .all(|name| !name.to_string_lossy().contains(".bak")),
             "{names:?}"
+        );
+    }
+
+    #[test]
+    fn keybindings_are_the_changed_shortcuts() {
+        let storage = Storage::in_memory().expect("opens");
+        assert_eq!(storage.keybindings(), Ok(vec![]));
+
+        storage
+            .conn
+            .execute_batch(
+                "INSERT INTO keybindings (command, shortcut) VALUES
+                     ('selectAll', NULL), ('newFolder', 'Ctrl+Alt+F'), ('ბრძანება', 'Ctrl+K');",
+            )
+            .expect("inserts");
+        let keybinding = |command: &str, shortcut: Option<&str>| Keybinding {
+            command: command.to_owned(),
+            shortcut: shortcut.map(str::to_owned),
+        };
+        assert_eq!(
+            storage.keybindings(),
+            Ok(vec![
+                keybinding("newFolder", Some("Ctrl+Alt+F")),
+                keybinding("selectAll", None),
+                keybinding("ბრძანება", Some("Ctrl+K")),
+            ])
         );
     }
 

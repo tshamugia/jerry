@@ -74,6 +74,7 @@ macro_rules! commands {
             listing::listing_close,
             storage::settings_get,
             storage::settings_set,
+            storage::keybindings_get,
             window::appearance_get,
             $($dev)*
         ]

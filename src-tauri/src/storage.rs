@@ -1,6 +1,6 @@
 //! Jerry's database in the app: opened on its own thread at start, while Tauri and WebView2 start
-//! up, then shared by the commands. The settings commands and `settings:changed` live here; the
-//! storage itself is `jerry_core::storage`.
+//! up, then shared by the commands. The settings and keybindings commands and `settings:changed`
+//! live here; the storage itself is `jerry_core::storage`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use jerry_core::JerryError;
 use jerry_core::job::run_job;
 use jerry_core::settings::Settings;
-use jerry_core::storage::Storage;
+use jerry_core::storage::{Keybinding, Storage};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{AppHandle, State};
@@ -140,6 +140,17 @@ pub async fn settings_set(
             }
             Ok(())
         })
+    })
+    .await
+}
+
+/// The shortcuts the user changed (`keybindings`); every other command keeps its default.
+#[tauri::command]
+#[specta::specta]
+pub async fn keybindings_get(db: State<'_, Db>) -> Result<Vec<Keybinding>, JerryError> {
+    let db = Db::clone(&db);
+    jobs::background("keybindings get", move || {
+        db.with(|storage| storage.keybindings())
     })
     .await
 }

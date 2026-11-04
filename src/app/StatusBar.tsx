@@ -1,5 +1,6 @@
 import { memo } from "react";
 import type { Density } from "../ipc";
+import { useCommandLabel } from "../stores/keymap";
 import { setSetting } from "../stores/settings";
 import { strings } from "../strings";
 import { IconButton } from "../ui/IconButton";
@@ -10,10 +11,11 @@ import { ComfortableIcon, CompactIcon } from "../ui/icons";
  * with the file list; the row density switch is here already (the same as Ctrl+Alt+D).
  */
 export const StatusBar = memo(function StatusBar({ density }: { density: Density }) {
+  const densityLabel = useCommandLabel("toggleDensity");
   return (
     <footer className="flex h-statusbar shrink-0 items-center gap-4 border-stroke border-t pr-2 pl-4 text-fg-2 text-small">
       <span className="flex-1" />
-      <fieldset aria-label={strings.status.density} className="flex gap-0.5">
+      <fieldset aria-label={densityLabel} className="flex gap-0.5">
         <IconButton
           label={strings.status.comfortable}
           pressed={density === "comfortable"}
