@@ -5,6 +5,13 @@
 //! before the folder is read, so no change is missed; changes that come while it is read are
 //! applied right after.
 //!
+//! A listing keeps its volume in use. Every local volume listings are on gets Windows' notices
+//! (`jerry_win::devices`), so that when Windows wants to remove or lock it ("Safely remove",
+//! Eject), Jerry lets go first, on the main thread, before the notice returns: the watchers close
+//! their folders, and a listing still reading stops and ends with `DeviceGone` (#126). If the
+//! volume stays, the watchers open their folders again and list them anew; if it goes, the
+//! listings on it end with `DeviceGone`.
+//!
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then the entries: `f64 size[count]` (bytes),
 //!   `f64 modified[count]` and `f64 created[count]` (ms since the Unix epoch),
@@ -34,15 +41,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
-use std::time::Instant;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, RwLock, Weak};
+use std::time::{Duration, Instant};
 
 use jerry_core::error::display_path;
 use jerry_core::listing::{Diff, Entries, Listing, filetime_to_unix_ms, list};
 use jerry_core::path::long_path;
 use jerry_core::sort::{PlainTypeNames, Sort, SortColumn, SortIndex};
+use jerry_core::volume;
 use jerry_core::watcher::{Changes, Event, Subscription, Watchers, refresh};
 use jerry_core::{ErrorCode, JerryError};
+use jerry_win::devices::{VolumeEvent, VolumeNotices, watch_volume};
 use jerry_win::icons::keys::keys as icon_keys;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -57,6 +66,11 @@ const ORDER: u32 = 2;
 const DONE: u32 = 3;
 const ERROR: u32 = 4;
 const DIFF: u32 = 5;
+
+/// How long letting go of a volume may hold up the main thread, at most. Closing a watched
+/// folder or stopping a read takes milliseconds; past this Windows refuses the removal, as it
+/// would with any program that holds the drive.
+const RELEASE_WAIT: Duration = Duration::from_secs(3);
 
 /// The folder to list.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
@@ -89,6 +103,78 @@ struct Shared {
     last_id: AtomicU32,
     open: Mutex<HashMap<u32, Open>>,
     watchers: Watchers,
+    /// The volumes listings are on, by root (`jerry_core::volume::root`).
+    volumes: Mutex<HashMap<PathBuf, Volume>>,
+}
+
+impl Shared {
+    fn volumes(&self) -> MutexGuard<'_, HashMap<PathBuf, Volume>> {
+        self.volumes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Windows has said whether the volume at `root` stays or goes: `update` it if listings are
+    /// still on it, else forget it. Returns notices to drop once the lock is let go.
+    fn settle_volume(
+        &self,
+        root: &Path,
+        update: impl FnOnce(&mut Volume) -> Option<VolumeNotices>,
+    ) -> Option<VolumeNotices> {
+        let mut volumes = self.volumes();
+        let volume = volumes.get_mut(root)?;
+        if volume.has_listings() {
+            update(volume)
+        } else {
+            volumes.remove(root).and_then(|volume| volume.notices)
+        }
+    }
+}
+
+/// A volume listings are on.
+#[derive(Default)]
+struct Volume {
+    /// Its listings, while they live.
+    listings: Vec<Weak<ListingState>>,
+    /// Windows is removing or locking it: no listing on it starts until it stays or goes.
+    released: bool,
+    /// Windows' notices about it: none for a network volume, or once it is gone.
+    notices: Option<VolumeNotices>,
+}
+
+impl Volume {
+    /// Forgets listings that are gone; whether any is left.
+    fn has_listings(&mut self) -> bool {
+        self.listings.retain(|listing| listing.strong_count() > 0);
+        !self.listings.is_empty()
+    }
+}
+
+/// A listing's place among its volume's listings. The volume's notices stop with its last
+/// listing.
+struct OnVolume {
+    shared: Weak<Shared>,
+    root: PathBuf,
+}
+
+impl Drop for OnVolume {
+    fn drop(&mut self) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let notices = {
+            let mut volumes = shared.volumes();
+            // A released volume stays known until Windows says whether it stays or goes.
+            let unused = volumes
+                .get_mut(&self.root)
+                .is_some_and(|volume| !volume.has_listings() && !volume.released);
+            if unused {
+                volumes.remove(&self.root).and_then(|volume| volume.notices)
+            } else {
+                None
+            }
+        };
+        // Unregistering is only queued, but outside the lock all the same.
+        drop(notices);
+    }
 }
 
 struct Open {
@@ -109,6 +195,13 @@ struct ListingState {
     /// The folder's watcher, once the job has subscribed. Its callback holds this state only
     /// weakly, so closing the listing drops both.
     watch: Mutex<Option<Subscription>>,
+    /// Whether the job still runs: letting go of the volume waits for it to stop reading.
+    running: Mutex<bool>,
+    stopped_running: Condvar,
+    /// The volume was released while the job read it: the stream ends with `DeviceGone`.
+    released: AtomicBool,
+    /// Its place among its volume's listings, once the job knows the volume.
+    on_volume: OnceLock<OnVolume>,
 }
 
 /// What changes as a listing goes on. Every message after the batches is sent under its lock,
@@ -123,6 +216,85 @@ struct Live {
 }
 
 impl ListingState {
+    /// A listing of `folder` sorted by `sort`, its job about to run.
+    fn new(folder: PathBuf, sort: Sort, channel: Option<Channel<Bytes>>) -> Self {
+        Self {
+            listing: RwLock::new(Listing::new(folder.clone())),
+            folder,
+            started_sort: sort,
+            live: Mutex::new(Live {
+                sort,
+                index: None,
+                pending: Changes::default(),
+                ended: false,
+            }),
+            cancel: AtomicBool::new(false),
+            outbox: Outbox::new(channel),
+            watch: Mutex::new(None),
+            running: Mutex::new(true),
+            stopped_running: Condvar::new(),
+            released: AtomicBool::new(false),
+            on_volume: OnceLock::new(),
+        }
+    }
+
+    /// If the job still runs, stops what it reads, as its volume is being released: a stream
+    /// that isn't through the folder yet ends with `DeviceGone`. Whether the job runs.
+    fn stop_reading(&self) -> bool {
+        let running = self.running();
+        if *running {
+            self.released.store(true, Ordering::Relaxed);
+            self.cancel.store(true, Ordering::Relaxed);
+        }
+        *running
+    }
+
+    /// The job is done: nothing it opened is open any more.
+    fn job_done(&self) {
+        *self.running() = false;
+        self.stopped_running.notify_all();
+    }
+
+    /// Waits until the job is done, or until `deadline`; whether it is.
+    fn wait_job(&self, deadline: Instant) -> bool {
+        let mut running = self.running();
+        while *running {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            running = self
+                .stopped_running
+                .wait_timeout(running, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
+
+    /// Ends the stream as the job's `result` says.
+    fn finish(&self, id: u32, result: Result<(), JerryError>) {
+        let error = match result {
+            Ok(()) => return,
+            Err(error) if error.code == ErrorCode::Cancelled => {
+                if !self.released.load(Ordering::Relaxed) {
+                    return; // closed
+                }
+                // The volume is being removed: the folder can't be read to the end.
+                JerryError::new(ErrorCode::DeviceGone).at(&self.folder)
+            }
+            Err(error) => error,
+        };
+        tracing::info!(id, code = ?error.code, "listing failed");
+        // Nothing to keep live.
+        self.watch().take();
+        self.end(&mut self.live(), &error);
+    }
+
+    fn running(&self) -> MutexGuard<'_, bool> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn live(&self) -> MutexGuard<'_, Live> {
         self.live.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -256,20 +428,7 @@ impl Listings {
     fn start(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Option<Channel<Bytes>>) -> u32 {
         self.close_tab(tab);
         let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let state = Arc::new(ListingState {
-            listing: RwLock::new(Listing::new(folder.clone())),
-            folder,
-            started_sort: sort,
-            live: Mutex::new(Live {
-                sort,
-                index: None,
-                pending: Changes::default(),
-                ended: false,
-            }),
-            cancel: AtomicBool::new(false),
-            outbox: Outbox::new(channel),
-            watch: Mutex::new(None),
-        });
+        let state = Arc::new(ListingState::new(folder, sort, channel));
         self.open().insert(
             id,
             Open {
@@ -277,22 +436,114 @@ impl Listings {
                 state: state.clone(),
             },
         );
-        let watchers = self.0.watchers.clone();
+        let listings = self.clone();
         tauri::async_runtime::spawn(async move {
             let job_state = state.clone();
-            let job = move || run(&job_state, &watchers);
-            match jobs::background("listing", job).await {
-                Ok(()) => {}
-                Err(error) if error.code == ErrorCode::Cancelled => {}
-                Err(error) => {
-                    tracing::info!(id, code = ?error.code, "listing failed");
-                    // Nothing to keep live.
-                    state.watch().take();
-                    state.end(&mut state.live(), &error);
-                }
-            }
+            let job = move || {
+                let _done = JobDone(&job_state);
+                run(&job_state, &listings)
+            };
+            let result = jobs::background("listing", job).await;
+            state.finish(id, result);
         });
         id
+    }
+
+    /// Puts `state` among its volume's listings, so it hears when Windows wants the volume. The
+    /// first listing on a local volume asks Windows for its notices. Fails with `DeviceGone`
+    /// while the volume is released. Blocking IO: Windows looks for the volume's root.
+    fn enter_volume(&self, state: &Arc<ListingState>) -> Result<(), JerryError> {
+        // Without a root (a drive that is gone), reading the folder says what is wrong.
+        let Ok(root) = volume::root(&state.folder) else {
+            return Ok(());
+        };
+        let local = volume::is_local(&root);
+        let mut volumes = self.0.volumes();
+        let volume = volumes.entry(root.clone()).or_default();
+        if volume.released {
+            return Err(JerryError::new(ErrorCode::DeviceGone).at(&state.folder));
+        }
+        volume.has_listings();
+        volume.listings.push(Arc::downgrade(state));
+        if local && volume.notices.is_none() {
+            volume.notices = Some(self.notices(root.clone()));
+        }
+        let _ = state.on_volume.set(OnVolume {
+            shared: Arc::downgrade(&self.0),
+            root,
+        });
+        Ok(())
+    }
+
+    /// Windows' notices about the volume at `root`, handed to [`Listings::on_volume`].
+    fn notices(&self, root: PathBuf) -> VolumeNotices {
+        let shared = Arc::downgrade(&self.0);
+        let registered = root.clone();
+        watch_volume(&registered, move |event| {
+            if let Some(shared) = shared.upgrade() {
+                Listings(shared).on_volume(&root, event);
+            }
+        })
+    }
+
+    /// What Windows says about the volume at `root`. On the main thread, inside the notice: a
+    /// release is done when this returns.
+    fn on_volume(&self, root: &Path, event: VolumeEvent) {
+        match event {
+            VolumeEvent::Release => self.release(root),
+            VolumeEvent::Keep => self.keep(root),
+            VolumeEvent::Removed => self.removed(root),
+        }
+    }
+
+    /// Lets go of everything the listings hold open on the volume at `root`, as Windows wants to
+    /// remove or lock it: each watcher closes its folder, and a listing still reading stops and
+    /// ends with `DeviceGone`. Until the volume stays or goes, no listing on it starts. Waits for
+    /// all that, at most [`RELEASE_WAIT`].
+    fn release(&self, root: &Path) {
+        let started = Instant::now();
+        let deadline = started + RELEASE_WAIT;
+        let listings: Vec<Arc<ListingState>> = {
+            let mut volumes = self.0.volumes();
+            let volume = volumes.entry(root.to_path_buf()).or_default();
+            volume.released = true;
+            volume.listings.iter().filter_map(Weak::upgrade).collect()
+        };
+        let reading: Vec<Arc<ListingState>> = listings
+            .into_iter()
+            .filter(|state| state.stop_reading())
+            .collect();
+        let closed = self.0.watchers.release(root, deadline);
+        let stopped = reading.iter().all(|state| state.wait_job(deadline));
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let root = display_path(root);
+        if closed && stopped {
+            tracing::info!(%root, reading = reading.len(), ms, "volume released");
+        } else {
+            tracing::warn!(%root, ms, "volume not released in time: Windows may keep it");
+        }
+    }
+
+    /// The volume at `root` stays: its removal or lock failed, or the lock is over. Listings on
+    /// it start again, and the watchers open their folders again and list them anew.
+    fn keep(&self, root: &Path) {
+        let notices = self.0.settle_volume(root, |volume| {
+            volume.released = false;
+            None
+        });
+        drop(notices);
+        self.0.watchers.keep(root);
+    }
+
+    /// The volume at `root` is gone: the listings on it end with `DeviceGone` (their watchers
+    /// say so), and if it comes back under the same root it gets new notices.
+    fn removed(&self, root: &Path) {
+        let notices = self.0.settle_volume(root, |volume| {
+            volume.released = false;
+            volume.notices.take()
+        });
+        drop(notices);
+        self.0.watchers.gone(root);
     }
 
     /// Sorts listing `id` by `sort` from now on. Once the whole folder is in, its order goes out
@@ -365,12 +616,22 @@ impl Open {
     }
 }
 
-/// The listing job: subscribes to the folder's watcher, reads the folder and sends each batch,
-/// then builds the sort index and sends the order and the done message, and last applies the
-/// changes that came while it read.
-fn run(state: &Arc<ListingState>, watchers: &Watchers) -> Result<(), JerryError> {
+/// Marks a listing's job done when dropped, panic or not.
+struct JobDone<'a>(&'a ListingState);
+
+impl Drop for JobDone<'_> {
+    fn drop(&mut self) {
+        self.0.job_done();
+    }
+}
+
+/// The listing job: joins its volume's listings, subscribes to the folder's watcher, reads the
+/// folder and sends each batch, then builds the sort index and sends the order and the done
+/// message, and last applies the changes that came while it read.
+fn run(state: &Arc<ListingState>, listings: &Listings) -> Result<(), JerryError> {
     let started = Instant::now();
-    watch(state, watchers);
+    listings.enter_volume(state)?;
+    watch(state, &listings.0.watchers);
     let mut count = 0;
     let mut batches = 0;
     list(&state.folder, &state.cancel, |batch| {
@@ -1066,20 +1327,7 @@ mod tests {
         // A listing whose job hasn't run yet, as `start` makes it.
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
-        let state = Arc::new(ListingState {
-            listing: RwLock::new(Listing::new(folder.clone())),
-            folder,
-            started_sort: Sort::default(),
-            live: Mutex::new(Live {
-                sort: Sort::default(),
-                index: None,
-                pending: Changes::default(),
-                ended: false,
-            }),
-            cancel: AtomicBool::new(false),
-            outbox: Outbox::new(Some(channel)),
-            watch: Mutex::new(None),
-        });
+        let state = Arc::new(ListingState::new(folder, Sort::default(), Some(channel)));
         listings.open().insert(
             7,
             Open {
@@ -1093,7 +1341,7 @@ mod tests {
             receiver.try_recv().is_err(),
             "no order before the folder is in"
         );
-        run(&state, &listings.0.watchers).expect("lists");
+        run(&state, &listings).expect("lists");
         let messages = until_end(&receiver);
 
         let order = &messages[messages.len() - 2];
@@ -1219,6 +1467,121 @@ mod tests {
         let error = messages.last().expect("an error");
         let json: serde_json::Value = serde_json::from_slice(&error[16..]).expect("JSON");
         assert_eq!(json["code"], "NotFound");
+    }
+
+    /// The error code of an error message.
+    fn error_code(message: &[u8]) -> String {
+        assert_eq!(word(message, 0), ERROR);
+        let json: serde_json::Value = serde_json::from_slice(&message[16..]).expect("JSON");
+        json["code"].as_str().expect("a code").to_owned()
+    }
+
+    fn root_of(folder: &Path) -> PathBuf {
+        volume::root(&long_path(folder).expect("long path")).expect("a root")
+    }
+
+    #[test]
+    fn a_released_volume_holds_nothing_and_a_kept_one_is_live_again() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let parent = dir.path().join("USB");
+        let watched = parent.join("ნახაზები");
+        std::fs::create_dir_all(&watched).expect("mkdir");
+        std::fs::write(watched.join("a.dwg"), b"a").expect("write");
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(&watched).expect("long path");
+        listings.open_folder(1, folder, Sort::default(), channel);
+        until_end(&receiver);
+        let root = root_of(&watched);
+        let moved = dir.path().join("USB (moved)");
+        assert!(std::fs::rename(&parent, &moved).is_err(), "held while live");
+
+        // Windows asks for the volume: once `release` returns, Jerry holds nothing on it.
+        listings.release(&root);
+        std::fs::rename(&parent, &moved).expect("nothing holds the folder");
+        std::fs::rename(&moved, &parent).expect("and back");
+        // No listing on it starts meanwhile.
+        let (refused_channel, refused) = test_channel();
+        let elsewhere = long_path(dir.path()).expect("long path");
+        listings.open_folder(2, elsewhere.clone(), Sort::default(), refused_channel);
+        let messages = until_end(&refused);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(error_code(&messages[0]), "DeviceGone");
+
+        // The removal failed: the list is live again, with what changed meanwhile.
+        std::fs::write(watched.join("b.dwg"), b"b").expect("write");
+        listings.keep(&root);
+        let (ids, removed) = diff_ids(&next(&receiver));
+        assert_eq!((ids.len(), removed.len()), (1, 0), "b.dwg is new");
+        assert_eq!(word(&next(&receiver), 0), ORDER);
+        assert!(std::fs::rename(&parent, &moved).is_err(), "held again");
+        let (channel, again) = test_channel();
+        listings.open_folder(2, elsewhere, Sort::default(), channel);
+        assert_eq!(word(until_end(&again).last().expect("done"), 0), DONE);
+    }
+
+    #[test]
+    fn a_volume_that_goes_ends_its_listings_with_device_gone() {
+        let dir = folder_with(&["ნახაზი.dwg"]);
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(dir.path()).expect("long path");
+        listings.open_folder(1, folder, Sort::default(), channel);
+        until_end(&receiver);
+        let root = root_of(dir.path());
+
+        listings.release(&root);
+        listings.removed(&root);
+
+        let messages = until_end(&receiver);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(error_code(&messages[0]), "DeviceGone");
+        let volumes = listings.0.volumes();
+        let volume = volumes.get(&root).expect("its listing is still open");
+        assert!(!volume.released && volume.notices.is_none());
+    }
+
+    #[test]
+    fn a_listing_still_reading_when_its_volume_is_released_ends_with_device_gone() {
+        let dir = folder_with(&["a.txt"]);
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(dir.path()).expect("long path");
+        let state = Arc::new(ListingState::new(folder, Sort::default(), Some(channel)));
+
+        // Windows asks for the volume as the job is about to read.
+        assert!(state.stop_reading(), "the job runs");
+        let result = run(&state, &listings);
+        drop(JobDone(&state));
+        assert_eq!(
+            result.as_ref().map_err(|error| error.code.clone()),
+            Err(ErrorCode::Cancelled)
+        );
+        state.finish(1, result);
+
+        let messages = until_end(&receiver);
+        assert_eq!(messages.len(), 1, "no batch: the folder wasn't opened");
+        assert_eq!(error_code(&messages[0]), "DeviceGone");
+        assert!(state.wait_job(Instant::now()));
+        assert!(!state.stop_reading(), "done: nothing to stop");
+    }
+
+    #[test]
+    fn a_volume_is_forgotten_with_its_last_listing() {
+        let dir = folder_with(&["a.txt"]);
+        let listings = Listings::default();
+        let (channel, receiver) = test_channel();
+        let folder = long_path(dir.path()).expect("long path");
+        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        until_end(&receiver);
+        assert_eq!(listings.0.volumes().len(), 1);
+
+        listings.close(id);
+        let wait = Instant::now();
+        while !listings.0.volumes().is_empty() {
+            assert!(wait.elapsed() < Duration::from_secs(10), "forgotten");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]

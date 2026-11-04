@@ -7,6 +7,7 @@
 //! timeouts.
 
 pub mod appearance;
+pub mod devices;
 pub mod folders;
 pub mod icons;
 pub mod main_thread;
