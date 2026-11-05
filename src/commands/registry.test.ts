@@ -137,6 +137,14 @@ describe("the shortcut table", () => {
         ],
       },
       {
+        group: "panes",
+        title: "Windows and panes",
+        rows: [
+          { id: "dualPane", title: "Dual pane", keys: ["F3"] },
+          { id: "switchPane", title: "Switch pane", keys: ["Tab"] },
+        ],
+      },
+      {
         group: "view",
         title: "View",
         rows: [
@@ -181,13 +189,14 @@ describe("the shortcut table", () => {
     expect(table.map((group) => group.group)).toEqual([
       "navigation",
       "tabs",
+      "panes",
       "view",
       "selection",
       "files",
       "search",
       "other",
     ]);
-    expect(table[4]?.rows).toEqual([
+    expect(table[5]?.rows).toEqual([
       { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
     ]);
   });
@@ -228,6 +237,14 @@ describe("the shortcut table", () => {
           { id: "tab7", title: "Tab 7", keys: ["Ctrl+7"] },
           { id: "tab8", title: "Tab 8", keys: ["Ctrl+8"] },
           { id: "tab9", title: "Tab 9", keys: ["Ctrl+9"] },
+        ],
+      },
+      {
+        group: "panes",
+        title: "Windows and panes",
+        rows: [
+          { id: "dualPane", title: "Dual pane", keys: ["F3"] },
+          { id: "switchPane", title: "Switch pane", keys: ["Tab"] },
         ],
       },
       {
