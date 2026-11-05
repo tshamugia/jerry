@@ -57,12 +57,12 @@ function Confirm({ mode, request }: { mode: DeleteMode; request: DeleteRequest }
     name: ids.length === 1 ? folder.store.getState().entries.names[ids[0] ?? -1] : undefined,
   };
   const forGood = mode !== "recycle";
-  const strings = t[mode];
+  const text = t[mode];
 
   return (
     <div className="flex flex-col">
       <div className="flex flex-col gap-2 px-4 py-3.5">
-        <p className="break-words">{strings.question(subject)}</p>
+        <p className="break-words">{text.question(subject)}</p>
         {mode === "noRecycleBin" && <p className="text-fg-2 text-small">{t.noRecycleBin.why}</p>}
         {forGood && <Measure request={request} />}
         {request.system && (
@@ -87,7 +87,7 @@ function Confirm({ mode, request }: { mode: DeleteMode; request: DeleteRequest }
           disabled={request.system && !agreed}
           onClick={() => void confirmDelete()}
         >
-          {strings.confirm}
+          {text.confirm}
         </DialogButton>
         <DialogButton onClick={dismissDelete}>
           {mode === "noRecycleBin" ? t.noRecycleBin.keep(ids.length) : t.cancel}
