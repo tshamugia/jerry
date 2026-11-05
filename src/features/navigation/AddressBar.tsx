@@ -59,6 +59,7 @@ function Crumbs({ tab, pane, crumbs }: { tab: Tab; pane: PaneSide; crumbs: reado
   };
 
   // Folds the middle segments when they don't fit, measured on a hidden copy of all of them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the copy holds `crumbs`.
   useLayoutEffect(() => {
     const box = bar.current;
     const measured = ruler.current;
@@ -70,7 +71,8 @@ function Crumbs({ tab, pane, crumbs }: { tab: Tab; pane: PaneSide; crumbs: reado
     const observer = new ResizeObserver(refold);
     observer.observe(box);
     return () => observer.disconnect();
-  }, []);
+    // Measured again for every folder: the bar keeps its size, its segments change.
+  }, [crumbs]);
 
   const last = crumbs.length - 1;
   const segment = (crumb: Crumb, index: number) => (
@@ -130,7 +132,7 @@ function Crumbs({ tab, pane, crumbs }: { tab: Tab; pane: PaneSide; crumbs: reado
 const FOLDED_PX = 24;
 
 /** Which segments to fold so the rest fit `box`: none if all do; else keep the last ones. */
-function fold(box: HTMLElement, ruler: HTMLElement): Folded | undefined {
+export function fold(box: HTMLElement, ruler: HTMLElement): Folded | undefined {
   const room = box.clientWidth;
   const widths = [...ruler.children].map((child) => (child as HTMLElement).offsetWidth);
   const total = widths.reduce((sum, width) => sum + width, 0);

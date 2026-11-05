@@ -13,7 +13,7 @@ import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
 import { addTab, resetTabs, type Tab } from "../../stores/tabs";
 import { useWindow } from "../../stores/window";
-import { AddressBar } from "./AddressBar";
+import { AddressBar, fold } from "./AddressBar";
 import { useAddressEdit } from "./address";
 
 beforeAll(() => {
@@ -191,4 +191,20 @@ test("an address that leads nowhere says so at the field and stays", async () =>
   expect(field()).toHaveAttribute("aria-invalid", "true");
   expect(opens()).toHaveLength(before);
   expect(tab.current()?.folder).toBe(4);
+});
+
+test("a narrow bar keeps the root and the last segments, folding the middle", () => {
+  // A bar `room` px wide, its segments `widths` px.
+  const bar = (room: number, widths: number[]) =>
+    fold(
+      { clientWidth: room } as HTMLElement,
+      { children: widths.map((offsetWidth) => ({ offsetWidth })) } as unknown as HTMLElement,
+    );
+  expect(bar(500, [30, 80, 80, 80])).toBeUndefined();
+  // Not laid out yet: nothing folds.
+  expect(bar(0, [30, 80, 80, 80])).toBeUndefined();
+  expect(bar(250, [30, 80, 80, 80])).toEqual({ lo: 1, hi: 2 });
+  expect(bar(200, [30, 80, 80, 80])).toEqual({ lo: 1, hi: 3 });
+  // Too narrow for the root too.
+  expect(bar(110, [30, 80, 80, 80])).toEqual({ lo: 0, hi: 3 });
 });
