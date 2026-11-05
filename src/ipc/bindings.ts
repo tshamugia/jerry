@@ -47,6 +47,33 @@ export const commands = {
 	 *  exactly, without the `\\?\` prefix: a tab's "Copy path". `NotFound` for an unknown token.
 	 */
 	folderCopyPath: (folder: number) => typedError<null, JerryError>(__TAURI_INVOKE("folder_copy_path", { folder })),
+	/**
+	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
+	 *  again. Entries the listing no longer has don't count.
+	 */
+	deleteCheck: (listing: number, entries: number[]) => typedError<DeleteCheck, JerryError>(__TAURI_INVOKE("delete_check", { listing, entries })),
+	/**
+	 *  Counts what deleting `entries` of listing `listing` for good would remove: files, folders and
+	 *  bytes, through every subfolder but not through links. Sends the count so far to `on_progress`
+	 *  every 100 ms. One measure runs per listing: a new one, or `delete_measure_cancel`, stops it
+	 *  with `Cancelled`.
+	 */
+	deleteMeasure: (listing: number, entries: number[], onProgress: Channel<Tally>) => typedError<Tally, JerryError>(__TAURI_INVOKE("delete_measure", { listing, entries, onProgress })),
+	/**  Stops listing `listing`'s measure, if one runs. */
+	deleteMeasureCancel: (listing: number) => __TAURI_INVOKE<void>("delete_measure_cancel", { listing }),
+	/**
+	 *  Sends `entries` of listing `listing` to the Recycle Bin, as Explorer does. Entries the
+	 *  Recycle Bin can't take stay untouched and come back in `noRecycleBin`. `system`: the user
+	 *  confirmed deleting system folders; without it they stay (`AccessDenied`).
+	 */
+	deleteRecycle: (listing: number, entries: number[], system: boolean) => typedError<DeleteOutcome, JerryError>(__TAURI_INVOKE("delete_recycle", { listing, entries, system })),
+	/**
+	 *  Deletes `entries` of listing `listing` for good, folders with everything in them, past 260
+	 *  characters too. Only after the user confirmed (Shift+Del, or no Recycle Bin). A file that
+	 *  can't be deleted stays, with the folders above it; the rest goes. `system`: the user
+	 *  confirmed deleting system folders; without it they stay (`AccessDenied`).
+	 */
+	deletePermanently: (listing: number, entries: number[], system: boolean) => typedError<DeleteOutcome, JerryError>(__TAURI_INVOKE("delete_permanently", { listing, entries, system })),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**
@@ -144,6 +171,34 @@ export type CaptionButtonRect = {
 
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
+
+/**  Whether deleting some entries needs the extra confirmation. */
+export type DeleteCheck = {
+	/**  An entry is a system folder (Windows, Program Files, the Users root) or holds one. */
+	system: boolean,
+};
+
+/**
+ *  An entry that couldn't be deleted. `error.path` is the file that stayed: the entry itself, or
+ *  a file in it.
+ */
+export type DeleteFailure = {
+	entry: number,
+	error: JerryError,
+};
+
+/**  What a delete did, entry by entry. */
+export type DeleteOutcome = {
+	/**  How many entries are gone. */
+	deleted: number,
+	/**
+	 *  Entries the Recycle Bin can't take (a network or removable drive, a path too long for the
+	 *  Shell, too big for the Recycle Bin): untouched.
+	 */
+	noRecycleBin: number[],
+	/**  Entries still there, all or in part, with the first reason. */
+	failed: DeleteFailure[],
+};
 
 /**  Row density: 30 px or 24 px rows. */
 export type Density = "comfortable" | "compact";
@@ -359,6 +414,16 @@ export type Startup =
 { kind: "folder"; 
 /**  The folder, as the user entered it. */
 path: string };
+
+/**  What deleting some items would remove. */
+export type Tally = {
+	/**  Files, links to files included. */
+	files: number,
+	/**  Folders, the items themselves and links to folders included. */
+	folders: number,
+	/**  The files' size, in bytes. */
+	bytes: number,
+};
 
 /**  App theme. */
 export type Theme = 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useCommandKeys } from "../commands/dispatch";
 import { ShortcutTable } from "../commands/ShortcutTable";
+import { DeleteDialog } from "../features/delete/DeleteDialog";
 import { DevPanel } from "../features/dev/DevPanel";
 import { PaneList } from "../features/file-list/PaneList";
 import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
@@ -39,6 +40,7 @@ export function App() {
       <ShortcutTable />
       <SelectByPattern />
       <OpenManyDialog />
+      <DeleteDialog />
     </>
   );
 }

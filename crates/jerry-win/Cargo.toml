@@ -38,6 +38,8 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# For `#[implement]` (COM callbacks): see the workspace `Cargo.toml`.
+windows-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

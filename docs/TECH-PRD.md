@@ -42,7 +42,7 @@ Spike-მა (02–03.11.2026) ხუთი ტექნიკა შეცვ�
 | --- | --- |
 | აპის ჩარჩო: ფანჯრები, IPC, ინსტალერი | Tauri 2 |
 | ენა | Rust stable, edition 2024 |
-| Win32, COM, Shell, OLE, Cloud Files | `windows` crate (Microsoft-ის ოფიციალური bindings) |
+| Win32, COM, Shell, OLE, Cloud Files | `windows` crate (Microsoft-ის ოფიციალური bindings); `windows-core` პირდაპირ, რადგან COM callback-ების `#[implement]` მას ასახელებს |
 | WebView2-ის პარამეტრები, რომლებსაც Tauri არ აჩენს (browser-ის კლავიშები) | `webview2-com` (იგივე ვერსია, რასაც wry იყენებს) |
 | ასინქრონულობა | tokio (Tauri-ს runtime) |
 | პარალელური გამოთვლები: ძებნა, დალაგება | rayon |
@@ -275,9 +275,14 @@ Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შ�
 
 ### Recycle Bin
 
-- წაშლა: `IFileOperation` დროშებით `FOFX_RECYCLEONDELETE`, `FOF_ALLOWUNDO`, `FOF_NO_UI`. `PostDeleteItem` აბრუნებს Recycle Bin-ში მოხვედრილ ელემენტს, რომელსაც Undo იყენებს.
-- ქსელურ და მოსახსნელ დისკებს Recycle Bin არ აქვთ: Jerry წინასწარ აფრთხილებს და სამუდამო წაშლას ადასტურებით აკეთებს.
-- სამუდამო წაშლა (Shift+Del): საკუთარი რეკურსიული წაშლა, რომელიც გრძელ გზებსაც იღებს.
+- წაშლა (Del): `IFileOperation` დროშებით `FOFX_RECYCLEONDELETE`, `FOF_ALLOWUNDO`, `FOF_NO_UI` (`jerry_win::recycle`), ფაილური ოპერაციების საკუთარ Shell pool-ზე (timeout 10 წთ), რომ დიდმა წაშლამ აიკონები არ შეაჩეროს. `PostDeleteItem` აბრუნებს Recycle Bin-ში მოხვედრილ ელემენტს (`$Recycle.Bin\<SID>\$R…`); Jerry ბოლო 50 წაშლისას მას მეხსიერებაში ინახავს Undo-სთვის (#56). Callback-ის ელემენტს გზა COM identity-ით ან parsing name-ით ემთხვევა. რიგში ჩაყენებული ელემენტები ოპერაციის ბოლომდე ცოცხლობს, თორემ გათავისუფლებულ მისამართს სხვა ელემენტი იკავებს და შედეგი სხვა გზას ეწერება (#37: 1 000 ფაილიდან ერთი `NotFound`).
+- სადაც Shell ვერ ამოაგდებს Recycle Bin-ში (ქსელი, მოსახსნელი დისკი, 260+ სიმბოლოიანი გზა 8.3 სახელების გარეშე, Recycle Bin-ზე დიდი ფაილი, გამორთული Recycle Bin), `FOF_NO_UI`-ით ფაილს სამუდამოდ და უხმოდ შლის. გადაწყვეტილებას მთელ ოპერაციაზე იღებს: ერთი ასეთი ელემენტიც კმარა და ოპერაციის ყველა ელემენტი, ადგილობრივიც, სამუდამოდ იშლება (#37-ის ცდა: `\\localhost\C$` და 337-სიმბოლოიანი გზა D:-ზე).
+- დაცვა: progress sink (`IFileOperationProgressSink`) `PreDeleteItem`-ში ამოწმებს `TSF_DELETE_RECYCLE_IF_POSSIBLE`-ს. თუ არ არის, აბრუნებს `COPYENGINE_E_RECYCLE_BIN_NOT_FOUND`-ს და ოპერაცია ჩერდება, სანამ რამე წაიშლება. Success კოდი (`COPYENGINE_S_USER_IGNORED`) ელემენტს არ ტოვებს: Shell მაშინ ყველაფერს სამუდამოდ შლის. შეჩერებული ოპერაციის დარჩენილი ელემენტები სათითაოდ მეორდება, ასე ჩანს, რომელს არ აქვს Recycle Bin: ის ხელუხლებელი რჩება და UI-ს `noRecycleBin`-ში უბრუნდება. ფიქსირებული დისკის გარდა ყველა (`GetDriveTypeW`: ქსელი, მოსახსნელი, CD, RAM disk) Shell-ის გარეშე ითვლება ასეთად. Sink-ის `#[implement]` `windows_core`-ს პირდაპირ ასახელებს, ამიტომ `windows-core` jerry-win-ის პირდაპირი დამოკიდებულებაა.
+- Recycle Bin-ის გარეშე ელემენტებზე Jerry ეკითხება ("can't go to the Recycle Bin. Delete them permanently?", რაოდენობით და ზომით); უარზე ისინი რჩება. ქსელურ საქაღალდეზე, რომელსაც folder redirection-ით Recycle Bin აქვს, Jerry მაინც ეკითხება: დისკის ტიპი ქსელურია.
+- დადასტურება: Del ნაგულისხმევად არ ეკითხება (`confirmRecycle`), 100-ზე მეტ ელემენტზე და სისტემურ საქაღალდეზე ყოველთვის. სისტემური საქაღალდე: `FOLDERID_Windows`, `FOLDERID_ProgramFiles`, `FOLDERID_ProgramFilesX86`, `FOLDERID_UserProfiles`, ან ერთ-ერთის შემცველი (`jerry_core::delete::takes_system_folder`). დიალოგში დამატებითი checkbox-ია, ხოლო `delete_recycle` და `delete_permanently` დაუდასტურებელ სისტემურ საქაღალდეს UI-ის მიუხედავად უარყოფს (`AccessDenied`).
+- სამუდამო წაშლა (Shift+Del): ყოველთვის ეკითხება, ფაილების, საქაღალდეების რაოდენობითა და ზომით (`delete_measure`: progress 100 ms-ში ერთხელ, დიალოგის დახურვა აჩერებს). საკუთარი რეკურსიული წაშლა (`jerry_core::delete`): `\\?\` გზები (260+), ჯერ ფაილები, მერე საქაღალდე, iterative (ღრმა ხე stack-ს ვერ ავსებს). Read-only ატრიბუტს მოხსნის და, თუ ფაილი მაინც რჩება, აბრუნებს. Link-ს (symlink, junction, mount point: name-surrogate reparse tag) შლის და შიგნით არ შედის; OneDrive-ის placeholder საქაღალდე ჩვეულებრივი საქაღალდეა. დაკავებული ფაილი და მისი საქაღალდეები რჩება და `InUse`-ით ბრუნდება, დანარჩენი იშლება.
+- შედეგი entry-ების მიხედვით ბრუნდება: `DeleteOutcome { deleted, noRecycleBin, failed: [{ entry, error }] }`. დარჩენილი სიაში ჩანს; Retry თითოეულს იმავე წაშლას უმეორებს, რომელიც ვერ შედგა: Recycle Bin-ში ვერ გაგზავნილს სამუდამოდ არასოდეს შლის.
+- #37-ის გაზომვა (06.11.2026, release, C: NVMe, `%TEMP%`, 3 გაშვება): 10 000 ფაილის (101 საქაღალდე) დათვლა 14–16 ms, სამუდამო წაშლა 0.75–0.88 წმ; იგივე საქაღალდე Recycle Bin-ში ერთ ელემენტად 1.6–1.8 წმ; 1 000 ცალკე ფაილი ერთ ოპერაციაში 6.6–7.2 წმ (Shell-ის ~7 ms ფაილზე); ერთელემენტიანი ოპერაცია ~20 ms.
 - Recycle Bin-ის ხედი: Shell folder `FOLDERID_RecycleBinFolder`, თვისებებით "ორიგინალი მისამართი" და "წაშლის თარიღი". Restore იყენებს undelete verb-ს, Empty — `SHEmptyRecycleBinW`-ს.
 
 ### OneDrive
@@ -417,7 +422,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | ჯგუფი | ბრძანებები |
 | --- | --- |
 | ნავიგაცია | `listing_open` (აბრუნებს სახელს და საქაღალდისა და მშობლის token-ს; `target`: `path`, `entry`, `listing`, `folder`, `home`), `listing_close`, `listing_sort`, `resolve_path` (ცვლადები, მოკლე სახელები, ფაილის გზა), `autocomplete_path` |
-| ფაილური ოპერაციები | `create_folder`, `create_file`, `rename`, `batch_rename`, `delete`, `duplicate`, `zip_create`, `zip_extract`, `calculate_size` |
+| ფაილური ოპერაციები | `create_folder`, `create_file`, `rename`, `batch_rename`, `delete_check`, `delete_measure`, `delete_recycle`, `delete_permanently`, `duplicate`, `zip_create`, `zip_extract`, `calculate_size` |
 | ტრანსფერები | `transfer_enqueue`, `transfer_control` (pause, resume, cancel), `transfer_reorder`, `conflict_resolve`, `transfer_retry_failed` |
 | ისტორია | `undo`, `redo`, `history_list`, `history_undo` |
 | Clipboard და DnD | `clipboard_copy`, `clipboard_paste`, `paste_as_file`, `drag_start`, `drop_target_update` |
