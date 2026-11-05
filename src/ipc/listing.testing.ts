@@ -27,16 +27,19 @@ export interface FakeListings {
 /**
  * A fake core for listings. `listing_open` answers with the next id (from 1) and `path`, then
  * streams `messages(target)` on a timer; `listing_sort` sends `sorted(sort)` through the same
- * stream, as Rust does. Other commands answer `null`.
+ * stream, as Rust does. Other commands answer what `other` returns for them (a rejection is a
+ * command's error), or `null`.
  */
 export function fakeListings({
   messages = () => [],
   sorted = () => undefined,
   path = String.raw`C:\Work`,
+  other = () => null,
 }: {
   messages?: (target: ListingTarget) => ArrayBuffer[];
   sorted?: (sort: Sort) => ArrayBuffer | undefined;
   path?: string;
+  other?: (cmd: string, args: Record<string, unknown>) => unknown;
 } = {}): FakeListings {
   const calls: Call[] = [];
   // Each listing's stream, by id - 1.
@@ -59,8 +62,9 @@ export function fakeListings({
       if (order && stream) {
         setTimeout(() => stream.onmessage(order), 0);
       }
+      return null;
     }
-    return null;
+    return other(cmd, payload);
   });
   return {
     calls,

@@ -124,6 +124,14 @@ describe("the shortcut table", () => {
         ],
       },
       {
+        group: "files",
+        title: "Files",
+        rows: [
+          { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
+          { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
+        ],
+      },
+      {
         group: "search",
         title: "Search",
         rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
@@ -153,8 +161,10 @@ describe("the shortcut table", () => {
       "search",
       "other",
     ]);
-    expect(table[2]?.rows).toEqual([
-      { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
+    expect(table[2]?.rows.map((row) => row.id)).toEqual([
+      "recycle",
+      "deletePermanently",
+      "newFolder",
     ]);
   });
 
@@ -181,6 +191,14 @@ describe("the shortcut table", () => {
           { id: "selectByPattern", title: "Select by pattern…", keys: ["Ctrl+Shift+A"] },
           { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
           { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
+        ],
+      },
+      {
+        group: "files",
+        title: "Files",
+        rows: [
+          { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
+          { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
         ],
       },
       {
