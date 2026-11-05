@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use jerry_core::settings::{Density, Settings, Theme};
-use jerry_core::storage::{SCHEMA_VERSION, Storage};
+use jerry_core::storage::{RECENT_FOLDERS, RecentFolder, SCHEMA_VERSION, Storage};
 use jerry_core::{ErrorCode, JerryError};
 use rusqlite::Connection;
 use serde_json::json;
@@ -206,4 +206,65 @@ fn in_memory_storage_runs_on_defaults() {
     assert_eq!(storage.settings(), &Settings::default());
     assert_eq!(storage.set_setting("theme", json!("light")), Ok(true));
     assert_eq!(storage.settings().theme, Theme::Light);
+}
+
+#[test]
+fn recent_folders_count_visits_latest_first() {
+    let (_dir, path) = db_in_temp();
+    let projects = PathBuf::from(r"\?\C:\Projects\ნახაზები");
+    let downloads = PathBuf::from(r"\?\UNC\server\share\Downloads");
+    {
+        let mut storage = Storage::open(&path).expect("opens");
+        storage.visit_folder(&projects, 1_000).expect("saves");
+        storage.visit_folder(&downloads, 2_000).expect("saves");
+        storage.visit_folder(&projects, 3_000).expect("saves");
+    }
+
+    let storage = Storage::open(&path).expect("reopens");
+    let recent = storage.recent_folders(10).expect("reads");
+    assert_eq!(
+        recent,
+        [
+            RecentFolder {
+                path: projects,
+                last_opened: 3_000,
+                open_count: 2
+            },
+            RecentFolder {
+                path: downloads,
+                last_opened: 2_000,
+                open_count: 1
+            },
+        ]
+    );
+    assert_eq!(storage.recent_folders(1).expect("reads").len(), 1);
+}
+
+#[test]
+fn recent_folders_keep_names_that_are_not_unicode() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    let mut wide: Vec<u16> = r"\?\C:\a".encode_utf16().collect();
+    wide.push(0xDC00);
+    let folder = PathBuf::from(OsString::from_wide(&wide));
+    let mut storage = Storage::in_memory().expect("opens");
+    storage.visit_folder(&folder, 1).expect("saves");
+    assert_eq!(storage.recent_folders(1).expect("reads")[0].path, folder);
+}
+
+#[test]
+fn only_the_latest_recent_folders_stay() {
+    let mut storage = Storage::in_memory().expect("opens");
+    for n in 0..RECENT_FOLDERS + 20 {
+        let folder = PathBuf::from(format!(r"\?\C:\f{n}"));
+        storage.visit_folder(&folder, n as i64).expect("saves");
+    }
+    let recent = storage.recent_folders(RECENT_FOLDERS * 2).expect("reads");
+    assert_eq!(recent.len(), RECENT_FOLDERS);
+    assert_eq!(
+        recent.first().map(|folder| folder.last_opened),
+        Some((RECENT_FOLDERS + 19) as i64)
+    );
+    assert_eq!(recent.last().map(|folder| folder.last_opened), Some(20));
 }

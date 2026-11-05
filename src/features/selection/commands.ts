@@ -1,11 +1,12 @@
-import { type Folder, type FolderState, paneFolder, type Selection } from "../../stores/folder";
+import type { Folder, FolderState, Selection } from "../../stores/folder";
 import { useSettings } from "../../stores/settings";
+import { activeTab } from "../../stores/tabs";
 import { useWindow } from "../../stores/window";
 import { clear, invert, selectAll, toggleFocused } from "./model";
 
-/** The folder the keyboard acts on: the active pane's. */
-export function activeFolder(): Folder {
-  return paneFolder(useWindow.getState().activePane);
+/** The folder the keyboard acts on: the active pane's tab's. */
+export function activeFolder(): Folder | undefined {
+  return activeTab(useWindow.getState().activePane)?.folder;
 }
 
 /** The rows `folder`'s list shows now: what every selection command works on. */
@@ -20,7 +21,7 @@ export function selectionOf({ selected, anchor, focused }: FolderState): Selecti
 /** Changes the active pane's selection with `update`. */
 function change(update: (selection: Selection, rows: Uint32Array) => Selection): void {
   const folder = activeFolder();
-  folder.setSelection(update(selectionOf(folder.store.getState()), shownRows(folder)));
+  folder?.setSelection(update(selectionOf(folder.store.getState()), shownRows(folder)));
 }
 
 /** Ctrl+A. */

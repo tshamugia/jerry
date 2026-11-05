@@ -3,6 +3,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   memo,
+  type RefObject,
   useEffect,
   useId,
   useLayoutEffect,
@@ -15,11 +16,13 @@ import { lookup } from "../../commands/keymap";
 import { isEnabled } from "../../commands/registry";
 import { type Density, entryIconUrl, IconKey } from "../../ipc";
 import { shownColumns } from "../../stores/columns";
-import { type Folder, useFolder } from "../../stores/folder";
+import { useFolder } from "../../stores/folder";
 import { useKeymap } from "../../stores/keymap";
 import { useSetting } from "../../stores/settings";
+import type { Tab } from "../../stores/tabs";
 import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
+import { openItems } from "../navigation/open";
 import { selectionOf } from "../selection/commands";
 import {
   clickRow,
@@ -53,15 +56,12 @@ const FALLBACK_ROW_PX = 30;
  * the mouse (`usePointerSelection`) and, while the list has the focus, with the arrows, Home,
  * End, PageUp and PageDown (Shift selects a range, Ctrl moves only the focus) and by typing the
  * first letters of a name. A double click (or a single one, by the "click to open" setting)
- * opens a folder.
+ * opens the row: a folder in the tab, a file in its program; a middle click opens a folder in a
+ * new tab. The list shows `tab`'s folder and keeps its scroll position for when the tab shows
+ * again; the pane mounts one per tab shown (`key`).
  */
-export const FileList = memo(function FileList({
-  folder,
-  pane,
-}: {
-  folder: Folder;
-  pane: PaneSide;
-}) {
+export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: PaneSide }) {
+  const { folder } = tab;
   const status = useFolder(folder, (state) => state.status);
   const error = useFolder(folder, (state) => state.error);
   const entries = useFolder(folder, (state) => state.entries);
@@ -95,6 +95,13 @@ export const FileList = memo(function FileList({
   const body = useRef<HTMLDivElement>(null);
   const [margin, setMargin] = useState(0);
   useLayoutEffect(() => setMargin(body.current?.offsetTop ?? 0), []);
+  // A tab shown again scrolls back to where it was, before the virtualizer reads the position.
+  useLayoutEffect(() => {
+    if (scroller.current) {
+      scroller.current.scrollTop = folder.scrollTop;
+    }
+  }, [folder]);
+  useKeyboardHandOver(scroller, pane);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -102,15 +109,17 @@ export const FileList = memo(function FileList({
     estimateSize: () => rowHeight,
     overscan: OVERSCAN,
     scrollMargin: margin,
+    initialOffset: () => folder.scrollTop,
   });
   // biome-ignore lint/correctness/useExhaustiveDependencies: measures again for the new row height.
   useEffect(() => virtualizer.measure(), [virtualizer, rowHeight]);
-  // Another folder starts at the top.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs for every folder opened.
+  // Another folder starts at the top; the folder the list mounted with keeps the tab's place.
+  const shownEntries = useRef(entries);
   useEffect(() => {
-    if (scroller.current) {
+    if (shownEntries.current !== entries && scroller.current) {
       scroller.current.scrollTop = 0;
     }
+    shownEntries.current = entries;
   }, [entries]);
   const slow = useDelayed(status === "loading", LOADING_DELAY_MS);
 
@@ -140,6 +149,33 @@ export const FileList = memo(function FileList({
       view.scrollTop = top + rowHeight - height;
     }
   };
+  /** Scrolls row `index` to the middle of the view, unless it is in view already. */
+  const center = (index: number) => {
+    const view = scroller.current;
+    if (!view) {
+      return;
+    }
+    const top = index * rowHeight;
+    const height = view.clientHeight - margin;
+    if (top < view.scrollTop || top + rowHeight > view.scrollTop + height) {
+      view.scrollTop = Math.max(0, top - (height - rowHeight) / 2);
+    }
+  };
+  // A folder opened again (Back, Up, Refresh) scrolls to where it was, or to its focused entry.
+  const scrollTo = useFolder(folder, (state) => state.scrollTo);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `center` reads the latest sizes.
+  useLayoutEffect(() => {
+    const view = scroller.current;
+    if (!scrollTo || !view) {
+      return;
+    }
+    if (scrollTo.kind === "top") {
+      view.scrollTop = scrollTo.top;
+    } else {
+      center(rows.indexOf(scrollTo.id));
+    }
+    folder.scrolled();
+  }, [folder, scrollTo, rows]);
 
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // The list's own keys work while it has the focus, not a header button in it.
@@ -192,13 +228,20 @@ export const FileList = memo(function FileList({
       return;
     }
     if (clickToOpen === "single") {
-      folder.openEntry(id);
+      openItems(pane, tab, [id]);
     }
   };
   const doubleClick = (event: MouseEvent) => {
     const id = rowAt(event);
     if (id !== undefined && clickToOpen === "double") {
-      folder.openEntry(id);
+      openItems(pane, tab, [id]);
+    }
+  };
+  // A middle click on a folder opens it in a new tab, in the background, as a browser's link.
+  const auxClick = (event: MouseEvent) => {
+    const id = rowAt(event);
+    if (event.button === 1 && id !== undefined && entries.isFolder(id)) {
+      openItems(pane, tab, [id], { newTab: true });
     }
   };
 
@@ -209,7 +252,7 @@ export const FileList = memo(function FileList({
         <p>{errorText(error)}</p>
         <button
           type="button"
-          onClick={() => void folder.retry()}
+          onClick={() => void folder.refresh()}
           className="pointer-events-auto h-8 rounded-ctrl border border-ctrl-border bg-ctrl px-3 text-fg hover:bg-hover"
         >
           {strings.fileList.retry}
@@ -246,7 +289,14 @@ export const FileList = memo(function FileList({
         onKeyDown={keyDown}
         onClick={click}
         onDoubleClick={doubleClick}
+        onAuxClick={auxClick}
+        // No autoscroll on a middle press: it opens a folder in a new tab.
+        onMouseDown={(event) => event.button === 1 && event.preventDefault()}
         {...pointer.handlers}
+        onScroll={() => {
+          folder.scrollTop = scroller.current?.scrollTop ?? 0;
+          pointer.handlers.onScroll();
+        }}
       >
         <div className="flex min-h-full w-max min-w-full flex-col">
           <ColumnHeader
@@ -310,6 +360,28 @@ export const FileList = memo(function FileList({
     </div>
   );
 });
+
+/** Panes whose list had the keyboard when it unmounted: the next one there (another tab's) takes it. */
+const handOver = new Set<PaneSide>();
+
+/**
+ * Hands the keyboard from a pane's list to the list that replaces it: switching tabs with the
+ * keyboard (Ctrl+Tab) keeps typing in the list. A list mounting otherwise takes nothing.
+ */
+function useKeyboardHandOver(scroller: RefObject<HTMLDivElement | null>, pane: PaneSide): void {
+  useLayoutEffect(() => {
+    const view = scroller.current;
+    if (view && handOver.delete(pane)) {
+      view.focus({ preventScroll: true });
+    }
+    // Before the list leaves the page, while it still has the focus.
+    return () => {
+      if (view && view === document.activeElement) {
+        handOver.add(pane);
+      }
+    };
+  }, [scroller, pane]);
+}
 
 /** Whether a key press runs a command where it lands ("?" opens the shortcut table). */
 function isShortcut(event: KeyboardEvent): boolean {

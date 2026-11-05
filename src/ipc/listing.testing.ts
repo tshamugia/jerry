@@ -1,6 +1,6 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import type { ListingTarget, Sort } from "./bindings";
+import type { ListingOpened, ListingTarget, Sort } from "./bindings";
 import { HEADER_BYTES } from "./channel";
 
 /**
@@ -25,18 +25,22 @@ export interface FakeListings {
 }
 
 /**
- * A fake core for listings. `listing_open` answers with the next id (from 1) and `path`, then
- * streams `messages(target)` on a timer; `listing_sort` sends `sorted(sort)` through the same
- * stream, as Rust does. Other commands answer `null`.
+ * A fake core for listings. `listing_open` answers with the next id (from 1), `path`, its last
+ * part as the name, a new folder token (100 + id) and no parent, or with what
+ * `opened(target, id)` says instead; then it streams `messages(target)` on a timer.
+ * `listing_sort` sends `sorted(sort)` through the same stream, as Rust does. Other commands answer
+ * `null`.
  */
 export function fakeListings({
   messages = () => [],
   sorted = () => undefined,
   path = String.raw`C:\Work`,
+  opened = () => ({}),
 }: {
   messages?: (target: ListingTarget) => ArrayBuffer[];
   sorted?: (sort: Sort) => ArrayBuffer | undefined;
   path?: string;
+  opened?: (target: ListingTarget, id: number) => Partial<ListingOpened>;
 } = {}): FakeListings {
   const calls: Call[] = [];
   // Each listing's stream, by id - 1.
@@ -45,13 +49,21 @@ export function fakeListings({
     const payload = (args ?? {}) as Record<string, unknown>;
     calls.push({ cmd, args: payload });
     if (cmd === "listing_open") {
-      const opened = payload.onMessage as Channel<ArrayBuffer>;
-      streams.push(opened);
+      const stream = payload.onMessage as Channel<ArrayBuffer>;
+      streams.push(stream);
       const queued = messages(payload.target as ListingTarget);
       setTimeout(() => {
-        for (const message of queued) opened.onmessage(message);
+        for (const message of queued) stream.onmessage(message);
       }, 0);
-      return { id: streams.length, path };
+      const id = streams.length;
+      const answer: ListingOpened = {
+        id,
+        path,
+        name: path.split("\\").filter(Boolean).at(-1) ?? path,
+        folder: 100 + id,
+        parent: null,
+      };
+      return { ...answer, ...opened(payload.target as ListingTarget, id) };
     }
     if (cmd === "listing_sort") {
       const order = sorted(payload.sort as Sort);

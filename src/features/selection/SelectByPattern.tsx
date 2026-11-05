@@ -27,10 +27,10 @@ export function SelectByPattern() {
 
 function PatternForm() {
   const [pattern, setPattern] = useState(lastPattern);
-  // The active pane can't change while the dialog is open.
+  // The active pane and its tab can't change while the dialog is open.
   const folder = useMemo(() => activeFolder(), []);
   const preview = useMemo(() => {
-    if (pattern === "") {
+    if (pattern === "" || !folder) {
       return undefined;
     }
     const state = folder.store.getState();
@@ -41,7 +41,7 @@ function PatternForm() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pattern === "") {
+    if (pattern === "" || !folder) {
       return;
     }
     const state = folder.store.getState();

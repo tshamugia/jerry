@@ -5,7 +5,8 @@ import { followAppearance } from "./app/appearance";
 import { reportLongTasks } from "./features/dev/longTasks";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
-import { syncSettings } from "./stores/settings";
+import { syncSettings, useSettings } from "./stores/settings";
+import { startTabs } from "./stores/tabs";
 import "./app/styles.css";
 
 const root = document.getElementById("root");
@@ -18,6 +19,14 @@ if (import.meta.env.DEV) {
 }
 followAppearance();
 syncSettings();
+// Each pane's first tab starts opening once the settings say where, before the first render:
+// subscribed before React, so this runs first.
+const unsubscribe = useSettings.subscribe(({ settings }) => {
+  if (settings) {
+    unsubscribe();
+    startTabs(settings.startup);
+  }
+});
 syncAppearance();
 void loadKeymap();
 createRoot(root).render(

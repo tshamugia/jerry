@@ -37,6 +37,16 @@ export const strings = {
     tabs: (pane: string) => `${pane} tabs`,
     closeTab: "Close tab",
     pinnedTab: (name: string) => `${name} (pinned tab)`,
+    /** A tab whose first folder hasn't opened. */
+    noFolder: "No folder",
+    /** A tab's context menu. */
+    tabMenu: "Tab",
+    duplicate: "Duplicate",
+    pin: "Pin tab",
+    unpin: "Unpin tab",
+    closeOthers: "Close other tabs",
+    closeToRight: "Close tabs to the right",
+    copyPath: "Copy path",
     minimize: "Minimize",
     maximize: "Maximize",
     restore: "Restore down",
@@ -51,6 +61,20 @@ export const strings = {
       `Showing ${integer.format(shown)} of ${integer.format(total)}`,
     clearFilter: "Clear filter (Esc)",
     view: "View",
+    /** The address bar, until its breadcrumbs come (#33): the folder's path. */
+    address: "Address",
+    /** Right-click on Back or Forward: the tab's folders that way. */
+    backHistory: "Back history",
+    forwardHistory: "Forward history",
+  },
+  /** Opening many items at once (Enter on a large selection). */
+  openMany: {
+    title: "Open many items",
+    close: "Esc",
+    question: (count: number) =>
+      `Open ${integer.format(count)} items? Each folder opens in a new tab, each file in its program.`,
+    open: "Open all",
+    cancel: "Cancel",
   },
   /** A pane's file list (Details view). */
   fileList: {
@@ -90,10 +114,13 @@ export const strings = {
     up: "Up",
     goToFolder: "Go to folder",
     refresh: "Refresh",
+    open: "Open",
+    openInNewTab: "Open in new tab",
     newTab: "New tab",
     closeTab: "Close tab",
     reopenTab: "Reopen closed tab",
     nextTab: "Next tab",
+    previousTab: "Previous tab",
     tab1: "Tab 1",
     tab2: "Tab 2",
     tab3: "Tab 3",
@@ -199,15 +226,6 @@ export const strings = {
     toggleClickToOpen: "Toggle single click",
     nextTheme: "Next theme",
     openWindow: "Open another window",
-    sampleTabs: "Sample tabs",
-    sampleTabNames: [
-      "PROJECTS",
-      "Drawings",
-      "Downloads",
-      "04_Issued",
-      "ფაილები და ნახაზები",
-      "პროექტის დოკუმენტაცია 2026",
-    ],
     toggleDualPane: "Toggle dual pane",
     settingsLoading: "Settings: loading…",
     settings: (settings: {

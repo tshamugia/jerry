@@ -10,6 +10,7 @@
 //! Jerry never overwrites or deletes these files: a name that is taken gets `.2`, `.3`, ...
 
 use std::ffi::OsString;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -39,6 +40,20 @@ pub struct Keybinding {
     pub command: String,
     /// The shortcut with US key names (`Ctrl+Shift+N`), or none: the user removed the default.
     pub shortcut: Option<String>,
+}
+
+/// Recently opened folders kept in `recent_folders`; past it the ones opened longest ago go.
+pub const RECENT_FOLDERS: usize = 500;
+
+/// A folder from `recent_folders`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentFolder {
+    /// The exact path, as core keeps it (`\\?\` long form).
+    pub path: PathBuf,
+    /// When it was last opened, in ms since the Unix epoch.
+    pub last_opened: i64,
+    /// How many times it was opened.
+    pub open_count: u32,
 }
 
 /// The open database, with the settings read from it.
@@ -106,6 +121,46 @@ impl Storage {
         Ok(rows)
     }
 
+    /// Notes that `folder` (the exact path, as core keeps it) was opened at `at` (ms since the
+    /// Unix epoch): its last open time and its count. Past [`RECENT_FOLDERS`] folders, the ones
+    /// opened longest ago go.
+    pub fn visit_folder(&mut self, folder: &Path, at: i64) -> Result<(), JerryError> {
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO recent_folders (path, last_opened, open_count) VALUES (?1, ?2, 1)
+             ON CONFLICT (path) DO UPDATE
+             SET last_opened = excluded.last_opened, open_count = open_count + 1",
+            params![path_blob(folder), at],
+        )?;
+        tx.execute(
+            "DELETE FROM recent_folders WHERE path IN (
+                 SELECT path FROM recent_folders ORDER BY last_opened DESC LIMIT -1 OFFSET ?1
+             )",
+            [RECENT_FOLDERS as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The recently opened folders, the latest first, at most `limit`.
+    pub fn recent_folders(&self, limit: usize) -> Result<Vec<RecentFolder>, JerryError> {
+        let rows = self
+            .conn
+            .prepare(
+                "SELECT path, last_opened, open_count FROM recent_folders
+                 ORDER BY last_opened DESC LIMIT ?1",
+            )?
+            .query_map([limit as i64], |row| {
+                Ok(RecentFolder {
+                    path: blob_path(&row.get::<_, Vec<u8>>(0)?),
+                    last_opened: row.get(1)?,
+                    open_count: row.get(2)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     pub(crate) fn open_with(path: &Path, migrations: &Migrations<'_>) -> Result<Self, JerryError> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|error| JerryError::from(error).at(dir))?;
@@ -161,6 +216,21 @@ impl Storage {
         let settings = Settings::from_rows(rows);
         Ok(Self { conn, settings })
     }
+}
+
+/// A path as the tables keep it: its exact UTF-16 code units, little-endian, so a name that isn't
+/// valid Unicode survives too.
+fn path_blob(path: &Path) -> Vec<u8> {
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+fn blob_path(blob: &[u8]) -> PathBuf {
+    let (pairs, _) = blob.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().map(|&pair| u16::from_le_bytes(pair)).collect();
+    PathBuf::from(OsString::from_wide(&units))
 }
 
 fn connect(path: &Path) -> Result<Connection, JerryError> {

@@ -1,5 +1,4 @@
 import { memo, type ReactNode } from "react";
-import { paneFolder } from "../stores/folder";
 import { activatePane, type PaneSide, useWindow } from "../stores/window";
 import { strings } from "../strings";
 import { PaneToolbar } from "./PaneToolbar";
@@ -10,7 +9,7 @@ interface Props {
   edge?: boolean;
   /** The resize handle on the left edge (the sidebar's). */
   handle?: ReactNode;
-  /** The pane's content (the file list, #29). */
+  /** The pane's content: the file list of the tab it shows. */
   children?: ReactNode;
 }
 
@@ -30,7 +29,7 @@ export const Pane = memo(function Pane({ side, edge = false, handle, children }:
       onFocus={() => activatePane(side)}
     >
       {handle}
-      <PaneToolbar folder={paneFolder(side)} pane={side} />
+      <PaneToolbar pane={side} />
       <div className={`h-active-pane-bar shrink-0 ${active ? "bg-accent" : "bg-bar"}`} />
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>

@@ -11,9 +11,9 @@ import {
   orderMessage,
   type TestEntry,
 } from "../../ipc/listing.testing";
-import { Folder } from "../../stores/folder";
 import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
+import { Tab } from "../../stores/tabs";
 import { useWindow } from "../../stores/window";
 import { FileList } from "./FileList";
 
@@ -65,11 +65,12 @@ async function listed(
     ],
     ...options,
   });
-  const folder = new Folder(7);
-  render(<FileList folder={folder} pane="left" />);
-  await act(() => folder.open({ kind: "path", path: String.raw`C:\Work` }));
+  const tab = new Tab(7);
+  render(<FileList tab={tab} pane="left" />);
+  await act(() => tab.open({ kind: "path", path: String.raw`C:\Work` }));
+  const { folder } = tab;
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
-  return { core, folder };
+  return { core, folder, tab };
 }
 
 const grid = () => screen.getByRole("grid", { name: "Left pane files" });
@@ -428,9 +429,9 @@ test("a folder that can't be read says why and offers Retry", async () => {
   const core = fakeListings({
     messages: () => [errorMessage(String.raw`{"code":"AccessDenied","path":"C:\\დახურული"}`)],
   });
-  const folder = new Folder(7);
-  render(<FileList folder={folder} pane="left" />);
-  await act(() => folder.open({ kind: "path", path: String.raw`C:\დახურული` }));
+  const tab = new Tab(7);
+  render(<FileList tab={tab} pane="left" />);
+  await act(() => tab.open({ kind: "path", path: String.raw`C:\დახურული` }));
 
   expect(
     await screen.findByText("You don't have permission to access “დახურული”."),
@@ -449,9 +450,9 @@ test("a slow folder shows the loading bar and its first rows at once", async () 
   try {
     useSettings.setState({ settings: defaultSettings });
     const core: FakeListings = fakeListings();
-    const folder = new Folder(7);
-    render(<FileList folder={folder} pane="left" />);
-    await act(() => folder.open({ kind: "path", path: String.raw`\\server\share` }));
+    const tab = new Tab(7);
+    render(<FileList tab={tab} pane="left" />);
+    await act(() => tab.open({ kind: "path", path: String.raw`\\server\share` }));
     act(() => core.send(batchMessage(0, [{ name: "first.txt" }])));
 
     expect(rowNames()).toEqual(["first.txt"]);
