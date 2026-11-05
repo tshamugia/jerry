@@ -29,18 +29,20 @@ export interface FakeListings {
  * part as the name, a new folder token (100 + id) and no parent, or with what
  * `opened(target, id)` says instead; then it streams `messages(target)` on a timer.
  * `listing_sort` sends `sorted(sort)` through the same stream, as Rust does. Other commands answer
- * `null`.
+ * what `other` returns for them (a rejection is a command's error), or `null`.
  */
 export function fakeListings({
   messages = () => [],
   sorted = () => undefined,
   path = String.raw`C:\Work`,
   opened = () => ({}),
+  other = () => null,
 }: {
   messages?: (target: ListingTarget) => ArrayBuffer[];
   sorted?: (sort: Sort) => ArrayBuffer | undefined;
   path?: string;
   opened?: (target: ListingTarget, id: number) => Partial<ListingOpened>;
+  other?: (cmd: string, args: Record<string, unknown>) => unknown;
 } = {}): FakeListings {
   const calls: Call[] = [];
   // Each listing's stream, by id - 1.
@@ -71,8 +73,9 @@ export function fakeListings({
       if (order && stream) {
         setTimeout(() => stream.onmessage(order), 0);
       }
+      return null;
     }
-    return null;
+    return other(cmd, payload);
   });
   return {
     calls,

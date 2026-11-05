@@ -45,6 +45,9 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 # WebView2 settings Tauri doesn't expose (browser keys off); the version wry already uses.
 webview2-com = "0.39"
 windows = "0.62"
+# The `#[implement]` macro of `windows` (COM callbacks such as IFileOperation's progress sink)
+# names `windows_core` directly; the same crate `windows` re-exports as `windows::core`.
+windows-core = "0.62"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

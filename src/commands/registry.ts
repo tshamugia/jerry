@@ -1,3 +1,4 @@
+import { canDelete, startDelete } from "../features/delete/flow";
 import { focusFilter } from "../features/filter/focus";
 import {
   canGoBack,
@@ -229,8 +230,22 @@ export const COMMANDS: readonly Command[] = [
   { id: "newFile", group: "files", keys: ["Ctrl+Alt+N"], context: "list" },
   { id: "rename", group: "files", keys: ["F2"], context: "list" },
   { id: "duplicate", group: "files", keys: ["Ctrl+D"], context: "list" },
-  { id: "recycle", group: "files", keys: ["Del"], context: "list" },
-  { id: "deletePermanently", group: "files", keys: ["Shift+Del"], context: "list" },
+  {
+    id: "recycle",
+    group: "files",
+    keys: ["Del"],
+    context: "list",
+    enabled: canDelete,
+    run: () => void startDelete(false),
+  },
+  {
+    id: "deletePermanently",
+    group: "files",
+    keys: ["Shift+Del"],
+    context: "list",
+    enabled: canDelete,
+    run: () => void startDelete(true),
+  },
   { id: "properties", group: "files", keys: ["Alt+Enter"], context: "list" },
   { id: "copyPath", group: "files", keys: ["Ctrl+Shift+C"], context: "list" },
   { id: "copyName", group: "files", keys: ["Ctrl+Alt+C"], context: "list" },

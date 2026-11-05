@@ -1,6 +1,7 @@
 /** Every user-visible string lives here. English only, no i18n library (PRD). */
 
 import type { SortColumn } from "../ipc";
+import { deleteStrings } from "./delete";
 
 const integer = new Intl.NumberFormat("en-US");
 const decimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
@@ -196,6 +197,8 @@ export const strings = {
     title: "Keyboard shortcuts",
     close: "Esc",
   },
+  /** Deleting (Del, Shift+Del). */
+  deleting: deleteStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",
