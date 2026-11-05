@@ -91,3 +91,28 @@ test("times a re-sort and reports live changes", async () => {
   expect(await screen.findByText(/^Live: 1 new, 1 changed, 1 removed/)).toBeInTheDocument();
   expect(screen.getByText("2 items")).toBeInTheDocument();
 });
+
+test("times quick filter keys and leaves the filter off", async () => {
+  fakeListings({
+    messages: () => [
+      batchMessage(0, [{ name: "ნახაზი.dwg" }, { name: "report.pdf" }]),
+      orderMessage([0, 1]),
+      doneMessage(2, 1, 1),
+    ],
+  });
+  render(<DevListing />);
+  fireEvent.click(screen.getByRole("button", { name: "Filter test" }));
+  expect(
+    await screen.findByText("List a folder first, and wait until it is all in."),
+  ).toBeInTheDocument();
+
+  list(String.raw`C:\Work`);
+  expect(await screen.findByText(/^2 items in 1 batch\./)).toBeInTheDocument();
+  const filtered = await act(() => window.jerryDev?.filter());
+
+  expect(filtered?.status).toBe("ok");
+  expect(
+    screen.getByText(/^Filtered 2 items, 24 keys typed: filter and render median/),
+  ).toBeInTheDocument();
+  expect(paneFolder("left").store.getState().filter).toBe("");
+});

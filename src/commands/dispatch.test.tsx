@@ -129,8 +129,8 @@ describe("useCommandKeys", () => {
 
   it("leaves keys of commands that can't run to their default", () => {
     renderHook(() => useCommandKeys());
-    // Select all isn't built yet.
-    expect(press({ code: "KeyA", key: "ა", ctrlKey: true }).defaultPrevented).toBe(false);
+    // Duplicate isn't built yet.
+    expect(press({ code: "KeyD", key: "დ", ctrlKey: true }).defaultPrevented).toBe(false);
     // Row density needs the settings.
     useSettings.setState({ settings: undefined });
     expect(press({ code: "KeyD", ctrlKey: true, altKey: true }).defaultPrevented).toBe(false);

@@ -46,6 +46,10 @@ export const strings = {
   toolbar: {
     filter: "Quick filter",
     filterPlaceholder: "Filter this folder",
+    /** While a filter is on, so no file seems lost. */
+    showing: (shown: number, total: number) =>
+      `Showing ${integer.format(shown)} of ${integer.format(total)}`,
+    clearFilter: "Clear filter (Esc)",
     view: "View",
   },
   /** A pane's file list (Details view). */
@@ -63,6 +67,7 @@ export const strings = {
     fileType: "File",
     typeOf: (extension: string) => `${extension} File`,
     empty: "This folder is empty. Drop files here",
+    noMatch: "No items match the filter",
     loading: "Loading…",
     retry: "Retry",
   },
@@ -116,6 +121,8 @@ export const strings = {
     selectAll: "Select all",
     invertSelection: "Invert selection",
     selectByPattern: "Select by pattern…",
+    toggleSelection: "Toggle focused item",
+    clearSelection: "Clear selection",
     newFolder: "New folder",
     newFile: "New file",
     rename: "Rename",
@@ -161,6 +168,17 @@ export const strings = {
   shortcutTable: {
     title: "Keyboard shortcuts",
     close: "Esc",
+  },
+  /** Select by pattern (Ctrl+Shift+A). */
+  selectByPattern: {
+    title: "Select by pattern",
+    close: "Esc",
+    pattern: "Pattern",
+    placeholder: "*.pdf, *_rev*, or a part of the name",
+    hint: "* stands for any characters, ? for one.",
+    /** Before Enter: how many of the shown items the pattern would select. */
+    matches: (count: number, total: number) =>
+      `${integer.format(count)} of ${integer.format(total)} match. Enter selects them.`,
   },
   /** The dev panel (dev builds only). */
   dev: {
@@ -261,7 +279,23 @@ export const strings = {
       `Sorted ${integer.format(timings.count)} items by ${sortColumns[timings.sort.column].toLowerCase()}, ` +
       `${timings.sort.descending ? "descending" : "ascending"}: painted ${decimal.format(timings.paintMs)} ms ` +
       `(order in JS ${decimal.format(timings.orderMs)} ms).`,
-    nothingToSort: "List a folder first, and wait until it is all in.",
+    listFirst: "List a folder first, and wait until it is all in.",
+    filterTest: "Filter test",
+    filtered: (timings: {
+      count: number;
+      keys: number;
+      workMedianMs: number;
+      workMaxMs: number;
+      paintMedianMs: number;
+      paintMaxMs: number;
+    }) =>
+      `Filtered ${integer.format(timings.count)} items, ${timings.keys} keys typed: ` +
+      `filter and render median ${decimal.format(timings.workMedianMs)} ms, longest ${decimal.format(timings.workMaxMs)} ms; ` +
+      `painted median ${decimal.format(timings.paintMedianMs)} ms, longest ${decimal.format(timings.paintMaxMs)} ms.`,
+    timeSelectAll: "Time select all",
+    selectedAll: (timings: { count: number; selectMs: number; paintMs: number }) =>
+      `Selected ${integer.format(timings.count)} items: painted ${decimal.format(timings.paintMs)} ms ` +
+      `(selection ${decimal.format(timings.selectMs)} ms).`,
     /** The last change the watcher sent, and how long it took to paint. */
     changed: (change: { added: number; changed: number; removed: number; paintMs: number }) =>
       `Live: ${integer.format(change.added)} new, ${integer.format(change.changed)} changed, ` +

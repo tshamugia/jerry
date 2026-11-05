@@ -45,6 +45,8 @@
   --jerry-nav-sel: #e1e4e8;       /* selected nav item, pressed segmented button */
   --jerry-sel-inactive: #ebebeb;  /* selection in the inactive pane */
   --jerry-focus: #1a1a1a;         /* 2px focus outline, offset -2px */
+  /* Marquee selection fill, under a 1px accent border. Windows 11's, not in the canvas. */
+  --jerry-marquee: color-mix(in srgb, var(--jerry-accent) 20%, transparent);
   /* Translucent fills on Mica (caption buttons, tabs). Windows 11 values, not in the canvas. */
   --jerry-subtle-hover: rgb(0 0 0 / 0.06);
   --jerry-subtle-pressed: rgb(0 0 0 / 0.04);

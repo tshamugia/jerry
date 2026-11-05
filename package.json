@@ -18,6 +18,7 @@
     "format": "biome check --write . && cargo fmt --all",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "bench": "vitest bench --run --reporter=verbose",
     "check": "pnpm lint && pnpm typecheck && pnpm test && cargo nextest run --workspace"
   },
   "dependencies": {

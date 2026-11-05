@@ -1,8 +1,10 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { flushSync } from "react-dom";
 import { commands, type ListingTarget, type Sort } from "../../ipc";
 import { type Folder, paneFolder, useFolder } from "../../stores/folder";
 import { useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
+import { selectAllRows, selectionOf } from "../selection/commands";
 import { DevButton } from "./DevButton";
 import { DevIcons } from "./DevIcons";
 import { afterNextPaint } from "./paint";
@@ -46,6 +48,34 @@ export type SortOutcome =
   | { status: "ok"; timings: SortTimings }
   | { status: "error"; text: string };
 
+/** Select all's timings, in ms from just before Ctrl+A's command runs. */
+export interface SelectTimings {
+  count: number;
+  /** The new selection in the store. */
+  selectMs: number;
+  /** The selected rows painted: what "Ctrl+A on 100 000 entries is instant" measures. */
+  paintMs: number;
+}
+
+/** Quick filter keys, in ms from just before each changes the filter. */
+export interface FilterTimings {
+  count: number;
+  keys: number;
+  /** Filtering the rows and rendering them, until the commit. */
+  workMedianMs: number;
+  workMaxMs: number;
+  /** Until the frame with the filtered rows is painted. */
+  paintMedianMs: number;
+  paintMaxMs: number;
+}
+
+export type FilterOutcome =
+  | { status: "ok"; timings: FilterTimings }
+  | { status: "error"; text: string };
+
+/** What the filter test types, one key at a time; each word is cleared after (Esc). */
+const FILTER_WORDS = ["ნახაზ", "*.pdf", "rev*", "report"];
+
 /** The last diff: what it changed, and how long from its arrival to the paint. */
 export interface LiveChange {
   added: number;
@@ -65,7 +95,10 @@ declare global {
       listing: (path: string) => Promise<ListingOutcome>;
       synthFolder: (count: number) => Promise<ListingOutcome | string>;
       sort: (sort: Sort) => Promise<SortOutcome>;
+      filter: () => Promise<FilterOutcome>;
       scroll: (durationMs?: number) => Promise<ScrollResult | undefined>;
+      /** Ctrl+A's command on the active pane, from nothing selected, timed to the paint. */
+      selectAll: () => Promise<SelectTimings>;
       /** The next diff, once painted; `paintedAt` is `Date.now()` then, to time from outside. */
       nextChange: () => Promise<PaintedChange>;
     };
@@ -75,8 +108,9 @@ declare global {
 /**
  * Dev builds only: opens a folder (or a synthetic one) in the active pane's file list and times
  * it (the PRD's "1 000 items shown < 0.2 s" and "100 000 items: first rows < 0.3 s"), times
- * re-sorts ("sort < 100 ms") and scrolls the list from top to bottom ("60 fps"). The list is the
- * real Details view, so the numbers are its own. Changes made in Explorer show as a live line.
+ * re-sorts ("sort < 100 ms"), quick filter keys ("100 000 names in one frame") and scrolls the
+ * list from top to bottom ("60 fps"). The list is the real Details view, so the numbers are its
+ * own. Changes made in Explorer show as a live line.
  */
 export function DevListing() {
   const [path, setPath] = useState("");
@@ -108,6 +142,12 @@ export function DevListing() {
     setStatus(outcome.status === "ok" ? strings.dev.sorted(outcome.timings) : outcome.text);
     return outcome;
   };
+  const filter = async () => {
+    setStatus(strings.dev.filterTest);
+    const outcome = await timeFilter(folder);
+    setStatus(outcome.status === "ok" ? strings.dev.filtered(outcome.timings) : outcome.text);
+    return outcome;
+  };
   const scroll = async (durationMs?: number) => {
     const viewport = document.querySelector<HTMLElement>(`[data-file-list="${pane}"]`);
     if (!viewport) {
@@ -117,6 +157,12 @@ export function DevListing() {
     const result = await scrollTest(viewport, rowPx(), durationMs);
     setStatus(strings.dev.scrolled(result));
     return result;
+  };
+
+  const selectAll = async () => {
+    const timings = await timeSelectAll(folder);
+    setStatus(strings.dev.selectedAll(timings));
+    return timings;
   };
 
   useEffect(
@@ -131,7 +177,9 @@ export function DevListing() {
       listing: listPath,
       synthFolder: listSynth,
       sort,
+      filter,
       scroll,
+      selectAll,
       nextChange: () =>
         new Promise((resolve) => {
           const stop = watchChanges(folder, (live) => {
@@ -165,7 +213,9 @@ export function DevListing() {
             {strings.dev.listSynth(size)}
           </DevButton>
         ))}
+        <DevButton onClick={() => void filter()}>{strings.dev.filterTest}</DevButton>
         <DevButton onClick={() => void scroll()}>{strings.dev.scrollTest}</DevButton>
+        <DevButton onClick={() => void selectAll()}>{strings.dev.timeSelectAll}</DevButton>
       </form>
       {status && <p className="text-small text-fg-2 tabular-nums">{status}</p>}
       {change && <p className="text-small text-fg-2 tabular-nums">{change}</p>}
@@ -246,7 +296,7 @@ async function timeListing(folder: Folder, target: ListingTarget): Promise<Listi
 /** Sorts `folder` by `sort` and resolves once the new order is painted. */
 function timeSort(folder: Folder, sort: Sort): Promise<SortOutcome> {
   if (folder.store.getState().status !== "ready") {
-    return Promise.resolve({ status: "error", text: strings.dev.nothingToSort });
+    return Promise.resolve({ status: "error", text: strings.dev.listFirst });
   }
   return new Promise<SortOutcome>((resolve) => {
     const started = performance.now();
@@ -264,6 +314,60 @@ function timeSort(folder: Folder, sort: Sort): Promise<SortOutcome> {
     });
     folder.setSort(sort);
   });
+}
+
+/** Clears `folder`'s selection, then runs Ctrl+A's command and resolves once it is painted. */
+async function timeSelectAll(folder: Folder): Promise<SelectTimings> {
+  flushSync(() =>
+    folder.setSelection({ ...selectionOf(folder.store.getState()), selected: new Set() }),
+  );
+  await afterNextPaint();
+  const started = performance.now();
+  flushSync(selectAllRows);
+  const selectMs = performance.now() - started;
+  const painted = await afterNextPaint();
+  const count = folder.store.getState().selected.size;
+  return { count, selectMs, paintMs: painted - started };
+}
+
+/**
+ * Types `FILTER_WORDS` into `folder`'s filter one key at a time, clearing it after each word, and
+ * times every key: the filter and the render (committed at once, as a typed key is), then the
+ * paint.
+ */
+async function timeFilter(folder: Folder): Promise<FilterOutcome> {
+  const { status, entries } = folder.store.getState();
+  if (status !== "ready") {
+    return { status: "error", text: strings.dev.listFirst };
+  }
+  const keys = FILTER_WORDS.flatMap((word) => {
+    const chars = Array.from(word);
+    return [...chars.map((_, i) => chars.slice(0, i + 1).join("")), ""];
+  });
+  const work: number[] = [];
+  const paint: number[] = [];
+  for (const filter of keys) {
+    const started = performance.now();
+    flushSync(() => folder.setFilter(filter));
+    work.push(performance.now() - started);
+    paint.push((await afterNextPaint()) - started);
+  }
+  return {
+    status: "ok",
+    timings: {
+      count: entries.count - entries.removed.size,
+      keys: keys.length,
+      workMedianMs: median(work),
+      workMaxMs: Math.max(...work),
+      paintMedianMs: median(paint),
+      paintMaxMs: Math.max(...paint),
+    },
+  };
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }
 
 /** Calls `changed` with every diff in `folder` once it is painted. Returns a function that stops. */
