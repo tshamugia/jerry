@@ -69,6 +69,17 @@ export const strings = {
     backHistory: "Back history",
     forwardHistory: "Forward history",
   },
+  /** The address bar (#33): segments, their folder lists, text mode. */
+  address: {
+    edit: "Type an address",
+    subfolders: (name: string) => `Folders in ${name}`,
+    collapsed: "Folders before these",
+    loading: "Loading…",
+    none: "No folders",
+    more: (count: number) => `Showing the first ${integer.format(count)} folders`,
+    suggestions: "Suggestions",
+    notFound: (text: string) => `Jerry can't find “${text}”. Check the spelling and try again.`,
+  },
   /** Opening many items at once (Enter on a large selection). */
   openMany: {
     title: "Open many items",

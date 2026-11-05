@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { useStore } from "zustand";
 import { FilterField } from "../features/filter/FilterField";
+import { AddressBar } from "../features/navigation/AddressBar";
 import { useCommandLabel } from "../stores/keymap";
 import { type Tab, useActiveTab } from "../stores/tabs";
 import type { PaneSide } from "../stores/window";
@@ -29,7 +30,7 @@ const NAV_BUTTON = "size-toolbar-btn rounded-ctrl";
  * A pane's toolbar, laid out as the design: Back, Forward, Up, the address bar and the command
  * palette button; under them the quick filter and the view switcher. It acts on the tab the pane
  * shows; right-clicking Back or Forward lists the tab's folders that way. The address bar shows
- * the folder's path until its breadcrumbs come (#33). Controls stay disabled until their
+ * the folder as segments, a text field on a click or Ctrl+L (`AddressBar`). Controls stay disabled until their
  * features arrive (palette, List and Grid views). Its buttons are commands, so their tooltips
  * show the shortcuts in force.
  */
@@ -44,7 +45,7 @@ export const PaneToolbar = memo(function PaneToolbar({ pane }: { pane: PaneSide 
   return (
     <div className="flex shrink-0 flex-col gap-1.5 bg-bar px-2 pt-1.5 pb-2">
       <div className="flex items-center gap-0.5">
-        {tab ? <Navigation tab={tab} /> : <NoNavigation />}
+        {tab ? <Navigation tab={tab} pane={pane} /> : <NoNavigation />}
         <IconButton label={labels.palette} disabled className="ml-1 size-toolbar-btn rounded-ctrl">
           <PaletteIcon />
         </IconButton>
@@ -71,7 +72,7 @@ export const PaneToolbar = memo(function PaneToolbar({ pane }: { pane: PaneSide 
 });
 
 /** Back, Forward, Up and the address bar with Refresh, for `tab`. */
-function Navigation({ tab }: { tab: Tab }) {
+function Navigation({ tab, pane }: { tab: Tab; pane: PaneSide }) {
   const history = useStore(tab.store, (state) => state.history);
   const index = useStore(tab.store, (state) => state.index);
   const labels = {
@@ -122,11 +123,9 @@ function Navigation({ tab }: { tab: Tab }) {
       </IconButton>
       <fieldset
         aria-label={t.address}
-        className="ml-1 flex h-address min-w-0 flex-1 items-center gap-1 rounded-ctrl border border-ctrl-border bg-ctrl pr-1 pl-2"
+        className="ml-1 flex h-address min-w-0 flex-1 items-center gap-1 rounded-ctrl border border-ctrl-border bg-ctrl pr-1 pl-1 focus-within:outline-2 focus-within:outline-focus focus-within:-outline-offset-2"
       >
-        <span title={current?.path} className="min-w-0 flex-1 truncate text-fg text-small">
-          {current?.path}
-        </span>
+        <AddressBar key={tab.id} tab={tab} pane={pane} />
         <IconButton
           label={labels.refresh}
           onClick={() => tab.refresh()}

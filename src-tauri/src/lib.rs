@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod jobs;
 pub mod listing;
 pub mod logging;
+pub mod navigation;
 pub mod shell;
 pub mod storage;
 pub mod title_bar;
@@ -75,6 +76,9 @@ macro_rules! commands {
             listing::listing_open,
             listing::listing_sort,
             listing::listing_close,
+            navigation::resolve_path,
+            navigation::autocomplete_path,
+            navigation::folder_subfolders,
             shell::open_entries,
             shell::folder_copy_path,
             delete::delete_check,

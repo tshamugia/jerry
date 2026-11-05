@@ -104,6 +104,16 @@ pub struct ListingOpened {
     pub folder: u32,
     /// The folder it is in, as such a token; none at a root.
     pub parent: Option<u32>,
+    /// The address bar's segments, from the root (`C:`, `\\server\share`) to the folder.
+    pub crumbs: Vec<Crumb>,
+}
+
+/// A folder as the address bar shows it: its name and its token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct Crumb {
+    pub name: String,
+    /// A token for `ListingTarget::Folder`.
+    pub folder: u32,
 }
 
 /// The open listings, by id. Clones share them. A tab has at most one: opening another folder
@@ -476,6 +486,19 @@ impl Listings {
         self.0.folders().path(folder).cloned()
     }
 
+    /// The token for `folder` (an exact long path), for `ListingTarget::Folder`.
+    pub fn folder_token(&self, folder: &Path) -> u32 {
+        self.0.folders().token(folder)
+    }
+
+    /// `folder` as an address bar segment.
+    pub fn crumb(&self, folder: &Path) -> Crumb {
+        Crumb {
+            name: crumb_name(folder),
+            folder: self.folder_token(folder),
+        }
+    }
+
     /// What `listing_open` answers for listing `id` of `folder`: display text and tokens.
     fn opened(&self, id: u32, folder: &Path) -> ListingOpened {
         let name = folder.file_name().map_or_else(
@@ -483,12 +506,21 @@ impl Listings {
             |name| name.to_string_lossy().into_owned(),
         );
         let mut tokens = self.0.folders();
+        let mut crumbs: Vec<Crumb> = folder
+            .ancestors()
+            .map(|each| Crumb {
+                name: crumb_name(each),
+                folder: tokens.token(each),
+            })
+            .collect();
+        crumbs.reverse();
         ListingOpened {
             id,
             path: display_path(folder),
             name,
             folder: tokens.token(folder),
             parent: folder.parent().map(|parent| tokens.token(parent)),
+            crumbs,
         }
     }
 
@@ -800,6 +832,15 @@ fn watch(state: &Arc<ListingState>, watchers: &Watchers) {
         }
         // Reading the folder reports what is wrong with it; unwatched, the list just isn't live.
         Err(error) => tracing::info!(code = ?error.code, "folder isn't watched"),
+    }
+}
+
+/// A folder's name in the address bar: its last part; a drive's root as `C:`, a share's as
+/// `\\server\share`.
+fn crumb_name(folder: &Path) -> String {
+    match folder.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => display_path(folder).trim_end_matches('\\').to_owned(),
     }
 }
 
@@ -1414,6 +1455,36 @@ mod tests {
         let folder = listings.opened(3, Path::new(r"\\?\UNC\server\share\Projects"));
         assert_eq!(folder.name, "Projects");
         assert_eq!(folder.parent, Some(share.folder));
+    }
+
+    #[test]
+    fn crumbs_run_from_the_root_with_tokens_that_open_each_folder() {
+        let listings = Listings::default();
+        let crumbs = |path: &str| -> Vec<(String, PathBuf)> {
+            listings
+                .opened(1, Path::new(path))
+                .crumbs
+                .into_iter()
+                .map(|crumb| {
+                    let path = listings.folder_path(crumb.folder).expect("a known token");
+                    (crumb.name, path)
+                })
+                .collect()
+        };
+        assert_eq!(
+            crumbs(r"\\?\D:\Projects\ნახაზები"),
+            [
+                ("D:".to_owned(), PathBuf::from(r"\\?\D:\")),
+                ("Projects".to_owned(), PathBuf::from(r"\\?\D:\Projects")),
+                (
+                    "ნახაზები".to_owned(),
+                    PathBuf::from(r"\\?\D:\Projects\ნახაზები")
+                ),
+            ]
+        );
+        let share = crumbs(r"\\?\UNC\server\share\Docs");
+        let names: Vec<&str> = share.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, [r"\\server\share", "Docs"]);
     }
 
     #[test]

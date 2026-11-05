@@ -204,3 +204,21 @@ export function DualPaneIcon() {
     </Icon>
   );
 }
+
+/** An address bar segment's arrow: it drops the folder's subfolders. */
+export function ChevronIcon() {
+  return (
+    <Icon size={10} stroke={1.6}>
+      <path d="M6 4l4 4-4 4" />
+    </Icon>
+  );
+}
+
+/** Segments left out of a narrow address bar. */
+export function MoreIcon() {
+  return (
+    <Icon size={14} stroke={1.3}>
+      <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.2} />
+    </Icon>
+  );
+}

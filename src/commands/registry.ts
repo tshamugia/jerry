@@ -1,5 +1,6 @@
 import { canDelete, startDelete } from "../features/delete/flow";
 import { focusFilter } from "../features/filter/focus";
+import { canEditAddress, editAddress } from "../features/navigation/address";
 import {
   canGoBack,
   canGoForward,
@@ -75,7 +76,14 @@ const settingsLoaded = () => useSettings.getState().settings !== undefined;
 /** Every command, in the PRD's order («კლავიატურა, command palette და context menu»). */
 export const COMMANDS: readonly Command[] = [
   // Navigation. Back, Forward and Up work in a text field too: it keeps Backspace.
-  { id: "addressBar", group: "navigation", keys: ["Ctrl+L"], context: "global" },
+  {
+    id: "addressBar",
+    group: "navigation",
+    keys: ["Ctrl+L"],
+    context: "global",
+    enabled: canEditAddress,
+    run: () => editAddress(),
+  },
   {
     id: "back",
     group: "navigation",

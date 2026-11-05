@@ -108,6 +108,7 @@ describe("the shortcut table", () => {
         group: "navigation",
         title: "Navigation",
         rows: [
+          { id: "addressBar", title: "Edit address", keys: ["Ctrl+L"] },
           { id: "back", title: "Back", keys: ["Alt+←", "Backspace"] },
           { id: "forward", title: "Forward", keys: ["Alt+→"] },
           { id: "up", title: "Up", keys: ["Alt+↑"] },
@@ -221,6 +222,7 @@ describe("the shortcut table", () => {
         group: "navigation",
         title: "Navigation",
         rows: [
+          { id: "addressBar", title: "Edit address", keys: ["Ctrl+L"] },
           { id: "back", title: "Back", keys: ["Alt+←", "Backspace"] },
           { id: "forward", title: "Forward", keys: ["Alt+→"] },
           { id: "up", title: "Up", keys: ["Alt+↑"] },

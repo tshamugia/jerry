@@ -100,6 +100,8 @@
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
   --spacing-active-pane-bar: var(--jerry-active-pane-bar);
+  /* Menus that list folders (an address bar segment's subfolders): taller ones scroll. */
+  --spacing-menu: 420px;
 }
 
 /* The file list's loading bar: an accent stripe that sweeps across while a slow folder is read. */

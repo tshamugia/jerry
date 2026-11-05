@@ -58,12 +58,14 @@ export function fakeListings({
         for (const message of queued) stream.onmessage(message);
       }, 0);
       const id = streams.length;
+      const name = path.split("\\").filter(Boolean).at(-1) ?? path;
       const answer: ListingOpened = {
         id,
         path,
-        name: path.split("\\").filter(Boolean).at(-1) ?? path,
+        name,
         folder: 100 + id,
         parent: null,
+        crumbs: [{ name, folder: 100 + id }],
       };
       return { ...answer, ...opened(payload.target as ListingTarget, id) };
     }

@@ -39,7 +39,10 @@ function send(state: Partial<FrameState>) {
 /** A tab in `pane` on folder `name` (token `folder`), not opened. */
 function tab(pane: "left" | "right", name: string, { pinned = false, folder = 1 } = {}): Tab {
   const path = `D:\\Projects\\${name}`;
-  return addTab(pane, { pinned, from: { history: [{ folder, path, name, parent: null }] } });
+  return addTab(pane, {
+    pinned,
+    from: { history: [{ folder, path, name, parent: null, crumbs: [{ name, folder }] }] },
+  });
 }
 
 const button = (name: string) => screen.getByRole("button", { name });

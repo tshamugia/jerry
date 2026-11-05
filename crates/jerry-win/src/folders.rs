@@ -7,9 +7,10 @@ use std::path::PathBuf;
 use jerry_core::JerryError;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{
-    FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86,
-    FOLDERID_RoamingAppData, FOLDERID_UserProfiles, FOLDERID_Windows, KF_FLAG_DEFAULT,
-    SHGetKnownFolderPath,
+    FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
+    FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_ProgramFiles,
+    FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, FOLDERID_SkyDrive, FOLDERID_UserProfiles,
+    FOLDERID_Videos, FOLDERID_Windows, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
 };
 use windows::core::GUID;
 
@@ -44,6 +45,36 @@ pub fn profile() -> Result<PathBuf, JerryError> {
     known_folder(&FOLDERID_Profile)
 }
 
+/// The short names the address bar takes for known folders (`Downloads`), as it suggests them.
+pub const SHORT_NAMES: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Music",
+    "OneDrive",
+    "Pictures",
+    "Videos",
+];
+
+/// The known folder a short name stands for, case-insensitive, also as Explorer writes it
+/// (`shell:Downloads`): one of [`SHORT_NAMES`], or `Home` for the user's own folder. `None` for
+/// another name, or a folder this user doesn't have.
+pub fn by_short_name(name: &str) -> Option<PathBuf> {
+    let lower = name.to_ascii_lowercase();
+    let id = match lower.strip_prefix("shell:").unwrap_or(&lower) {
+        "desktop" => FOLDERID_Desktop,
+        "documents" | "personal" => FOLDERID_Documents,
+        "downloads" => FOLDERID_Downloads,
+        "music" => FOLDERID_Music,
+        "onedrive" => FOLDERID_SkyDrive,
+        "pictures" => FOLDERID_Pictures,
+        "videos" => FOLDERID_Videos,
+        "home" | "profile" => FOLDERID_Profile,
+        _ => return None,
+    };
+    known_folder(&id).ok()
+}
+
 pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, JerryError> {
     // SAFETY: `id` is a valid known folder id; no access token means the current user.
     let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }?;
@@ -72,6 +103,21 @@ mod tests {
             local_app_data().expect("local").starts_with(&profile),
             "AppData is in the profile"
         );
+    }
+
+    #[test]
+    fn short_names_lead_to_known_folders() {
+        let downloads = by_short_name("Downloads").expect("the user has Downloads");
+        assert!(downloads.is_absolute(), "{}", downloads.display());
+        assert_eq!(by_short_name("shell:downloads"), Some(downloads));
+        assert_eq!(by_short_name("HOME"), profile().ok());
+        assert_eq!(by_short_name("Downloads2"), None);
+        for name in SHORT_NAMES {
+            // OneDrive may not be set up on a build machine; the others always are.
+            if *name != "OneDrive" {
+                assert!(by_short_name(name).is_some(), "{name}");
+            }
+        }
     }
 
     #[test]
