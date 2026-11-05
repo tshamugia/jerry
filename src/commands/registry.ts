@@ -12,6 +12,13 @@ import {
   refresh,
 } from "../features/navigation/commands";
 import {
+  canOpenInOtherPane,
+  canSwitchPane,
+  sameFolderInOtherPane,
+  switchPane,
+  toggleDualPane,
+} from "../features/navigation/panes";
+import {
   clearSelection,
   invertSelection,
   selectAllRows,
@@ -169,8 +176,32 @@ export const COMMANDS: readonly Command[] = [
 
   // Windows and panes. Copy and move act on the selection, so they belong to the list.
   { id: "newWindow", group: "panes", keys: ["Ctrl+N"], context: "global" },
-  { id: "dualPane", group: "panes", keys: ["F3"], context: "global" },
-  { id: "switchPane", group: "panes", keys: ["Tab"], context: "list" },
+  {
+    id: "dualPane",
+    group: "panes",
+    keys: ["F3"],
+    context: "global",
+    enabled: settingsLoaded,
+    run: toggleDualPane,
+  },
+  // From a file list only: elsewhere Tab moves through the controls.
+  {
+    id: "switchPane",
+    group: "panes",
+    keys: ["Tab"],
+    context: "list",
+    enabled: canSwitchPane,
+    run: switchPane,
+  },
+  // No shortcut in the PRD: the tab menu has it, and the palette (v1.0).
+  {
+    id: "sameFolderInOtherPane",
+    group: "panes",
+    keys: [],
+    context: "global",
+    enabled: canOpenInOtherPane,
+    run: sameFolderInOtherPane,
+  },
   { id: "copyToOtherPane", group: "panes", keys: ["F5"], context: "list" },
   { id: "moveToOtherPane", group: "panes", keys: ["F6"], context: "list" },
   { id: "copyTo", group: "panes", keys: ["Shift+F5"], context: "list" },

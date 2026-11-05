@@ -23,6 +23,7 @@ import type { Tab } from "../../stores/tabs";
 import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
 import { openItems } from "../navigation/open";
+import { nothingFocused } from "../navigation/panes";
 import { selectionOf } from "../selection/commands";
 import {
   clickRow,
@@ -371,7 +372,8 @@ const handOver = new Set<PaneSide>();
 function useKeyboardHandOver(scroller: RefObject<HTMLDivElement | null>, pane: PaneSide): void {
   useLayoutEffect(() => {
     const view = scroller.current;
-    if (view && handOver.delete(pane)) {
+    // Only if the keyboard went nowhere meanwhile: back to two panes, it stays where it is.
+    if (view && handOver.delete(pane) && nothingFocused()) {
       view.focus({ preventScroll: true });
     }
     // Before the list leaves the page, while it still has the focus.

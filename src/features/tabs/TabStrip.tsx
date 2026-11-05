@@ -11,6 +11,7 @@ import {
 import { useStore } from "zustand";
 import { commands } from "../../ipc";
 import { useCommandLabel } from "../../stores/keymap";
+import { useSetting } from "../../stores/settings";
 import {
   activateTab,
   closeOtherTabs,
@@ -29,6 +30,7 @@ import { ContextMenu, MenuItem, MenuSeparator } from "../../ui/ContextMenu";
 import { IconButton } from "../../ui/IconButton";
 import { CloseIcon, FolderIcon, PinIcon, PlusIcon } from "../../ui/icons";
 import { focusListSoon } from "../filter/focus";
+import { openInOtherPane } from "../navigation/panes";
 import { newTab } from "./commands";
 
 const t = strings.titleBar;
@@ -146,6 +148,7 @@ function TabView({
   drag,
 }: TabProps & { model: Tab }) {
   const entry = useStore(model.store, (state) => state.history[state.index]);
+  const dual = useSetting("dualPane") ?? true;
   const label = entry?.name ?? t.noFolder;
   const close = () => closeTab(pane, tab.id);
 
@@ -189,6 +192,9 @@ function TabView({
         {t.closeToRight}
       </MenuItem>
       <MenuSeparator />
+      <MenuItem onSelect={() => openInOtherPane(pane, model)} disabled={!entry || !dual}>
+        {t.openInOtherPane}
+      </MenuItem>
       <MenuItem
         onSelect={() => entry && void commands.folderCopyPath(entry.folder)}
         disabled={!entry}

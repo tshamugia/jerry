@@ -48,6 +48,7 @@ export const strings = {
     closeOthers: "Close other tabs",
     closeToRight: "Close tabs to the right",
     copyPath: "Copy path",
+    openInOtherPane: "Open in other pane",
     minimize: "Minimize",
     maximize: "Maximize",
     restore: "Restore down",
@@ -100,6 +101,8 @@ export const strings = {
   status: {
     comfortable: "Comfortable rows",
     compact: "Compact rows",
+    singlePane: "One pane",
+    dualPane: "Two panes",
   },
   /** A command's title with its shortcut, for tooltips and screen readers: "Back (Alt+←)". */
   withShortcut: (title: string, shortcut: string | undefined) =>
@@ -134,6 +137,7 @@ export const strings = {
     newWindow: "New window",
     dualPane: "Dual pane",
     switchPane: "Switch pane",
+    sameFolderInOtherPane: "Same folder in other pane",
     copyToOtherPane: "Copy to other pane",
     moveToOtherPane: "Move to other pane",
     copyTo: "Copy to…",

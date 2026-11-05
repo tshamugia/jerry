@@ -7,6 +7,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useSinglePane } from "../features/navigation/panes";
 import type { Settings } from "../ipc";
 import { setSetting } from "../stores/settings";
 import { strings } from "../strings";
@@ -45,6 +46,7 @@ export function Frame({ settings, left, right, previewContent, transfers }: Prop
     settings.dualPane,
   );
   const style = { "--frame-columns": frameColumns(zones) } as CSSProperties;
+  useSinglePane(zones.dual);
 
   return (
     <div className="flex h-full flex-col bg-mica text-fg" style={style}>
@@ -99,7 +101,7 @@ export function Frame({ settings, left, right, previewContent, transfers }: Prop
           {transfers}
         </section>
       )}
-      <StatusBar density={settings.density} />
+      <StatusBar density={settings.density} dual={zones.dual} />
     </div>
   );
 }
