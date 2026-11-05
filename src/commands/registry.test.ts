@@ -95,9 +95,9 @@ describe("the default keymap", () => {
   });
 
   it("keeps commands that aren't built yet, disabled", () => {
-    const selectAll = COMMANDS.find((command) => command.id === "selectAll");
-    expect(selectAll && isBuilt(selectAll)).toBe(false);
-    expect(shortcutsOf(keymap, "selectAll")).toEqual(["Ctrl+A"]);
+    const duplicate = COMMANDS.find((command) => command.id === "duplicate");
+    expect(duplicate && isBuilt(duplicate)).toBe(false);
+    expect(shortcutsOf(keymap, "duplicate")).toEqual(["Ctrl+D"]);
   });
 });
 
@@ -110,6 +110,17 @@ describe("the shortcut table", () => {
         rows: [
           { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
           { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+D"] },
+        ],
+      },
+      {
+        group: "selection",
+        title: "Selection",
+        rows: [
+          { id: "selectAll", title: "Select all", keys: ["Ctrl+A"] },
+          { id: "invertSelection", title: "Invert selection", keys: ["Ctrl+I"] },
+          { id: "selectByPattern", title: "Select by pattern…", keys: ["Ctrl+Shift+A"] },
+          { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
+          { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
         ],
       },
       {
@@ -135,8 +146,14 @@ describe("the shortcut table", () => {
     };
     const commands = [...COMMANDS.filter((command) => command.id !== "newFolder"), newFolder];
     const table = shortcutTable(buildKeymap(commands), commands);
-    expect(table.map((group) => group.group)).toEqual(["view", "files", "search", "other"]);
-    expect(table[1]?.rows).toEqual([
+    expect(table.map((group) => group.group)).toEqual([
+      "view",
+      "selection",
+      "files",
+      "search",
+      "other",
+    ]);
+    expect(table[2]?.rows).toEqual([
       { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
     ]);
   });
@@ -153,6 +170,17 @@ describe("the shortcut table", () => {
         rows: [
           { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
           { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+R"] },
+        ],
+      },
+      {
+        group: "selection",
+        title: "Selection",
+        rows: [
+          { id: "selectAll", title: "Select all", keys: ["Ctrl+A"] },
+          { id: "invertSelection", title: "Invert selection", keys: ["Ctrl+I"] },
+          { id: "selectByPattern", title: "Select by pattern…", keys: ["Ctrl+Shift+A"] },
+          { id: "toggleSelection", title: "Toggle focused item", keys: ["Ctrl+Space"] },
+          { id: "clearSelection", title: "Clear selection", keys: ["Esc"] },
         ],
       },
       {

@@ -109,7 +109,7 @@ describe("the folder's filter", () => {
 
   test("entries it hides leave the selection and the focus", async () => {
     const { folder } = await opened();
-    folder.select(0);
+    folder.setSelection({ selected: new Set([0]), anchor: 0, focused: 0 });
     const selected = folder.store.getState().selected;
 
     folder.setFilter("plan");
@@ -128,7 +128,7 @@ describe("the folder's filter", () => {
   test("watcher changes pass through it", async () => {
     const { core, folder } = await opened();
     folder.setFilter("*.dwg");
-    folder.select(0);
+    folder.setSelection({ selected: new Set([0]), anchor: 0, focused: 0 });
 
     // A new drawing, a new text file, and the selected drawing renamed in Explorer.
     core.send(

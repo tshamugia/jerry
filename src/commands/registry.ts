@@ -1,4 +1,10 @@
 import { focusFilter } from "../features/filter/focus";
+import {
+  clearSelection,
+  invertSelection,
+  selectAllRows,
+  toggleFocusedRow,
+} from "../features/selection/commands";
 import { openOverlay } from "../stores/overlay";
 import { toggleDensity, toggleHidden, useSettings } from "../stores/settings";
 import { strings } from "../strings";
@@ -95,10 +101,30 @@ export const COMMANDS: readonly Command[] = [
     run: toggleDensity,
   },
 
-  // Selection.
-  { id: "selectAll", group: "selection", keys: ["Ctrl+A"], context: "list" },
-  { id: "invertSelection", group: "selection", keys: ["Ctrl+I"], context: "list" },
-  { id: "selectByPattern", group: "selection", keys: ["Ctrl+Shift+A"], context: "list" },
+  // Selection: on the active pane's list, only the rows it shows.
+  { id: "selectAll", group: "selection", keys: ["Ctrl+A"], context: "list", run: selectAllRows },
+  {
+    id: "invertSelection",
+    group: "selection",
+    keys: ["Ctrl+I"],
+    context: "list",
+    run: invertSelection,
+  },
+  {
+    id: "selectByPattern",
+    group: "selection",
+    keys: ["Ctrl+Shift+A"],
+    context: "list",
+    run: () => openOverlay("selectByPattern"),
+  },
+  {
+    id: "toggleSelection",
+    group: "selection",
+    keys: ["Ctrl+Space"],
+    context: "list",
+    run: toggleFocusedRow,
+  },
+  { id: "clearSelection", group: "selection", keys: ["Esc"], context: "list", run: clearSelection },
 
   // Files.
   { id: "newFolder", group: "files", keys: ["Ctrl+Shift+N"], context: "list" },

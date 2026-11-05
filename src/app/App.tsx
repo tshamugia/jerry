@@ -3,6 +3,7 @@ import { useCommandKeys } from "../commands/dispatch";
 import { ShortcutTable } from "../commands/ShortcutTable";
 import { DevPanel } from "../features/dev/DevPanel";
 import { FileList } from "../features/file-list/FileList";
+import { SelectByPattern } from "../features/selection/SelectByPattern";
 import { commands } from "../ipc";
 import { useAppearance } from "../stores/appearance";
 import { paneFolder } from "../stores/folder";
@@ -36,6 +37,7 @@ export function App() {
     <>
       <Frame settings={settings} left={left} right={right} previewContent={dev} />
       <ShortcutTable />
+      <SelectByPattern />
     </>
   );
 }

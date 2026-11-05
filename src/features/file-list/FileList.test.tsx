@@ -185,17 +185,222 @@ test("changes in the folder repaint the rows", async () => {
   expect(cells("გეგმა")[3]).toBe("4 KB");
 });
 
+/** A press and release of the left button, and the click that follows, as a mouse makes them. */
+function click(target: Element, init: { ctrlKey?: boolean; shiftKey?: boolean } = {}) {
+  fireEvent.pointerDown(target, { button: 0, pointerId: 1, ...init });
+  fireEvent.pointerUp(target, { button: 0, pointerId: 1, ...init });
+  fireEvent.click(target, init);
+}
+const nameOf = (name: string) => within(grid()).getByText(name);
+/** A row's Date modified cell: a press there can start a marquee. */
+const dateOf = (index: number) =>
+  within(rows()[index] as HTMLElement).getAllByRole("gridcell")[1] as HTMLElement;
+const selectedNames = () =>
+  rows()
+    .filter((row) => row.getAttribute("aria-selected") === "true")
+    .map((row) => within(row).getAllByRole("gridcell")[0]?.textContent);
+const key = (code: string, init: { key?: string; ctrlKey?: boolean; shiftKey?: boolean } = {}) =>
+  fireEvent.keyDown(grid(), { code, key: code, ...init });
+
+/** Ten files, f0.txt to f9.txt, shown in id order. */
+const TEN: TestEntry[] = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}.txt` }));
+const IN_ORDER = TEN.map((_, i) => i);
+
 test("a click selects a row; selection is accent-tinted only in the active pane", async () => {
   await listed(WORK, [1, 0, 2, 3]);
   const row = () => rows()[1] as HTMLElement;
 
-  fireEvent.click(within(row()).getByText("ELV-001 LAN Layout GF.dwg"));
+  click(nameOf("ELV-001 LAN Layout GF.dwg"));
   expect(row()).toHaveAttribute("aria-selected", "true");
   expect(row()).toHaveClass("bg-sel");
   expect(rows()[0]).toHaveClass("hover:bg-hover");
+  expect(grid()).toHaveAttribute("aria-multiselectable", "true");
 
   act(() => useWindow.setState({ activePane: "right" }));
   expect(row()).toHaveClass("bg-sel-inactive");
+});
+
+test("Ctrl+click toggles rows, Shift+click selects a range, Ctrl+Shift+click adds one", async () => {
+  await listed(TEN, IN_ORDER);
+
+  click(nameOf("f1.txt"));
+  click(nameOf("f3.txt"), { ctrlKey: true });
+  expect(selectedNames()).toEqual(["f1.txt", "f3.txt"]);
+  click(nameOf("f1.txt"), { ctrlKey: true });
+  expect(selectedNames()).toEqual(["f3.txt"]);
+
+  // As in Explorer, the anchor is the last row clicked without Shift: f1, though deselected.
+  click(nameOf("f4.txt"), { shiftKey: true });
+  expect(selectedNames()).toEqual(["f1.txt", "f2.txt", "f3.txt", "f4.txt"]);
+  click(nameOf("f2.txt"), { shiftKey: true });
+  expect(selectedNames()).toEqual(["f1.txt", "f2.txt"]);
+
+  click(nameOf("f8.txt"), { ctrlKey: true });
+  click(nameOf("f9.txt"), { ctrlKey: true, shiftKey: true });
+  expect(selectedNames()).toEqual(["f1.txt", "f2.txt", "f8.txt", "f9.txt"]);
+});
+
+test("a press on a selected row keeps the selection until release, then selects only it", async () => {
+  await listed(TEN, IN_ORDER);
+  click(nameOf("f1.txt"));
+  click(nameOf("f4.txt"), { shiftKey: true });
+
+  fireEvent.pointerDown(nameOf("f2.txt"), { button: 0, pointerId: 1 });
+  expect(selectedNames()).toEqual(["f1.txt", "f2.txt", "f3.txt", "f4.txt"]);
+  fireEvent.pointerUp(nameOf("f2.txt"), { button: 0, pointerId: 1 });
+  expect(selectedNames()).toEqual(["f2.txt"]);
+});
+
+test("a click on empty space clears the selection; a right click selects a row not selected", async () => {
+  await listed(TEN.slice(0, 3), [0, 1, 2]);
+  click(nameOf("f0.txt"));
+  click(nameOf("f1.txt"), { ctrlKey: true });
+
+  // Right click on a selected row keeps the selection; on another row, selects it alone.
+  fireEvent.pointerDown(nameOf("f1.txt"), { button: 2, pointerId: 1 });
+  expect(selectedNames()).toEqual(["f0.txt", "f1.txt"]);
+  fireEvent.pointerDown(nameOf("f2.txt"), { button: 2, pointerId: 1 });
+  expect(selectedNames()).toEqual(["f2.txt"]);
+
+  // Below the rows.
+  const empty = grid().firstElementChild as HTMLElement;
+  click(empty);
+  expect(selectedNames()).toEqual([]);
+});
+
+test("a marquee from a row's other columns selects the rows it crosses, then is gone", async () => {
+  await listed(TEN, IN_ORDER);
+  click(nameOf("f0.txt"));
+
+  // jsdom lays nothing out: client y is y from the first row's top; rows are 30 px.
+  fireEvent.pointerDown(dateOf(1), { button: 0, pointerId: 1, clientX: 300, clientY: 35 });
+  expect(selectedNames()).toEqual(["f0.txt"]);
+  fireEvent.pointerMove(grid(), { pointerId: 1, clientX: 320, clientY: 95 });
+  expect(selectedNames()).toEqual(["f1.txt", "f2.txt", "f3.txt"]);
+  const drawn = grid().querySelector<HTMLElement>("[data-marquee]");
+  expect(drawn?.style.top).toBe("35px");
+  expect(drawn?.style.height).toBe("60px");
+
+  // Back up: rows it no longer crosses leave the selection.
+  fireEvent.pointerMove(grid(), { pointerId: 1, clientX: 320, clientY: 50 });
+  expect(selectedNames()).toEqual(["f1.txt"]);
+  fireEvent.pointerUp(grid(), { pointerId: 1, clientX: 320, clientY: 50 });
+  fireEvent.click(grid());
+  expect(grid().querySelector("[data-marquee]")).toBeNull();
+  expect(selectedNames()).toEqual(["f1.txt"]);
+});
+
+test("a marquee with Ctrl toggles the rows it crosses; a press on a name never starts one", async () => {
+  await listed(TEN, IN_ORDER);
+  click(nameOf("f1.txt"));
+  click(nameOf("f4.txt"), { ctrlKey: true });
+
+  fireEvent.pointerDown(dateOf(0), { button: 0, pointerId: 1, ctrlKey: true, clientY: 5 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, ctrlKey: true, clientY: 65 });
+  fireEvent.pointerUp(grid(), { pointerId: 1, ctrlKey: true, clientY: 65 });
+  expect(selectedNames()).toEqual(["f0.txt", "f2.txt", "f4.txt"]);
+
+  fireEvent.pointerDown(nameOf("f6.txt"), { button: 0, pointerId: 1, clientY: 185 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, clientY: 275 });
+  fireEvent.pointerUp(grid(), { pointerId: 1, clientY: 275 });
+  expect(selectedNames()).toEqual(["f6.txt"]);
+});
+
+test("a small move doesn't make a marquee: the release clicks the row", async () => {
+  await listed(TEN, IN_ORDER);
+  fireEvent.pointerDown(dateOf(2), { button: 0, pointerId: 1, clientY: 65 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, clientY: 67 });
+  expect(grid().querySelector("[data-marquee]")).toBeNull();
+  fireEvent.pointerUp(dateOf(2), { button: 0, pointerId: 1, clientY: 67 });
+  expect(selectedNames()).toEqual(["f2.txt"]);
+});
+
+test("arrows, Home and End move the selection; Shift selects a range; Ctrl moves the focus only", async () => {
+  await listed(TEN, IN_ORDER);
+  const focusedName = () =>
+    rows()
+      .find((row) => row.id === grid().getAttribute("aria-activedescendant"))
+      ?.textContent?.slice(0, 6);
+
+  key("ArrowDown");
+  expect(selectedNames()).toEqual(["f0.txt"]);
+  key("ArrowDown");
+  key("ArrowDown");
+  expect(selectedNames()).toEqual(["f2.txt"]);
+  key("ArrowDown", { shiftKey: true });
+  key("ArrowDown", { shiftKey: true });
+  expect(selectedNames()).toEqual(["f2.txt", "f3.txt", "f4.txt"]);
+  key("ArrowUp", { shiftKey: true });
+  expect(selectedNames()).toEqual(["f2.txt", "f3.txt"]);
+
+  key("ArrowDown", { ctrlKey: true });
+  key("ArrowDown", { ctrlKey: true });
+  expect(focusedName()).toBe("f5.txt");
+  expect(selectedNames()).toEqual(["f2.txt", "f3.txt"]);
+
+  key("End");
+  expect(selectedNames()).toEqual(["f9.txt"]);
+  key("Home", { shiftKey: true });
+  expect(selectedNames()).toHaveLength(10);
+  key("ArrowUp");
+  expect(selectedNames()).toEqual(["f0.txt"]);
+});
+
+test("PageDown goes to the last row in view, then a page on, scrolling it into view", async () => {
+  const many: TestEntry[] = Array.from({ length: 100 }, (_, i) => ({ name: `f${i}.txt` }));
+  const { folder } = await listed(
+    many,
+    many.map((_, i) => i),
+  );
+  // jsdom sends no scroll events, so the rows rendered stay the first ones: ask the store.
+  const selectedNames = () => {
+    const { selected, entries } = folder.store.getState();
+    return [...selected].sort((a, b) => a - b).map((id) => entries.names[id]);
+  };
+
+  key("Home");
+  // 600 px of rows at 30 px: rows 0 to 19 are in view.
+  key("PageDown");
+  expect(selectedNames()).toEqual(["f19.txt"]);
+  expect(grid().scrollTop).toBe(0);
+  key("PageDown");
+  expect(selectedNames()).toEqual(["f38.txt"]);
+  // Scrolled just enough: row 38 at the bottom, rows 19 to 38 in view.
+  expect(grid().scrollTop).toBe(39 * 30 - 600);
+  key("PageUp", { shiftKey: true });
+  expect(selectedNames()[0]).toBe("f19.txt");
+  expect(selectedNames()).toHaveLength(20);
+  expect(grid().scrollTop).toBe(39 * 30 - 600);
+});
+
+test("typing the first letters of a name selects it, Georgian too", async () => {
+  await listed(
+    [
+      { name: "Plot", attributes: 0x10 },
+      { name: "plan_rev2.dwg" },
+      { name: "გეგმა.ნახ" },
+      { name: "გეგმა 2.ნახ" },
+      { name: "ნახაზი.dwg" },
+    ],
+    [0, 1, 2, 3, 4],
+  );
+
+  key("KeyG", { key: "გ" });
+  expect(selectedNames()).toEqual(["გეგმა.ნახ"]);
+  for (const [code, char] of [
+    ["KeyE", "ე"],
+    ["KeyG", "გ"],
+    ["KeyM", "მ"],
+    ["KeyA", "ა"],
+    ["Space", " "],
+  ] as const) {
+    key(code, { key: char });
+  }
+  expect(selectedNames()).toEqual(["გეგმა 2.ნახ"]);
+
+  // A key bound to a command ("?" opens the shortcut table) isn't typed.
+  const question = fireEvent.keyDown(grid(), { code: "Slash", key: "?", shiftKey: true });
+  expect(question).toBe(true);
 });
 
 test("double click opens a folder; with single click, one click does", async () => {

@@ -8,6 +8,8 @@ import { dateText, extensionOf, nameText, sizeCell, typeName } from "./format";
 
 export interface FileRowProps {
   id: number;
+  /** The list's prefix for row element ids, which `aria-activedescendant` points at. */
+  idPrefix: string;
   /** Position among the rows, from 0. */
   index: number;
   /** Offset from the first row, in CSS px. */
@@ -33,10 +35,11 @@ export interface FileRowProps {
 /**
  * One row of the Details view: fixed height (the density's), inset 4 px with a 4 px radius as
  * the design draws it. Memoized: a row repaints only when its own entry, state or columns change.
- * Clicks are handled by the list, which finds the row by `data-id`.
+ * Clicks are handled by the list, which finds the row by `data-id`; the icon and the name are
+ * the item itself (`data-item`), the rest of the row is where a marquee can start.
  */
 export const FileRow = memo(function FileRow(props: FileRowProps) {
-  const { id, index, top, columns, attributes, selected, focused, activePane } = props;
+  const { id, idPrefix, index, top, columns, attributes, selected, focused, activePane } = props;
   const folder = (attributes & Attribute.directory) !== 0;
   const background = selected ? (activePane ? "bg-sel" : "bg-sel-inactive") : "hover:bg-hover";
   const focus = focused
@@ -44,6 +47,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
     : "";
   return (
     <div
+      id={`${idPrefix}${id}`}
       role="row"
       aria-rowindex={index + 2}
       aria-selected={selected}
@@ -84,11 +88,19 @@ function NameCell({
       className={`${WIDTH_CLASS.name} flex items-center gap-2 overflow-hidden ${first ? "" : "pl-2"}`}
     >
       {icon ? (
-        <img src={icon} alt="" draggable={false} className={`size-4 shrink-0 ${dimmed}`} />
+        <img
+          src={icon}
+          alt=""
+          draggable={false}
+          data-item
+          className={`size-4 shrink-0 ${dimmed}`}
+        />
       ) : (
-        <span className="size-4 shrink-0" />
+        <span data-item className="size-4 shrink-0" />
       )}
-      <span className={`truncate ${dimmed}`}>{nameText(name, folder, showExtensions)}</span>
+      <span data-item className={`truncate ${dimmed}`}>
+        {nameText(name, folder, showExtensions)}
+      </span>
     </div>
   );
 }
