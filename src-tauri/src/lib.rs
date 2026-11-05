@@ -1,6 +1,7 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
 pub mod icons;
@@ -73,6 +74,11 @@ macro_rules! commands {
             listing::listing_open,
             listing::listing_sort,
             listing::listing_close,
+            delete::delete_check,
+            delete::delete_measure,
+            delete::delete_measure_cancel,
+            delete::delete_recycle,
+            delete::delete_permanently,
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,
@@ -140,6 +146,7 @@ pub fn run() -> tauri::Result<()> {
     let app = tauri::Builder::default()
         .manage(db.clone())
         .manage(listing::Listings::default())
+        .manage(delete::Deleting::default())
         .manage(jerry_win::icons::Icons::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
