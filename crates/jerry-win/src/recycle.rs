@@ -79,9 +79,17 @@ pub fn recycle(paths: &[PathBuf]) -> Result<Vec<Outcome>, JerryError> {
     };
     let all = pending(&outcomes);
     if all.len() > 1 {
-        perform(paths, &all, &mut outcomes)?;
+        let stopped = perform(paths, &all, &mut outcomes)?;
+        let left = pending(&outcomes).len();
+        if left > 0 {
+            tracing::info!(
+                left,
+                error = ?stopped.map(|error| error.code()),
+                "the Shell stopped; the rest go one by one"
+            );
+        }
     }
-    // One by one: what a stopped operation never got to, or the only item.
+    // One by one (about 20 ms each): what a stopped operation never got to, or the only item.
     for index in pending(&outcomes) {
         if let Some(error) = perform(paths, &[index], &mut outcomes)? {
             let error = JerryError::new(code_of(error.code())).at(&paths[index]);
@@ -134,7 +142,7 @@ fn perform(
             Ok(item)
         });
         match queued {
-            Ok(item) => items.add(&item, index),
+            Ok(item) => items.add(item, index),
             Err(error) => outcomes[index] = Some(Outcome::Failed(error.at(path))),
         }
     }
@@ -226,6 +234,8 @@ fn name_of(item: &IShellItem, kind: SIGDN) -> Option<Vec<u16>> {
 /// The items queued, so the sink can tell which path each callback is about.
 #[derive(Default)]
 struct Items {
+    /// Held for the whole operation, so no other object can take one's address (its identity).
+    held: Vec<IShellItem>,
     /// By COM identity: the Shell usually hands back the very item it was given.
     identities: HashMap<usize, usize>,
     /// By parsing name, for an item the Shell made anew.
@@ -233,17 +243,18 @@ struct Items {
 }
 
 impl Items {
-    fn add(&mut self, item: &IShellItem, index: usize) {
-        if let Some(identity) = identity(item) {
+    fn add(&mut self, item: IShellItem, index: usize) {
+        if let Some(identity) = identity(&item) {
             self.identities.insert(identity, index);
         }
-        if let Some(name) = name_of(item, SIGDN_DESKTOPABSOLUTEPARSING) {
+        if let Some(name) = name_of(&item, SIGDN_DESKTOPABSOLUTEPARSING) {
             self.names.insert(name, index);
         }
+        self.held.push(item);
     }
 
     fn is_empty(&self) -> bool {
-        self.identities.is_empty() && self.names.is_empty()
+        self.held.is_empty()
     }
 
     /// Which queued path `item` is; `None` for anything else (an item inside a folder).
@@ -550,6 +561,42 @@ mod tests {
             );
             empty_from_bin(in_bin);
         }
+    }
+
+    #[test]
+    fn many_files_in_one_operation_each_say_where_they_went() {
+        let dir = temp();
+        let paths: Vec<PathBuf> = (0..100)
+            .map(|n| {
+                let path = real(&dir).join(format!("ფაილი {n}.txt"));
+                std::fs::write(&path, n.to_string()).expect("write");
+                path
+            })
+            .collect();
+        let outcomes = recycle_on_pool(paths.clone());
+        let mut in_bin: Vec<&PathBuf> = outcomes
+            .iter()
+            .map(|outcome| match outcome {
+                Outcome::Recycled {
+                    in_bin: Some(in_bin),
+                } => in_bin,
+                outcome => panic!("not recycled: {outcome:?}"),
+            })
+            .collect();
+        for (place, original) in in_bin.iter().zip(&paths) {
+            assert_eq!(
+                recorded_original(place),
+                jerry_core::error::display_path(original),
+                "each outcome is its own item's"
+            );
+        }
+        in_bin.sort();
+        in_bin.dedup();
+        assert_eq!(in_bin.len(), paths.len());
+        for place in in_bin {
+            empty_from_bin(place);
+        }
+        assert!(paths.iter().all(|path| !path.exists()));
     }
 
     #[test]
