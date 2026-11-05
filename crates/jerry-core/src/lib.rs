@@ -3,6 +3,7 @@
 //! Plain Win32 file APIs only. No COM, no Tauri, no UI: everything here is testable on temp
 //! folders. Shell capabilities come in through traits that `jerry-win` implements.
 
+pub mod address;
 pub mod delete;
 pub mod error;
 pub mod job;

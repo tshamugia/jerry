@@ -35,6 +35,25 @@ export const commands = {
 	 */
 	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
 	/**
+	 *  The folder (and file) `text` names, typed or pasted in the address bar: a path, quoted or as
+	 *  a `file:` URL, with `%VARIABLES%`, a known folder's short name (`Downloads`), a drive alone
+	 *  (`D:`), a share, or relative to folder token `from` (the folder shown). Fails with the error of
+	 *  the likeliest path when nothing is there (`NotFound`, `AccessDenied`, `DeviceGone`), and
+	 *  `InvalidName` for empty text. Nothing opens: the address bar opens the folder it gets.
+	 */
+	resolvePath: (text: string, from: number | null) => typedError<ResolvedPath, JerryError>(__TAURI_INVOKE("resolve_path", { text, from })),
+	/**
+	 *  Completions for partly typed text, as the text writes them: the subfolders after its last
+	 *  separator that start with what follows it, or known folders' short names and the subfolders
+	 *  of `from` when there is no separator yet. Nothing when the folder can't be read.
+	 */
+	autocompletePath: (text: string, from: number | null, showHidden: boolean) => typedError<string[], JerryError>(__TAURI_INVOKE("autocomplete_path", { text, from, showHidden })),
+	/**
+	 *  The subfolders of folder token `folder`, in natural order, hidden ones with `show_hidden`:
+	 *  a segment's list. `NotFound` for an unknown token, or the folder's own error.
+	 */
+	folderSubfolders: (folder: number, showHidden: boolean) => typedError<Subfolders, JerryError>(__TAURI_INVOKE("folder_subfolders", { folder, showHidden })),
+	/**
 	 *  Opens entries `entries` of listing `listing` in their programs, as Explorer does (Enter, a
 	 *  double click): the default verb, with Windows' own messages ("How do you want to open this
 	 *  file?", an error box) over this window. Folders open in Jerry, so they are skipped here.
@@ -172,6 +191,13 @@ export type CaptionButtonRect = {
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
 
+/**  A folder as the address bar shows it: its name and its token. */
+export type Crumb = {
+	name: string,
+	/**  A token for `ListingTarget::Folder`. */
+	folder: number,
+};
+
 /**  Whether deleting some entries needs the extra confirmation. */
 export type DeleteCheck = {
 	/**  An entry is a system folder (Windows, Program Files, the Users root) or holds one. */
@@ -296,6 +322,8 @@ export type ListingOpened = {
 	folder: number,
 	/**  The folder it is in, as such a token; none at a root. */
 	parent: number | null,
+	/**  The address bar's segments, from the root (`C:`, `\\server\share`) to the folder. */
+	crumbs: Crumb[],
 };
 
 /**  The folder to list. */
@@ -319,6 +347,14 @@ export type ListingTarget =
 { kind: "folder"; folder: number } | 
 /**  The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set. */
 { kind: "home" };
+
+/**  What the address bar's text names. */
+export type ResolvedPath = {
+	/**  The folder to open, as a token for `ListingTarget::Folder`. */
+	folder: number,
+	/**  A file in it to select (the text named a file), by its display name. */
+	select: string | null,
+};
 
 /**  Every setting, defaults filled in. */
 export type Settings = {
@@ -414,6 +450,14 @@ export type Startup =
 { kind: "folder"; 
 /**  The folder, as the user entered it. */
 path: string };
+
+/**  A folder's subfolders, for a segment's list. */
+export type Subfolders = {
+	/**  In natural order, at most 500. */
+	folders: Crumb[],
+	/**  There are more than these. */
+	more: boolean,
+};
 
 /**  What deleting some items would remove. */
 export type Tally = {
