@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { ListingOpened, ListingTarget, Startup } from "../ipc";
+import type { Crumb, ListingOpened, ListingTarget, Startup } from "../ipc";
 import { Folder, type Restore } from "./folder";
 import type { PaneSide } from "./window";
 
@@ -14,6 +14,8 @@ export interface HistoryEntry {
   name: string;
   /** The token of the folder it is in, for Up; `null` at a root. */
   parent: number | null;
+  /** The address bar's segments, from the root to the folder. */
+  crumbs: readonly Crumb[];
   /** The entry that had the focus when the tab left the folder: it gets it back on return. */
   focus?: string;
 }
@@ -39,6 +41,7 @@ const entryOf = (opened: ListingOpened): HistoryEntry => ({
   path: opened.path,
   name: opened.name,
   parent: opened.parent,
+  crumbs: opened.crumbs,
 });
 
 /**

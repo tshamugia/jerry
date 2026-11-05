@@ -10,6 +10,13 @@ import { Frame } from "./Frame";
 
 let calls: { cmd: string; args: unknown }[];
 
+// The address bar folds its segments by size; jsdom has no layout, and no ResizeObserver.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 beforeEach(() => {
   calls = [];
   mockIPC((cmd, args) => {
@@ -161,8 +168,15 @@ test("before its first tab, a pane's toolbar is in place with its controls disab
 });
 
 test("the toolbar acts on the pane's tab: Back, Forward and Up as its history allows", async () => {
-  const work = { path: String.raw`C:\Work`, name: "Work", folder: 2, parent: 1 };
-  const root = { path: "C:\\", name: "C:\\", folder: 1, parent: null };
+  const rootCrumb = { name: "C:", folder: 1 };
+  const work = {
+    path: String.raw`C:\Work`,
+    name: "Work",
+    folder: 2,
+    parent: 1,
+    crumbs: [rootCrumb, { name: "Work", folder: 2 }],
+  };
+  const root = { path: "C:\\", name: "C:\\", folder: 1, parent: null, crumbs: [rootCrumb] };
   fakeListings({
     opened: (target) => (target.kind === "folder" && target.folder === 1 ? root : work),
   });
@@ -175,7 +189,7 @@ test("the toolbar acts on the pane's tab: Back, Forward and Up as its history al
   expect(button("Back (Alt+←)")).toBeDisabled();
   expect(button("Forward (Alt+→)")).toBeDisabled();
   expect(button("Refresh (Ctrl+R)")).toBeEnabled();
-  expect(within(left).getByRole("group", { name: "Address" })).toHaveTextContent(work.path);
+  expect(within(left).getByRole("group", { name: "Address" })).toHaveTextContent("C:Work");
   expect(left.querySelector('input[aria-label="Quick filter"]')).toHaveAttribute(
     "placeholder",
     "Filter this folder",
@@ -183,7 +197,7 @@ test("the toolbar acts on the pane's tab: Back, Forward and Up as its history al
 
   fireEvent.click(button("Up (Alt+↑)"));
   await waitFor(() => expect(button("Up (Alt+↑)")).toBeDisabled());
-  expect(within(left).getByRole("group", { name: "Address" })).toHaveTextContent("C:\\");
+  expect(within(left).getByRole("group", { name: "Address" })).not.toHaveTextContent("Work");
   fireEvent.click(button("Back (Alt+←)"));
   expect(tab.store.getState().index).toBe(0);
   expect(button("Forward (Alt+→)")).toBeEnabled();

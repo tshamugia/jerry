@@ -184,8 +184,8 @@ export class Folder {
     if (!sameSort(wanted, sort)) {
       void result.data.sort(wanted);
     }
-    const { id, path, name, folder, parent } = result.data;
-    return { id, path, name, folder, parent };
+    const { id, path, name, folder, parent, crumbs } = result.data;
+    return { id, path, name, folder, parent, crumbs };
   }
 
   /**
