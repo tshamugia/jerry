@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod jobs;
 pub mod listing;
 pub mod logging;
+pub mod shell;
 pub mod storage;
 pub mod title_bar;
 pub mod window;
@@ -74,6 +75,8 @@ macro_rules! commands {
             listing::listing_open,
             listing::listing_sort,
             listing::listing_close,
+            shell::open_entries,
+            shell::folder_copy_path,
             delete::delete_check,
             delete::delete_measure,
             delete::delete_measure_cancel,
@@ -145,7 +148,10 @@ pub fn run() -> tauri::Result<()> {
 
     let app = tauri::Builder::default()
         .manage(db.clone())
-        .manage(listing::Listings::default())
+        .manage(listing::Listings::new({
+            let db = db.clone();
+            move |folder| db.visit_folder(folder)
+        }))
         .manage(delete::Deleting::default())
         .manage(jerry_win::icons::Icons::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)

@@ -1,6 +1,6 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test } from "vitest";
 import { useCommandKeys } from "../../commands/dispatch";
 import type { DeleteOutcome, JerryError, Tally } from "../../ipc";
 import {
@@ -10,11 +10,12 @@ import {
   fakeListings,
   orderMessage,
 } from "../../ipc/listing.testing";
-import { paneFolder } from "../../stores/folder";
 import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
+import { resetTabs } from "../../stores/tabs";
+import { paneFolder, paneTabs } from "../../stores/tabs.testing";
 import { useWindow } from "../../stores/window";
-import { FileList } from "../file-list/FileList";
+import { PaneList } from "../file-list/PaneList";
 import { DeleteDialog } from "./DeleteDialog";
 import { useDeleteDialog } from "./flow";
 
@@ -24,9 +25,11 @@ beforeAll(() => {
     get: () => 600,
   });
 });
+beforeEach(() => {
+  paneTabs();
+});
 afterEach(() => {
-  paneFolder("left").close();
-  paneFolder("right").close();
+  resetTabs();
   useSettings.setState({ settings: undefined });
   useWindow.setState({ activePane: "left" });
   useDeleteDialog.setState({ dialog: undefined });
@@ -36,7 +39,7 @@ function Window() {
   useCommandKeys();
   return (
     <>
-      <FileList folder={paneFolder("left")} pane="left" />
+      <PaneList pane="left" />
       <DeleteDialog />
     </>
   );

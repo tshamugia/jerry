@@ -32,9 +32,63 @@ pub fn long_path(path: &Path) -> Result<PathBuf, JerryError> {
     }
 }
 
+/// `path` without the long-path prefix, exactly: `C:\…` for `\\?\C:\…`, `\\server\share\…` for
+/// `\\?\UNC\server\share\…`. For programs that don't take the prefix (the Shell's open, the
+/// clipboard's text); names that aren't valid Unicode stay as they are. Other paths, a device
+/// path (`\\.\`) among them, come back unchanged.
+pub fn plain_path(path: &Path) -> PathBuf {
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let strip = |prefix: &str| {
+        let prefix: Vec<u16> = prefix.encode_utf16().collect();
+        wide.starts_with(&prefix).then(|| &wide[prefix.len()..])
+    };
+    if let Some(share) = strip(r"\\?\UNC\") {
+        let mut plain: Vec<u16> = r"\\".encode_utf16().collect();
+        plain.extend_from_slice(share);
+        PathBuf::from(OsString::from_wide(&plain))
+    } else if let Some(local) = strip(r"\\?\") {
+        PathBuf::from(OsString::from_wide(local))
+    } else {
+        path.to_path_buf()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_paths_lose_only_the_prefix() {
+        let plain = |path: &str| plain_path(Path::new(path));
+        assert_eq!(
+            plain(r"\\?\C:\Work\ნახაზები"),
+            PathBuf::from(r"C:\Work\ნახაზები")
+        );
+        assert_eq!(plain(r"\\?\C:\"), PathBuf::from(r"C:\"));
+        assert_eq!(
+            plain(r"\\?\UNC\server\share\a"),
+            PathBuf::from(r"\\server\share\a")
+        );
+        assert_eq!(plain(r"C:\Work"), PathBuf::from(r"C:\Work"));
+        assert_eq!(
+            plain(r"\\.\PhysicalDrive0"),
+            PathBuf::from(r"\\.\PhysicalDrive0")
+        );
+    }
+
+    #[test]
+    fn plain_paths_keep_names_that_are_not_unicode() {
+        // An unpaired surrogate, as NTFS allows in a name.
+        let mut wide: Vec<u16> = r"\\?\C:\a".encode_utf16().collect();
+        wide.push(0xD800);
+        let plain = plain_path(&PathBuf::from(OsString::from_wide(&wide)));
+        let mut expected: Vec<u16> = r"C:\a".encode_utf16().collect();
+        expected.push(0xD800);
+        assert_eq!(
+            plain.as_os_str().encode_wide().collect::<Vec<_>>(),
+            expected
+        );
+    }
 
     #[test]
     fn drives_and_shares_get_the_prefix() {

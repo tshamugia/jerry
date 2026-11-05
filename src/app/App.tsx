@@ -3,11 +3,11 @@ import { useCommandKeys } from "../commands/dispatch";
 import { ShortcutTable } from "../commands/ShortcutTable";
 import { DeleteDialog } from "../features/delete/DeleteDialog";
 import { DevPanel } from "../features/dev/DevPanel";
-import { FileList } from "../features/file-list/FileList";
+import { PaneList } from "../features/file-list/PaneList";
+import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
 import { SelectByPattern } from "../features/selection/SelectByPattern";
 import { commands } from "../ipc";
 import { useAppearance } from "../stores/appearance";
-import { paneFolder } from "../stores/folder";
 import { useSettings } from "../stores/settings";
 import { Frame } from "./Frame";
 
@@ -21,8 +21,8 @@ export function App() {
   const appearance = useAppearance((state) => state.appearance);
   const ready = settings !== undefined && appearance !== undefined;
   const dev = useMemo(() => (import.meta.env.DEV ? <DevPanel /> : undefined), []);
-  const left = useMemo(() => <FileList folder={paneFolder("left")} pane="left" />, []);
-  const right = useMemo(() => <FileList folder={paneFolder("right")} pane="right" />, []);
+  const left = useMemo(() => <PaneList pane="left" />, []);
+  const right = useMemo(() => <PaneList pane="right" />, []);
 
   useEffect(() => {
     if (ready) {
@@ -39,6 +39,7 @@ export function App() {
       <Frame settings={settings} left={left} right={right} previewContent={dev} />
       <ShortcutTable />
       <SelectByPattern />
+      <OpenManyDialog />
       <DeleteDialog />
     </>
   );

@@ -1,8 +1,10 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { Settings } from "../ipc";
+import { fakeListings } from "../ipc/listing.testing";
 import { defaultSettings } from "../stores/settings.testing";
+import { addTab, resetTabs } from "../stores/tabs";
 import { useWindow } from "../stores/window";
 import { Frame } from "./Frame";
 
@@ -20,6 +22,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetTabs();
   useWindow.setState({ activePane: "left" });
 });
 
@@ -145,20 +148,51 @@ test("the status bar switches the density", () => {
   expect(calls).toEqual([{ cmd: "settings_set", args: { key: "density", value: "compact" } }]);
 });
 
-test("the toolbar skeleton is in place, its controls disabled until their features arrive", () => {
+test("before its first tab, a pane's toolbar is in place with its controls disabled", () => {
   render(<Frame settings={defaultSettings} />);
   const left = screen.getByRole("region", { name: "Left pane, active" });
   for (const name of ["Back (Alt+←)", "Forward (Alt+→)", "Up (Alt+↑)", "Refresh (Ctrl+R)"]) {
     expect(left.querySelector(`button[aria-label="${name}"]`)).toBeDisabled();
   }
-  expect(left.querySelector('input[aria-label="Quick filter"]')).toHaveAttribute(
-    "placeholder",
-    "Filter this folder",
-  );
   expect(left.querySelector('button[aria-label="Details view (Ctrl+Shift+1)"]')).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+});
+
+test("the toolbar acts on the pane's tab: Back, Forward and Up as its history allows", async () => {
+  const work = { path: String.raw`C:\Work`, name: "Work", folder: 2, parent: 1 };
+  const root = { path: "C:\\", name: "C:\\", folder: 1, parent: null };
+  fakeListings({
+    opened: (target) => (target.kind === "folder" && target.folder === 1 ? root : work),
+  });
+  const tab = addTab("left");
+  await tab.open({ kind: "path", path: work.path });
+  render(<Frame settings={defaultSettings} />);
+  const left = screen.getByRole("region", { name: "Left pane, active" });
+  const button = (name: string) => within(left).getByRole("button", { name });
+
+  expect(button("Back (Alt+←)")).toBeDisabled();
+  expect(button("Forward (Alt+→)")).toBeDisabled();
+  expect(button("Refresh (Ctrl+R)")).toBeEnabled();
+  expect(within(left).getByRole("group", { name: "Address" })).toHaveTextContent(work.path);
+  expect(left.querySelector('input[aria-label="Quick filter"]')).toHaveAttribute(
+    "placeholder",
+    "Filter this folder",
+  );
+
+  fireEvent.click(button("Up (Alt+↑)"));
+  await waitFor(() => expect(button("Up (Alt+↑)")).toBeDisabled());
+  expect(within(left).getByRole("group", { name: "Address" })).toHaveTextContent("C:\\");
+  fireEvent.click(button("Back (Alt+←)"));
+  expect(tab.store.getState().index).toBe(0);
+  expect(button("Forward (Alt+→)")).toBeEnabled();
+
+  // Right-clicking Forward lists the folders that way.
+  fireEvent.contextMenu(button("Forward (Alt+→)"));
+  const menu = await screen.findByRole("menu", { name: "Forward history" });
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "C:\\" }));
+  expect(tab.store.getState().index).toBe(1);
 });
 
 test("each pane shows its own content, and the preview zone its own", () => {

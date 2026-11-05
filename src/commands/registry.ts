@@ -1,11 +1,32 @@
 import { canDelete, startDelete } from "../features/delete/flow";
 import { focusFilter } from "../features/filter/focus";
 import {
+  canGoBack,
+  canGoForward,
+  canGoUp,
+  goBack,
+  goForward,
+  goUp,
+  hasTab,
+  openChosen,
+  refresh,
+} from "../features/navigation/commands";
+import {
   clearSelection,
   invertSelection,
   selectAllRows,
   toggleFocusedRow,
 } from "../features/selection/commands";
+import {
+  canCloseTab,
+  canReopenTab,
+  closeActiveTab,
+  newTab,
+  nextTab,
+  previousTab,
+  reopenTab,
+  showTab,
+} from "../features/tabs/commands";
 import { openOverlay } from "../stores/overlay";
 import { toggleDensity, toggleHidden, useSettings } from "../stores/settings";
 import { strings } from "../strings";
@@ -54,19 +75,96 @@ export const COMMANDS: readonly Command[] = [
     keys: ["Alt+←", "Backspace"],
     context: "global",
     repeat: true,
+    enabled: canGoBack,
+    run: goBack,
   },
-  { id: "forward", group: "navigation", keys: ["Alt+→"], context: "global", repeat: true },
-  { id: "up", group: "navigation", keys: ["Alt+↑"], context: "global", repeat: true },
+  {
+    id: "forward",
+    group: "navigation",
+    keys: ["Alt+→"],
+    context: "global",
+    repeat: true,
+    enabled: canGoForward,
+    run: goForward,
+  },
+  {
+    id: "up",
+    group: "navigation",
+    keys: ["Alt+↑"],
+    context: "global",
+    repeat: true,
+    enabled: canGoUp,
+    run: goUp,
+  },
   { id: "goToFolder", group: "navigation", keys: ["Ctrl+P"], context: "global" },
-  { id: "refresh", group: "navigation", keys: ["Ctrl+R"], context: "global" },
+  {
+    id: "refresh",
+    group: "navigation",
+    keys: ["Ctrl+R"],
+    context: "global",
+    enabled: hasTab,
+    run: refresh,
+  },
+  // Enter opens the selection, or the focused row: a folder in the tab, files in their programs.
+  {
+    id: "open",
+    group: "navigation",
+    keys: ["Enter"],
+    context: "list",
+    enabled: hasTab,
+    run: () => openChosen(),
+  },
+  {
+    id: "openInNewTab",
+    group: "navigation",
+    keys: ["Ctrl+Enter"],
+    context: "list",
+    enabled: hasTab,
+    run: () => openChosen(true),
+  },
 
   // Tabs.
-  { id: "newTab", group: "tabs", keys: ["Ctrl+T"], context: "global" },
-  { id: "closeTab", group: "tabs", keys: ["Ctrl+W"], context: "global" },
-  { id: "reopenTab", group: "tabs", keys: ["Ctrl+Shift+T"], context: "global" },
-  { id: "nextTab", group: "tabs", keys: ["Ctrl+Tab"], context: "global", repeat: true },
+  { id: "newTab", group: "tabs", keys: ["Ctrl+T"], context: "global", run: () => newTab() },
+  {
+    id: "closeTab",
+    group: "tabs",
+    keys: ["Ctrl+W"],
+    context: "global",
+    enabled: canCloseTab,
+    run: closeActiveTab,
+  },
+  {
+    id: "reopenTab",
+    group: "tabs",
+    keys: ["Ctrl+Shift+T"],
+    context: "global",
+    enabled: canReopenTab,
+    run: reopenTab,
+  },
+  {
+    id: "nextTab",
+    group: "tabs",
+    keys: ["Ctrl+Tab"],
+    context: "global",
+    repeat: true,
+    run: nextTab,
+  },
+  {
+    id: "previousTab",
+    group: "tabs",
+    keys: ["Ctrl+Shift+Tab"],
+    context: "global",
+    repeat: true,
+    run: previousTab,
+  },
   ...tabs.map(
-    (n): Command => ({ id: `tab${n}`, group: "tabs", keys: [`Ctrl+${n}`], context: "global" }),
+    (n): Command => ({
+      id: `tab${n}`,
+      group: "tabs",
+      keys: [`Ctrl+${n}`],
+      context: "global",
+      run: showTab(n),
+    }),
   ),
 
   // Windows and panes. Copy and move act on the selection, so they belong to the list.

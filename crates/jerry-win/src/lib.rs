@@ -4,13 +4,16 @@
 //!
 //! This is the only crate that touches Shell, COM or OLE. OLE, clipboard, drag & drop and the
 //! native context menu run on the main STA thread; other Shell calls run on the Shell pool with
-//! timeouts.
+//! timeouts, except opening files in their programs, which can take seconds and gets a thread of
+//! its own ([`open`]).
 
 pub mod appearance;
+pub mod clipboard;
 pub mod devices;
 pub mod folders;
 pub mod icons;
 pub mod main_thread;
+pub mod open;
 pub mod recycle;
 pub mod shell_pool;
 pub mod title_bar;

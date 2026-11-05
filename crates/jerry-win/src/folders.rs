@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use jerry_core::JerryError;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{
-    FOLDERID_LocalAppData, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86,
+    FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86,
     FOLDERID_RoamingAppData, FOLDERID_UserProfiles, FOLDERID_Windows, KF_FLAG_DEFAULT,
     SHGetKnownFolderPath,
 };
@@ -38,6 +38,12 @@ pub fn roaming_app_data() -> Result<PathBuf, JerryError> {
     known_folder(&FOLDERID_RoamingAppData)
 }
 
+/// The user's own folder (`C:\Users\name`): where a tab opens when there is nothing else to
+/// open.
+pub fn profile() -> Result<PathBuf, JerryError> {
+    known_folder(&FOLDERID_Profile)
+}
+
 pub(crate) fn known_folder(id: &GUID) -> Result<PathBuf, JerryError> {
     // SAFETY: `id` is a valid known folder id; no access token means the current user.
     let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }?;
@@ -60,6 +66,12 @@ mod tests {
             assert!(path.is_dir(), "{}", path.display());
         }
         assert_ne!(local_app_data(), roaming_app_data());
+        let profile = profile().expect("the Shell knows the profile");
+        assert!(profile.is_dir(), "{}", profile.display());
+        assert!(
+            local_app_data().expect("local").starts_with(&profile),
+            "AppData is in the profile"
+        );
     }
 
     #[test]

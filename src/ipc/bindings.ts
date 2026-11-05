@@ -35,6 +35,19 @@ export const commands = {
 	 */
 	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
 	/**
+	 *  Opens entries `entries` of listing `listing` in their programs, as Explorer does (Enter, a
+	 *  double click): the default verb, with Windows' own messages ("How do you want to open this
+	 *  file?", an error box) over this window. Folders open in Jerry, so they are skipped here.
+	 *  Fails with the first file's error, or `NotFound` for an entry or listing that is gone; a
+	 *  prompt the user cancelled isn't an error.
+	 */
+	openEntries: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("open_entries", { listing, entries })),
+	/**
+	 *  Puts the path of folder token `folder` (`ListingOpened::folder`) on the clipboard as text,
+	 *  exactly, without the `\\?\` prefix: a tab's "Copy path". `NotFound` for an unknown token.
+	 */
+	folderCopyPath: (folder: number) => typedError<null, JerryError>(__TAURI_INVOKE("folder_copy_path", { folder })),
+	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.
 	 */
@@ -269,10 +282,20 @@ export type Keybinding = {
 	shortcut: string | null,
 };
 
-/**  An opened listing: its id, and its folder as display text. */
+/**  An opened listing: its id, and its folder. */
 export type ListingOpened = {
 	id: number,
+	/**  The folder as display text. */
 	path: string,
+	/**  The folder's name for a tab: its last part, or for a root the root itself (`C:\`). */
+	name: string,
+	/**
+	 *  The folder, as a token for `ListingTarget::Folder`: it opens again by its exact path.
+	 *  The same folder always has the same token.
+	 */
+	folder: number,
+	/**  The folder it is in, as such a token; none at a root. */
+	parent: number | null,
 };
 
 /**  The folder to list. */
@@ -288,7 +311,14 @@ export type ListingTarget =
  *  The folder of the open listing `listing` again, by its exact path: to retry after an
  *  error message, or to refresh.
  */
-{ kind: "listing"; listing: number };
+{ kind: "listing"; listing: number } | 
+/**
+ *  A folder a listing named before (`ListingOpened::folder` or `parent`), by its exact path:
+ *  Back, Forward, Up, a new or reopened tab. The folder needn't be open any more.
+ */
+{ kind: "folder"; folder: number } | 
+/**  The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set. */
+{ kind: "home" };
 
 /**  Every setting, defaults filled in. */
 export type Settings = {

@@ -107,7 +107,7 @@ pub fn install(window: &WebviewWindow) {
 }
 
 /// The raw window handle, for `jerry-win`.
-fn hwnd(window: &WebviewWindow) -> Result<isize, JerryError> {
+pub(crate) fn hwnd(window: &WebviewWindow) -> Result<isize, JerryError> {
     window.hwnd().map(|hwnd| hwnd.0 as isize).map_err(|error| {
         tracing::error!(%error, "no window handle");
         JerryError::internal()

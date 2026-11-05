@@ -105,6 +105,38 @@ describe("the shortcut table", () => {
   it("shows the built commands, by group", () => {
     expect(shortcutTable(keymap)).toEqual([
       {
+        group: "navigation",
+        title: "Navigation",
+        rows: [
+          { id: "back", title: "Back", keys: ["Alt+←", "Backspace"] },
+          { id: "forward", title: "Forward", keys: ["Alt+→"] },
+          { id: "up", title: "Up", keys: ["Alt+↑"] },
+          { id: "refresh", title: "Refresh", keys: ["Ctrl+R"] },
+          { id: "open", title: "Open", keys: ["Enter"] },
+          { id: "openInNewTab", title: "Open in new tab", keys: ["Ctrl+Enter"] },
+        ],
+      },
+      {
+        group: "tabs",
+        title: "Tabs",
+        rows: [
+          { id: "newTab", title: "New tab", keys: ["Ctrl+T"] },
+          { id: "closeTab", title: "Close tab", keys: ["Ctrl+W"] },
+          { id: "reopenTab", title: "Reopen closed tab", keys: ["Ctrl+Shift+T"] },
+          { id: "nextTab", title: "Next tab", keys: ["Ctrl+Tab"] },
+          { id: "previousTab", title: "Previous tab", keys: ["Ctrl+Shift+Tab"] },
+          { id: "tab1", title: "Tab 1", keys: ["Ctrl+1"] },
+          { id: "tab2", title: "Tab 2", keys: ["Ctrl+2"] },
+          { id: "tab3", title: "Tab 3", keys: ["Ctrl+3"] },
+          { id: "tab4", title: "Tab 4", keys: ["Ctrl+4"] },
+          { id: "tab5", title: "Tab 5", keys: ["Ctrl+5"] },
+          { id: "tab6", title: "Tab 6", keys: ["Ctrl+6"] },
+          { id: "tab7", title: "Tab 7", keys: ["Ctrl+7"] },
+          { id: "tab8", title: "Tab 8", keys: ["Ctrl+8"] },
+          { id: "tab9", title: "Tab 9", keys: ["Ctrl+9"] },
+        ],
+      },
+      {
         group: "view",
         title: "View",
         rows: [
@@ -155,13 +187,15 @@ describe("the shortcut table", () => {
     const commands = [...COMMANDS.filter((command) => command.id !== "newFolder"), newFolder];
     const table = shortcutTable(buildKeymap(commands), commands);
     expect(table.map((group) => group.group)).toEqual([
+      "navigation",
+      "tabs",
       "view",
       "selection",
       "files",
       "search",
       "other",
     ]);
-    expect(table[2]?.rows.map((row) => row.id)).toEqual([
+    expect(table[4]?.rows.map((row) => row.id)).toEqual([
       "recycle",
       "deletePermanently",
       "newFolder",
@@ -174,6 +208,38 @@ describe("the shortcut table", () => {
       { command: "shortcuts", shortcut: null },
     ]);
     expect(shortcutTable(changed)).toEqual([
+      {
+        group: "navigation",
+        title: "Navigation",
+        rows: [
+          { id: "back", title: "Back", keys: ["Alt+←", "Backspace"] },
+          { id: "forward", title: "Forward", keys: ["Alt+→"] },
+          { id: "up", title: "Up", keys: ["Alt+↑"] },
+          { id: "refresh", title: "Refresh", keys: ["Ctrl+R"] },
+          { id: "open", title: "Open", keys: ["Enter"] },
+          { id: "openInNewTab", title: "Open in new tab", keys: ["Ctrl+Enter"] },
+        ],
+      },
+      {
+        group: "tabs",
+        title: "Tabs",
+        rows: [
+          { id: "newTab", title: "New tab", keys: ["Ctrl+T"] },
+          { id: "closeTab", title: "Close tab", keys: ["Ctrl+W"] },
+          { id: "reopenTab", title: "Reopen closed tab", keys: ["Ctrl+Shift+T"] },
+          { id: "nextTab", title: "Next tab", keys: ["Ctrl+Tab"] },
+          { id: "previousTab", title: "Previous tab", keys: ["Ctrl+Shift+Tab"] },
+          { id: "tab1", title: "Tab 1", keys: ["Ctrl+1"] },
+          { id: "tab2", title: "Tab 2", keys: ["Ctrl+2"] },
+          { id: "tab3", title: "Tab 3", keys: ["Ctrl+3"] },
+          { id: "tab4", title: "Tab 4", keys: ["Ctrl+4"] },
+          { id: "tab5", title: "Tab 5", keys: ["Ctrl+5"] },
+          { id: "tab6", title: "Tab 6", keys: ["Ctrl+6"] },
+          { id: "tab7", title: "Tab 7", keys: ["Ctrl+7"] },
+          { id: "tab8", title: "Tab 8", keys: ["Ctrl+8"] },
+          { id: "tab9", title: "Tab 9", keys: ["Ctrl+9"] },
+        ],
+      },
       {
         group: "view",
         title: "View",

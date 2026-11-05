@@ -29,6 +29,7 @@ export type {
   FrameState,
   JerryError,
   Keybinding,
+  ListingOpened,
   ListingTarget,
   Settings,
   Sort,

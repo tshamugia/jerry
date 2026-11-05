@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   batchMessage,
   diffMessage,
@@ -8,13 +8,16 @@ import {
   fakeListings,
   orderMessage,
 } from "../../ipc/listing.testing";
-import { paneFolder } from "../../stores/folder";
+import { resetTabs } from "../../stores/tabs";
+import { paneFolder, paneTabs } from "../../stores/tabs.testing";
 import { useWindow } from "../../stores/window";
 import { DevListing } from "./DevListing";
 
+beforeEach(() => {
+  paneTabs();
+});
 afterEach(() => {
-  paneFolder("left").close();
-  paneFolder("right").close();
+  resetTabs();
   useWindow.setState({ activePane: "left" });
 });
 

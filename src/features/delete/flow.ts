@@ -71,12 +71,16 @@ export function deleteTargets(folder: Folder): number[] {
 
 /** Whether Del or Shift+Del has anything to act on in the active pane. */
 export function canDelete(): boolean {
-  return deleteTargets(activeFolder()).length > 0;
+  const folder = activeFolder();
+  return folder !== undefined && deleteTargets(folder).length > 0;
 }
 
 /** Del (`permanent` false) or Shift+Del on the active pane's list. */
 export async function startDelete(permanent: boolean): Promise<void> {
   const folder = activeFolder();
+  if (!folder) {
+    return;
+  }
   const { listing } = folder.store.getState();
   const ids = deleteTargets(folder);
   if (listing === undefined || ids.length === 0) {
