@@ -7,13 +7,30 @@ use std::path::PathBuf;
 use jerry_core::JerryError;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{
-    FOLDERID_LocalAppData, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    FOLDERID_LocalAppData, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86,
+    FOLDERID_RoamingAppData, FOLDERID_UserProfiles, FOLDERID_Windows, KF_FLAG_DEFAULT,
+    SHGetKnownFolderPath,
 };
 use windows::core::GUID;
 
 /// `%LOCALAPPDATA%`: the user's local application data (Jerry's logs live in `Jerry\logs`).
 pub fn local_app_data() -> Result<PathBuf, JerryError> {
     known_folder(&FOLDERID_LocalAppData)
+}
+
+/// The folders that deleting or moving needs an extra confirmation for (data safety rule 6):
+/// Windows, Program Files and Program Files (x86), and the Users root. One the Shell doesn't
+/// know is left out. Check paths against them with `jerry_core::delete::takes_system_folder`.
+pub fn system_folders() -> Vec<PathBuf> {
+    [
+        &FOLDERID_Windows,
+        &FOLDERID_ProgramFiles,
+        &FOLDERID_ProgramFilesX86,
+        &FOLDERID_UserProfiles,
+    ]
+    .into_iter()
+    .filter_map(|id| known_folder(id).ok())
+    .collect()
 }
 
 /// `%APPDATA%`: the user's roaming application data (Jerry's database is `Jerry\jerry.db`).
@@ -43,5 +60,29 @@ mod tests {
             assert!(path.is_dir(), "{}", path.display());
         }
         assert_ne!(local_app_data(), roaming_app_data());
+    }
+
+    #[test]
+    fn system_folders_are_windows_program_files_and_users() {
+        let folders = system_folders();
+        assert_eq!(folders.len(), 4, "{folders:?}");
+        let windows = std::env::var_os("SystemRoot").expect("SystemRoot");
+        assert!(
+            folders
+                .iter()
+                .any(|folder| folder.as_os_str().eq_ignore_ascii_case(&windows)),
+            "{folders:?}"
+        );
+        let profile = std::env::var_os("USERPROFILE").expect("USERPROFILE");
+        let users = PathBuf::from(profile)
+            .parent()
+            .expect("the Users root")
+            .to_path_buf();
+        assert!(
+            folders
+                .iter()
+                .any(|folder| folder.as_os_str().eq_ignore_ascii_case(users.as_os_str())),
+            "{folders:?}"
+        );
     }
 }
