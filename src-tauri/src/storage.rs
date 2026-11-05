@@ -2,9 +2,9 @@
 //! up, then shared by the commands. The settings and keybindings commands and `settings:changed`
 //! live here; the storage itself is `jerry_core::storage`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jerry_core::JerryError;
 use jerry_core::job::run_job;
@@ -83,6 +83,17 @@ impl Db {
             return None;
         }
         self.with(|storage| Ok(storage.settings().clone())).ok()
+    }
+
+    /// Notes in `recent_folders` that the user went to `folder`. Blocks: listings call it from their
+    /// job, once the folder is read.
+    pub fn visit_folder(&self, folder: &Path) {
+        let at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis() as i64);
+        if let Err(error) = self.with(|storage| storage.visit_folder(folder, at)) {
+            tracing::warn!(code = ?error.code, "couldn't note a recent folder");
+        }
     }
 }
 

@@ -3,7 +3,8 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CaptionButtonRect, FrameState } from "../ipc";
-import { setTabs, type TabView, useTabs } from "../stores/tabs";
+import { fakeListings } from "../ipc/listing.testing";
+import { addTab, resetTabs, type Tab, useTabs } from "../stores/tabs";
 import { useWindow } from "../stores/window";
 import { TOOLTIP_DELAY_MS } from "./CaptionButtons";
 import { TitleBar } from "./TitleBar";
@@ -24,7 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  useTabs.setState({ left: { tabs: [], active: null }, right: { tabs: [], active: null } });
+  resetTabs();
   useWindow.setState({ activePane: "left" });
 });
 
@@ -35,8 +36,10 @@ function send(state: Partial<FrameState>) {
   );
 }
 
-function tab(id: number, name: string, pinned = false): TabView {
-  return { id, name, pinned };
+/** A tab in `pane` on folder `name` (token `folder`), not opened. */
+function tab(pane: "left" | "right", name: string, { pinned = false, folder = 1 } = {}): Tab {
+  const path = `D:\\Projects\\${name}`;
+  return addTab(pane, { pinned, from: { history: [{ folder, path, name, parent: null }] } });
 }
 
 const button = (name: string) => screen.getByRole("button", { name });
@@ -57,9 +60,8 @@ test("the app mark over the sidebar, a tab strip per pane and the caption button
   for (const name of ["Minimize", "Maximize", "Close"]) {
     expect(button(name)).toHaveClass("w-caption-btn", "h-titlebar");
   }
-  // New tabs open with #31.
   for (const add of screen.getAllByRole("button", { name: "New tab (Ctrl+T)" })) {
-    expect(add).toBeDisabled();
+    expect(add).toBeEnabled();
   }
 });
 
@@ -134,7 +136,9 @@ test("a click on a caption button (a screen reader's) presses it through the cor
 });
 
 test("a strip shows pinned tabs first, then the others; long Georgian names truncate", () => {
-  setTabs("left", [tab(1, "Drawings"), tab(2, "PROJECTS", true), tab(3, "ფაილები და ნახაზები")], 1);
+  const drawings = tab("left", "Drawings");
+  tab("left", "PROJECTS", { pinned: true });
+  tab("left", "ფაილები და ნახაზები");
   render(<TitleBar sidebar preview dual />);
 
   const strip = screen.getByRole("tablist", { name: "Left pane tabs" });
@@ -145,8 +149,11 @@ test("a strip shows pinned tabs first, then the others; long Georgian names trun
   // A separator ends the pinned group.
   expect(pinned?.nextElementSibling).toHaveAttribute("role", "presentation");
 
+  expect(useTabs.getState().left.active).toBe(drawings.id);
   expect(shown).toHaveAttribute("aria-selected", "true");
   expect(shown).toHaveClass("w-tab-active", "bg-bar");
+  // The full path is the tooltip.
+  expect(shown).toHaveAttribute("title", String.raw`D:\Projects\Drawings`);
   // The active pane's shown tab gets the primary text color.
   expect(within(shown as HTMLElement).getByText("Drawings")).toHaveClass("text-fg");
 
@@ -159,7 +166,8 @@ test("a strip shows pinned tabs first, then the others; long Georgian names trun
 });
 
 test("pressing a tab shows it and activates its pane; its close button closes it", () => {
-  setTabs("right", [tab(4, "04_Issued"), tab(5, "tengo")], 4);
+  const issued = tab("right", "04_Issued");
+  const tengo = tab("right", "tengo");
   render(<TitleBar sidebar preview dual />);
   const strip = screen.getByRole("tablist", { name: "Right pane tabs" });
   const [first, second] = within(strip).getAllByRole("tab") as HTMLElement[];
@@ -167,16 +175,70 @@ test("pressing a tab shows it and activates its pane; its close button closes it
   expect(within(first as HTMLElement).getByText("04_Issued")).toHaveClass("text-fg-2");
 
   fireEvent.pointerDown(second as HTMLElement, { button: 0 });
-  expect(useTabs.getState().right.active).toBe(5);
+  expect(useTabs.getState().right.active).toBe(tengo.id);
   expect(useWindow.getState().activePane).toBe("right");
   expect(second).toHaveAttribute("aria-selected", "true");
 
   fireEvent.keyDown(first as HTMLElement, { key: "Enter" });
-  expect(useTabs.getState().right.active).toBe(4);
+  expect(useTabs.getState().right.active).toBe(issued.id);
 
   // The close button doesn't show the tab it closes.
   const close = within(second as HTMLElement).getByRole("button", { name: "Close tab" });
   fireEvent.pointerDown(close, { button: 0 });
   fireEvent.click(close);
-  expect(useTabs.getState().right).toEqual({ tabs: [tab(4, "04_Issued")], active: 4 });
+  expect(useTabs.getState().right.tabs).toEqual([{ id: issued.id, pinned: false }]);
+  expect(useTabs.getState().right.active).toBe(issued.id);
+  // A pane keeps its last tab: it has no close button.
+  expect(within(strip).queryByRole("button", { name: "Close tab" })).toBeNull();
+});
+
+test("a middle click closes a tab; the + button opens the folder shown in a new tab", () => {
+  const issued = tab("left", "04_Issued", { folder: 7 });
+  const other = tab("left", "tengo");
+  render(<TitleBar sidebar preview dual />);
+  const strip = screen.getByRole("tablist", { name: "Left pane tabs" });
+
+  fireEvent(
+    within(strip).getByText("tengo"),
+    new MouseEvent("auxclick", { bubbles: true, button: 1 }),
+  );
+  expect(useTabs.getState().left.tabs.map((each) => each.id)).toEqual([issued.id]);
+  expect(other.folder.store.getState().status).toBe("none");
+
+  const core = fakeListings();
+  fireEvent.click(within(strip).getByRole("button", { name: "New tab (Ctrl+T)" }));
+  const { tabs, active } = useTabs.getState().left;
+  expect(tabs).toHaveLength(2);
+  expect(active).toBe(tabs[1]?.id);
+  expect(core.calls.find((call) => call.cmd === "listing_open")?.args.target).toEqual({
+    kind: "folder",
+    folder: 7,
+  });
+});
+
+test("a tab's context menu pins it, closes the others and copies its path", async () => {
+  const projects = tab("left", "PROJECTS", { folder: 9 });
+  tab("left", "Drawings");
+  tab("left", "Downloads");
+  render(<TitleBar sidebar preview dual />);
+  const menuOn = (name: string) => {
+    fireEvent.contextMenu(screen.getByText(name).closest('[role="tab"]') as HTMLElement);
+    return screen.findByRole("menu", { name: "Tab" });
+  };
+
+  fireEvent.click(within(await menuOn("PROJECTS")).getByRole("menuitem", { name: "Pin tab" }));
+  expect(useTabs.getState().left.tabs[0]).toEqual({ id: projects.id, pinned: true });
+
+  fireEvent.click(
+    within(await menuOn("Drawings")).getByRole("menuitem", { name: "Close other tabs" }),
+  );
+  // The pinned tab stays.
+  expect(useTabs.getState().left.tabs).toHaveLength(2);
+
+  const menu = await menuOn("Drawings");
+  expect(within(menu).getByRole("menuitem", { name: "Close tabs to the right" })).toHaveAttribute(
+    "data-disabled",
+  );
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy path" }));
+  expect(calls.at(-1)).toEqual({ cmd: "folder_copy_path", args: { folder: 1 } });
 });

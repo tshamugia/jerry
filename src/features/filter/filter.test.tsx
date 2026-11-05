@@ -11,9 +11,10 @@ import {
   type TestEntry,
 } from "../../ipc/listing.testing";
 import { matchingRows, visibleRows } from "../../stores/entries";
-import { Folder } from "../../stores/folder";
+import type { Folder } from "../../stores/folder";
 import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
+import { Tab } from "../../stores/tabs";
 import { useWindow } from "../../stores/window";
 import { FileList } from "../file-list/FileList";
 import { FilterField } from "./FilterField";
@@ -47,7 +48,7 @@ const WORK: TestEntry[] = [
 const work = { kind: "path", path: String.raw`C:\Work` } as const;
 
 /** A folder with `WORK` open and all in, in this order. */
-async function opened(): Promise<{ core: FakeListings; folder: Folder }> {
+async function opened(): Promise<{ core: FakeListings; folder: Folder; tab: Tab }> {
   useSettings.setState({ settings: defaultSettings });
   const core = fakeListings({
     messages: () => [
@@ -56,10 +57,11 @@ async function opened(): Promise<{ core: FakeListings; folder: Folder }> {
       doneMessage(WORK.length, 1, 1),
     ],
   });
-  const folder = new Folder(7);
-  await folder.open(work);
+  const tab = new Tab(7);
+  const { folder } = tab;
+  await tab.open(work);
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
-  return { core, folder };
+  return { core, folder, tab };
 }
 
 const shownNames = (folder: Folder, showHidden = false) => {
@@ -151,25 +153,25 @@ describe("the folder's filter", () => {
   test("another folder starts without it", async () => {
     const { folder } = await opened();
     folder.setFilter("Plot");
-    folder.openEntry(1);
+    void folder.open({ kind: "entry", listing: 1, entry: 1 });
     expect(folder.store.getState().filter).toBe("");
   });
 });
 
 /** The filter field over the list, as a pane's toolbar has it, with the keyboard commands on. */
-function Pane({ folder }: { folder: Folder }) {
+function Pane({ tab }: { tab: Tab }) {
   useCommandKeys();
   return (
     <section>
-      <FilterField folder={folder} pane="left" />
-      <FileList folder={folder} pane="left" />
+      <FilterField folder={tab.folder} pane="left" />
+      <FileList tab={tab} pane="left" />
     </section>
   );
 }
 
 async function shown() {
-  const { folder } = await opened();
-  render(<Pane folder={folder} />);
+  const { folder, tab } = await opened();
+  render(<Pane tab={tab} />);
   return folder;
 }
 

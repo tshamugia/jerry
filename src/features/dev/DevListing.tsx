@@ -1,8 +1,9 @@
 import { type FormEvent, useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { commands, type ListingTarget, type Sort } from "../../ipc";
-import { type Folder, paneFolder, useFolder } from "../../stores/folder";
-import { useWindow } from "../../stores/window";
+import { type Folder, useFolder } from "../../stores/folder";
+import { type Tab, useActiveTab } from "../../stores/tabs";
+import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
 import { selectAllRows, selectionOf } from "../selection/commands";
 import { DevButton } from "./DevButton";
@@ -113,17 +114,22 @@ declare global {
  * own. Changes made in Explorer show as a live line.
  */
 export function DevListing() {
+  const pane = useWindow((state) => state.activePane);
+  const tab = useActiveTab(pane);
+  return tab ? <TabListing key={tab.id} tab={tab} pane={pane} /> : null;
+}
+
+function TabListing({ tab, pane }: { tab: Tab; pane: PaneSide }) {
+  const { folder } = tab;
   const [path, setPath] = useState("");
   const [status, setStatus] = useState<string>();
   const [change, setChange] = useState<string>();
-  const pane = useWindow((state) => state.activePane);
-  const folder = paneFolder(pane);
   const count = useFolder(folder, (state) => state.entries.count - state.entries.removed.size);
 
   const listPath = async (target: string) => {
     setStatus(strings.dev.listing);
     setChange(undefined);
-    const outcome = await timeListing(folder, { kind: "path", path: target });
+    const outcome = await timeListing(tab, { kind: "path", path: target });
     setStatus(outcome.status === "ok" ? strings.dev.listed(outcome.timings) : outcome.text);
     return outcome;
   };
@@ -234,8 +240,9 @@ function rowPx(): number {
 const sameSort = (a: Sort, b: Sort) =>
   a.column === b.column && a.descending === b.descending && a.foldersFirst === b.foldersFirst;
 
-/** Opens `target` in `folder` and resolves once the whole folder is in and painted. */
-async function timeListing(folder: Folder, target: ListingTarget): Promise<ListingOutcome> {
+/** Opens `target` in `tab` and resolves once the whole folder is in and painted. */
+async function timeListing(tab: Tab, target: ListingTarget): Promise<ListingOutcome> {
+  const { folder } = tab;
   // The previous folder's rows go first, so their removal isn't timed.
   folder.close();
   await afterNextPaint();
@@ -283,7 +290,7 @@ async function timeListing(folder: Folder, target: ListingTarget): Promise<Listi
           break;
       }
     });
-    void folder.open(target).then(() => {
+    void tab.open(target).then(() => {
       // `listing_open` itself failed: no stream follows.
       const { status, error } = folder.store.getState();
       if (!settled && status === "failed" && error) {

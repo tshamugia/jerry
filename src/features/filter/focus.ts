@@ -12,3 +12,11 @@ export function focusFilter(): void {
 export function focusList(pane: PaneSide): void {
   document.querySelector<HTMLElement>(`[data-file-list="${pane}"]`)?.focus();
 }
+
+/**
+ * Gives the keyboard to `pane`'s file list after the next paint: the list of a tab just shown
+ * mounts first.
+ */
+export function focusListSoon(pane: PaneSide): void {
+  requestAnimationFrame(() => focusList(pane));
+}

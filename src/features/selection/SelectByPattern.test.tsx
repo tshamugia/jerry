@@ -1,15 +1,19 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import { useCommandKeys } from "../../commands/dispatch";
 import { batchMessage, doneMessage, fakeListings, orderMessage } from "../../ipc/listing.testing";
-import { paneFolder } from "../../stores/folder";
 import { useOverlay } from "../../stores/overlay";
 import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
+import { resetTabs } from "../../stores/tabs";
+import { paneFolder, paneTabs } from "../../stores/tabs.testing";
 import { SelectByPattern } from "./SelectByPattern";
 
+beforeEach(() => {
+  paneTabs();
+});
 afterEach(() => {
-  paneFolder("left").close();
+  resetTabs();
   useOverlay.setState({ overlay: undefined });
   useSettings.setState({ settings: undefined });
 });

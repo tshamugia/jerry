@@ -176,31 +176,81 @@ test("an error ends the listing; Retry opens the same folder by the failed listi
   await waitFor(() => expect(folder.store.getState().status).toBe("failed"));
   expect(folder.store.getState().error?.code).toBe("AccessDenied");
 
-  await folder.retry();
+  await folder.refresh();
 
   const opens = core.calls.filter((call) => call.cmd === "listing_open");
   expect(opens.map((call) => call.args.target)).toEqual([work, { kind: "listing", listing: 1 }]);
 });
 
-test("a subfolder opens by its entry id; files don't open here", async () => {
+test("a folder opened again focuses and selects an entry by name once all of it is in", async () => {
+  const core = fakeListings();
+  const folder = new Folder(7);
+  await folder.open(work, { focus: "ნახაზი.dwg" });
+  core.send(batchMessage(0, [{ name: "a.txt" }, { name: "ნახაზი.dwg" }, { name: "c.txt" }]));
+  core.send(orderMessage([0, 1, 2]));
+  // Only once the whole folder is in: the name may come in a later batch.
+  expect(folder.store.getState().focused).toBeUndefined();
+
+  core.send(doneMessage(3, 1, 1));
+  expect(folder.store.getState()).toMatchObject({
+    focused: 1,
+    anchor: 1,
+    selected: new Set([1]),
+    scrollTo: { kind: "reveal", id: 1 },
+  });
+  folder.scrolled();
+  expect(folder.store.getState().scrollTo).toBeUndefined();
+});
+
+test("a selection made while the folder opens wins over the one it would get back", async () => {
+  const core = fakeListings();
+  const folder = new Folder(7);
+  await folder.open(work, { focus: "c.txt" });
+  core.send(batchMessage(0, [{ name: "a.txt" }, { name: "c.txt" }]));
+  folder.setSelection({ selected: new Set([0]), anchor: 0, focused: 0 });
+  core.send(doneMessage(2, 1, 1));
+
+  expect(folder.store.getState()).toMatchObject({ focused: 0, selected: new Set([0]) });
+  expect(folder.store.getState().scrollTo).toBeUndefined();
+});
+
+test("Refresh reads the folder again, keeping the selection, focus, filter and scroll by name", async () => {
+  const entries = [{ name: "a.txt" }, { name: "ნახაზი.dwg" }, { name: "c.txt" }];
   const core = fakeListings({
-    messages: () => [
-      batchMessage(0, [{ name: "პროექტი", attributes: 0x10 }, { name: "plan.dwg" }]),
-      doneMessage(2, 1, 1),
-    ],
+    messages: () => [batchMessage(0, entries), orderMessage([0, 1, 2]), doneMessage(3, 1, 1)],
   });
   const folder = new Folder(7);
   await folder.open(work);
   await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
+  folder.setFilter(".");
+  folder.setSelection({ selected: new Set([0, 2]), anchor: 0, focused: 1 });
+  folder.scrollTop = 120;
 
-  folder.openEntry(1);
-  folder.openEntry(0);
+  await folder.refresh();
+  expect(core.calls.filter((call) => call.cmd === "listing_open").at(-1)?.args.target).toEqual({
+    kind: "listing",
+    listing: 1,
+  });
+  await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
+  expect(folder.store.getState()).toMatchObject({
+    selected: new Set([0, 2]),
+    focused: 1,
+    filter: ".",
+    scrollTo: { kind: "top", top: 120 },
+  });
+});
 
-  const opens = core.calls.filter((call) => call.cmd === "listing_open");
-  expect(opens.map((call) => call.args.target)).toEqual([
-    work,
-    { kind: "entry", listing: 1, entry: 0 },
-  ]);
+test("opening another folder starts it at the top, unfiltered", async () => {
+  fakeListings();
+  const folder = new Folder(7);
+  await folder.open(work);
+  folder.setFilter("plan");
+  folder.scrollTop = 300;
+
+  const opened = await folder.open({ kind: "path", path: String.raw`D:\Other` });
+  expect(opened).toMatchObject({ id: 2, path: String.raw`C:\Work`, folder: 102 });
+  expect(folder.store.getState().filter).toBe("");
+  expect(folder.scrollTop).toBe(0);
 });
 
 test("messages for a folder that was left are dropped", async () => {

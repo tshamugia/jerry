@@ -84,19 +84,36 @@ pub enum ListingTarget {
     /// The folder of the open listing `listing` again, by its exact path: to retry after an
     /// error message, or to refresh.
     Listing { listing: u32 },
+    /// A folder a listing named before (`ListingOpened::folder` or `parent`), by its exact path:
+    /// Back, Forward, Up, a new or reopened tab. The folder needn't be open any more.
+    Folder { folder: u32 },
+    /// The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set.
+    Home,
 }
 
-/// An opened listing: its id, and its folder as display text.
+/// An opened listing: its id, and its folder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
 pub struct ListingOpened {
     pub id: u32,
+    /// The folder as display text.
     pub path: String,
+    /// The folder's name for a tab: its last part, or for a root the root itself (`C:\`).
+    pub name: String,
+    /// The folder, as a token for `ListingTarget::Folder`: it opens again by its exact path.
+    /// The same folder always has the same token.
+    pub folder: u32,
+    /// The folder it is in, as such a token; none at a root.
+    pub parent: Option<u32>,
 }
 
 /// The open listings, by id. Clones share them. A tab has at most one: opening another folder
 /// for a tab closes the tab's previous listing.
 #[derive(Clone, Default)]
 pub struct Listings(Arc<Shared>);
+
+/// Called with every folder a listing read to the end after the user went there (not a refresh):
+/// `recent_folders` (#31).
+type Visits = Box<dyn Fn(&Path) + Send + Sync>;
 
 #[derive(Default)]
 struct Shared {
@@ -105,9 +122,40 @@ struct Shared {
     watchers: Watchers,
     /// The volumes listings are on, by root (`jerry_core::volume::root`).
     volumes: Mutex<HashMap<PathBuf, Volume>>,
+    /// Folders handed out as tokens (`ListingOpened::folder`).
+    folders: Mutex<FolderTokens>,
+    visits: Option<Visits>,
+}
+
+/// Folders by token and tokens by folder, for the life of the process. A token is a folder's
+/// index here: one per folder ever opened (and its parent), so a session holds a few hundred.
+#[derive(Default)]
+struct FolderTokens {
+    paths: Vec<PathBuf>,
+    tokens: HashMap<PathBuf, u32>,
+}
+
+impl FolderTokens {
+    fn token(&mut self, folder: &Path) -> u32 {
+        if let Some(&token) = self.tokens.get(folder) {
+            return token;
+        }
+        let token = self.paths.len() as u32;
+        self.paths.push(folder.to_path_buf());
+        self.tokens.insert(folder.to_path_buf(), token);
+        token
+    }
+
+    fn path(&self, token: u32) -> Option<&PathBuf> {
+        self.paths.get(token as usize)
+    }
 }
 
 impl Shared {
+    fn folders(&self) -> MutexGuard<'_, FolderTokens> {
+        self.folders.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn volumes(&self) -> MutexGuard<'_, HashMap<PathBuf, Volume>> {
         self.volumes.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -188,6 +236,9 @@ struct ListingState {
     /// The sort the listing started with: what a prestarted listing is matched by, without
     /// waiting for `live`, which a change being applied holds through its IO.
     started_sort: Sort,
+    /// The user went to the folder (not a refresh or a prestart): once it is read to the end, it
+    /// counts as a visit (`recent_folders`).
+    visit: bool,
     listing: RwLock<Listing>,
     live: Mutex<Live>,
     cancel: AtomicBool,
@@ -222,6 +273,7 @@ impl ListingState {
             listing: RwLock::new(Listing::new(folder.clone())),
             folder,
             started_sort: sort,
+            visit: false,
             live: Mutex::new(Live {
                 sort,
                 index: None,
@@ -373,12 +425,21 @@ impl ListingState {
 }
 
 impl Listings {
+    /// Listings that call `visits` with every folder the user went to, once it is read to the end:
+    /// the app notes them in `recent_folders`. [`Listings::default`] notes nothing.
+    pub fn new(visits: impl Fn(&Path) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(Shared {
+            visits: Some(Box::new(visits)),
+            ..Shared::default()
+        }))
+    }
+
     /// Starts listing `folder` for `tab`, sorted by `sort`, before the UI has a channel for it:
     /// at process start, before Tauri, for the session's folders (spike #11, session restore
     /// #42). Messages are kept until `listing_open` for the same tab, folder and sort attaches
     /// its channel.
     pub fn prestart(&self, tab: u32, folder: &Path, sort: Sort) -> Result<u32, JerryError> {
-        Ok(self.start(tab, long_path(folder)?, sort, None))
+        Ok(self.start(tab, long_path(folder)?, sort, None, false))
     }
 
     /// The folder `target` names, as a long path.
@@ -402,12 +463,45 @@ impl Listings {
                 .get(&listing)
                 .map(|open| open.state.folder.clone())
                 .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
+            ListingTarget::Folder { folder } => self
+                .folder_path(folder)
+                .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
+            // Blocking: `listing_open` resolves it on a background job.
+            ListingTarget::Home => long_path(&jerry_win::folders::profile()?),
+        }
+    }
+
+    /// The folder token `folder` stands for (`ListingOpened::folder`).
+    pub fn folder_path(&self, folder: u32) -> Option<PathBuf> {
+        self.0.folders().path(folder).cloned()
+    }
+
+    /// What `listing_open` answers for listing `id` of `folder`: display text and tokens.
+    fn opened(&self, id: u32, folder: &Path) -> ListingOpened {
+        let name = folder.file_name().map_or_else(
+            || display_path(folder),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let mut tokens = self.0.folders();
+        ListingOpened {
+            id,
+            path: display_path(folder),
+            name,
+            folder: tokens.token(folder),
+            parent: folder.parent().map(|parent| tokens.token(parent)),
         }
     }
 
     /// Opens `folder` for `tab`, sorted by `sort`, with its messages going to `channel`: a
     /// listing started for it with [`Listings::prestart`] if there is one, a new one otherwise.
-    fn open_folder(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Channel<Bytes>) -> u32 {
+    fn open_folder(
+        &self,
+        tab: u32,
+        folder: PathBuf,
+        sort: Sort,
+        channel: Channel<Bytes>,
+        visit: bool,
+    ) -> u32 {
         let prestarted = self.open().iter().find_map(|(&id, open)| {
             let waiting = open.tab == tab
                 && !open.state.outbox.is_attached()
@@ -420,15 +514,25 @@ impl Listings {
                 outbox.attach(channel);
                 id
             }
-            None => self.start(tab, folder, sort, Some(channel)),
+            None => self.start(tab, folder, sort, Some(channel), visit),
         }
     }
 
     /// Starts listing `folder` for `tab` on a background job and returns the listing's id.
-    fn start(&self, tab: u32, folder: PathBuf, sort: Sort, channel: Option<Channel<Bytes>>) -> u32 {
+    fn start(
+        &self,
+        tab: u32,
+        folder: PathBuf,
+        sort: Sort,
+        channel: Option<Channel<Bytes>>,
+        visit: bool,
+    ) -> u32 {
         self.close_tab(tab);
         let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let state = Arc::new(ListingState::new(folder, sort, channel));
+        let state = Arc::new(ListingState {
+            visit,
+            ..ListingState::new(folder, sort, channel)
+        });
         self.open().insert(
             id,
             Open {
@@ -627,7 +731,7 @@ impl Drop for JobDone<'_> {
 
 /// The listing job: joins its volume's listings, subscribes to the folder's watcher, reads the
 /// folder and sends each batch, then builds the sort index and sends the order and the done
-/// message, and last applies the changes that came while it read.
+/// message, applies the changes that came while it read, and last notes the visit.
 fn run(state: &Arc<ListingState>, listings: &Listings) -> Result<(), JerryError> {
     let started = Instant::now();
     listings.enter_volume(state)?;
@@ -668,6 +772,12 @@ fn run(state: &Arc<ListingState>, listings: &Listings) -> Result<(), JerryError>
             Err(error) if error.code == ErrorCode::Cancelled => {}
             Err(error) => state.end(&mut live, &error),
         }
+    }
+    drop(live);
+    if state.visit
+        && let Some(visits) = &listings.0.visits
+    {
+        visits(&state.folder);
     }
     Ok(())
 }
@@ -880,10 +990,18 @@ pub async fn listing_open(
     sort: Sort,
     on_message: Channel<Bytes>,
 ) -> Result<ListingOpened, JerryError> {
-    let folder = listings.resolve(target)?;
-    let path = display_path(&folder);
-    let id = listings.open_folder(tab, folder, sort, on_message);
-    Ok(ListingOpened { id, path })
+    // Only a folder the user went to is a visit: not a refresh or a retry, nor the folder a tab
+    // starts on.
+    let visit = !matches!(target, ListingTarget::Listing { .. } | ListingTarget::Home);
+    let folder = match target {
+        ListingTarget::Home => {
+            let listings = listings.inner().clone();
+            jobs::background("home folder", move || listings.resolve(ListingTarget::Home)).await?
+        }
+        target => listings.resolve(target)?,
+    };
+    let id = listings.open_folder(tab, folder.clone(), sort, on_message, visit);
+    Ok(listings.opened(id, &folder))
 }
 
 /// Sorts listing `id` by `sort` from now on. The new order (only entry ids) comes through the
@@ -1192,7 +1310,7 @@ mod tests {
         let (channel, receiver) = test_channel();
 
         let folder = listings.resolve(path_target(dir.path())).expect("resolves");
-        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        let id = listings.open_folder(1, folder, Sort::default(), channel, false);
         let messages = until_end(&receiver);
 
         let (batches, end) = messages.split_at(messages.len() - 2);
@@ -1240,7 +1358,7 @@ mod tests {
         let missing = listings
             .resolve(path_target(&dir.path().join("აღარ არის")))
             .expect("resolves");
-        let id = listings.open_folder(1, missing.clone(), Sort::default(), channel);
+        let id = listings.open_folder(1, missing.clone(), Sort::default(), channel, false);
         let messages = until_end(&receiver);
 
         assert_eq!(messages.len(), 1);
@@ -1251,6 +1369,88 @@ mod tests {
         // Retry: the failed listing's folder opens again by its exact path.
         let again = listings.resolve(ListingTarget::Listing { listing: id });
         assert_eq!(again.expect("the listing is still open"), missing);
+    }
+
+    #[test]
+    fn opened_folders_get_names_and_tokens_that_open_them_again() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let sub = dir.path().join("ნახაზები");
+        std::fs::create_dir(&sub).expect("mkdir");
+        let listings = Listings::default();
+        let folder = long_path(&sub).expect("long path");
+
+        let opened = listings.opened(7, &folder);
+        assert_eq!(opened.id, 7);
+        assert_eq!(opened.name, "ნახაზები");
+        assert_eq!(opened.path, display_path(&folder));
+        // The same folder, the same token; it resolves to the exact path even with nothing open.
+        assert_eq!(listings.opened(8, &folder).folder, opened.folder);
+        let again = listings.resolve(ListingTarget::Folder {
+            folder: opened.folder,
+        });
+        assert_eq!(again.expect("a known token"), folder);
+        let parent = opened.parent.expect("a temp folder has a parent");
+        let up = listings.resolve(ListingTarget::Folder { folder: parent });
+        assert_eq!(
+            up.expect("the parent's token"),
+            long_path(dir.path()).expect("path")
+        );
+
+        let unknown = listings.resolve(ListingTarget::Folder { folder: 9_999 });
+        assert_eq!(
+            unknown.expect_err("no such token").code,
+            ErrorCode::NotFound
+        );
+    }
+
+    #[test]
+    fn roots_are_named_by_themselves_and_have_no_parent() {
+        let listings = Listings::default();
+        let drive = listings.opened(1, Path::new(r"\\?\C:\"));
+        assert_eq!((drive.name.as_str(), drive.parent), (r"C:\", None));
+        let share = listings.opened(2, Path::new(r"\\?\UNC\server\share\"));
+        assert_eq!(share.name, r"\\server\share\");
+        assert_eq!(share.parent, None);
+        let folder = listings.opened(3, Path::new(r"\\?\UNC\server\share\Projects"));
+        assert_eq!(folder.name, "Projects");
+        assert_eq!(folder.parent, Some(share.folder));
+    }
+
+    #[test]
+    fn home_is_the_users_own_folder() {
+        let home = Listings::default()
+            .resolve(ListingTarget::Home)
+            .expect("the profile folder");
+        assert_eq!(
+            home,
+            long_path(&jerry_win::folders::profile().expect("profile")).expect("path")
+        );
+    }
+
+    #[test]
+    fn folders_read_to_the_end_count_as_visits() {
+        let dir = folder_with(&["a.txt"]);
+        let (visited, visits) = channel();
+        let listings = Listings::new(move |folder| {
+            let _ = visited.send(folder.to_path_buf());
+        });
+        let folder = long_path(dir.path()).expect("long path");
+
+        let (channel, receiver) = test_channel();
+        listings.open_folder(1, folder.clone(), Sort::default(), channel, true);
+        until_end(&receiver);
+        let noted = visits.recv_timeout(Duration::from_secs(10));
+        assert_eq!(noted.expect("a visit"), folder);
+
+        // A refresh isn't a visit, nor is a folder that can't be read.
+        let (channel, receiver) = test_channel();
+        listings.open_folder(1, folder, Sort::default(), channel, false);
+        until_end(&receiver);
+        let (channel, receiver) = test_channel();
+        let missing = long_path(&dir.path().join("აღარ არის")).expect("path");
+        listings.open_folder(2, missing, Sort::default(), channel, true);
+        until_end(&receiver);
+        assert!(visits.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
     #[test]
@@ -1280,9 +1480,9 @@ mod tests {
         let (second_channel, second) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
 
-        let old = listings.open_folder(1, folder.clone(), Sort::default(), first_channel);
+        let old = listings.open_folder(1, folder.clone(), Sort::default(), first_channel, false);
         until_end(&first);
-        let new = listings.open_folder(1, folder.clone(), Sort::default(), second_channel);
+        let new = listings.open_folder(1, folder.clone(), Sort::default(), second_channel, false);
         until_end(&second);
 
         assert_ne!(old, new);
@@ -1306,7 +1506,7 @@ mod tests {
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        let id = listings.open_folder(1, folder, Sort::default(), channel, false);
         until_end(&receiver);
 
         listings.sort(id, BY_SIZE).expect("sorts");
@@ -1368,7 +1568,7 @@ mod tests {
         }
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        let attached = listings.open_folder(3, folder.clone(), Sort::default(), channel);
+        let attached = listings.open_folder(3, folder.clone(), Sort::default(), channel, false);
         let messages = until_end(&receiver);
 
         assert_eq!(
@@ -1383,7 +1583,7 @@ mod tests {
         let again = listings
             .prestart(4, dir.path(), Sort::default())
             .expect("starts");
-        let other = listings.open_folder(4, folder, BY_SIZE, test_channel().0);
+        let other = listings.open_folder(4, folder, BY_SIZE, test_channel().0, false);
         assert_ne!(other, again);
     }
 
@@ -1404,7 +1604,7 @@ mod tests {
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        let id = listings.open_folder(1, folder, Sort::default(), channel, false);
         until_end(&receiver);
         let plan = state(&listings, id)
             .read()
@@ -1458,6 +1658,7 @@ mod tests {
             long_path(&watched).expect("long path"),
             Sort::default(),
             channel,
+            false,
         );
         until_end(&receiver);
 
@@ -1490,7 +1691,7 @@ mod tests {
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
         let folder = long_path(&watched).expect("long path");
-        listings.open_folder(1, folder, Sort::default(), channel);
+        listings.open_folder(1, folder, Sort::default(), channel, false);
         until_end(&receiver);
         let root = root_of(&watched);
         let moved = dir.path().join("USB (moved)");
@@ -1503,7 +1704,13 @@ mod tests {
         // No listing on it starts meanwhile.
         let (refused_channel, refused) = test_channel();
         let elsewhere = long_path(dir.path()).expect("long path");
-        listings.open_folder(2, elsewhere.clone(), Sort::default(), refused_channel);
+        listings.open_folder(
+            2,
+            elsewhere.clone(),
+            Sort::default(),
+            refused_channel,
+            false,
+        );
         let messages = until_end(&refused);
         assert_eq!(messages.len(), 1);
         assert_eq!(error_code(&messages[0]), "DeviceGone");
@@ -1516,7 +1723,7 @@ mod tests {
         assert_eq!(word(&next(&receiver), 0), ORDER);
         assert!(std::fs::rename(&parent, &moved).is_err(), "held again");
         let (channel, again) = test_channel();
-        listings.open_folder(2, elsewhere, Sort::default(), channel);
+        listings.open_folder(2, elsewhere, Sort::default(), channel, false);
         assert_eq!(word(until_end(&again).last().expect("done"), 0), DONE);
     }
 
@@ -1526,7 +1733,7 @@ mod tests {
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        listings.open_folder(1, folder, Sort::default(), channel);
+        listings.open_folder(1, folder, Sort::default(), channel, false);
         until_end(&receiver);
         let root = root_of(dir.path());
 
@@ -1572,7 +1779,7 @@ mod tests {
         let listings = Listings::default();
         let (channel, receiver) = test_channel();
         let folder = long_path(dir.path()).expect("long path");
-        let id = listings.open_folder(1, folder, Sort::default(), channel);
+        let id = listings.open_folder(1, folder, Sort::default(), channel, false);
         until_end(&receiver);
         assert_eq!(listings.0.volumes().len(), 1);
 

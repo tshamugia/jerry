@@ -5,6 +5,7 @@ import {
   commands,
   type JerryError,
   type ListingMessage,
+  type ListingOpened,
   type ListingTarget,
   type OpenListing,
   openListing,
@@ -13,7 +14,6 @@ import {
 } from "../ipc";
 import { type ColumnLayout, DEFAULT_COLUMNS } from "./columns";
 import { FolderEntries, matchingRows, visibleRows } from "./entries";
-import type { PaneSide } from "./window";
 
 /**
  * Where a folder view is: no folder yet, reading it (rows show as batches arrive), all in (and
@@ -46,6 +46,29 @@ export interface FolderState {
   focused: number | undefined;
   /** The quick filter's pattern (`wildcardMatcher`); "" when off. Another folder clears it. */
   filter: string;
+  /**
+   * Where the list should scroll, once: set when a folder opened again (Back, Up, Refresh) has its
+   * entries in; the list scrolls and calls `scrolled`.
+   */
+  scrollTo: ScrollTo | undefined;
+}
+
+/** A scroll the list should make: to a position, or until an entry is in view. */
+export type ScrollTo = { kind: "top"; top: number } | { kind: "reveal"; id: number };
+
+/**
+ * What a folder opened again gets back once its entries are in, by name: entries keep their names
+ * but get new ids in a new listing. Only if nothing was selected meanwhile.
+ */
+export interface Restore {
+  /** The entry to focus: the folder Up came from, the entry focused when Back left. */
+  focus?: string;
+  /** The entries to select (Refresh); without them, the focused entry is selected. */
+  selected?: readonly string[];
+  /** Where the list was scrolled (Refresh); without it, the focused entry is scrolled to. */
+  scrollTop?: number;
+  /** The quick filter to keep (Refresh); another folder starts without one. */
+  filter?: string;
 }
 
 /** What the list shows: its rows, and how many there would be without the filter. */
@@ -76,17 +99,24 @@ function emptyFolder() {
     anchor: undefined,
     focused: undefined,
     filter: "",
+    scrollTo: undefined,
   };
 }
 
 /**
- * One folder shown in a list: its live listing (`listing_open`), sort, columns and selection.
- * Messages from the core go into the store as they arrive: rows show batch by batch, then in the
- * core's order, and follow every change in the folder. A pane has one until tabs (#31) give
- * every tab its own.
+ * One tab's folder view: its live listing (`listing_open`), sort, columns, quick filter,
+ * selection and scroll position. Messages from the core go into the store as they arrive: rows
+ * show batch by batch, then in the core's order, and follow every change in the folder. Every
+ * tab has one (`Tab.folder`, `src/stores/tabs.ts`), which keeps its sort, columns and scroll as
+ * the tab goes from folder to folder.
  */
 export class Folder {
   readonly store: StoreApi<FolderState>;
+  /**
+   * How far the list was scrolled, in px. Not state: the list writes it as it scrolls and reads
+   * it back when the tab shows again.
+   */
+  scrollTop = 0;
   private current: OpenListing | undefined;
   /** Counts opens, so messages and answers for an earlier folder are dropped. */
   private generation = 0;
@@ -95,6 +125,8 @@ export class Folder {
   private shownCache:
     | { key: readonly unknown[]; showHidden: boolean; shown: ShownRows }
     | undefined;
+  /** What the folder opening now gets back once its entries are in. */
+  private restore: Restore | undefined;
 
   /** `tab`: the core keeps one listing per tab; opening another folder closes the previous. */
   constructor(readonly tab: number) {
@@ -107,14 +139,25 @@ export class Folder {
     }));
   }
 
-  /** Opens `target` here, in place of the folder shown. Resolves once the core has answered. */
-  async open(target: ListingTarget): Promise<void> {
+  /**
+   * Opens `target` here, in place of the folder shown, and once its entries are in gives it back
+   * what `restore` names. Resolves once the core has answered: with what it opened, or nothing if
+   * it failed (the list shows why) or another open came after this one.
+   */
+  async open(target: ListingTarget, restore?: Restore): Promise<ListingOpened | undefined> {
     const previous = this.current;
     this.current = undefined;
     const mine = ++this.generation;
     this.target = target;
+    this.restore = restore;
+    this.scrollTop = 0;
     const { sort, version } = this.store.getState();
-    this.store.setState({ ...emptyFolder(), status: "loading", version: version + 1 });
+    this.store.setState({
+      ...emptyFolder(),
+      filter: restore?.filter ?? "",
+      status: "loading",
+      version: version + 1,
+    });
 
     const result = await openListing(this.tab, target, sort, (message) =>
       this.receive(mine, message),
@@ -125,13 +168,14 @@ export class Folder {
         void commands.listingClose(previous.id);
       }
       if (mine === this.generation) {
+        this.restore = undefined;
         this.store.setState({ status: "failed", error: result.error });
       }
-      return;
+      return undefined;
     }
     if (mine !== this.generation) {
       void result.data.close();
-      return;
+      return undefined;
     }
     this.current = result.data;
     this.store.setState({ listing: result.data.id, path: result.data.path });
@@ -140,20 +184,35 @@ export class Folder {
     if (!sameSort(wanted, sort)) {
       void result.data.sort(wanted);
     }
+    const { id, path, name, folder, parent } = result.data;
+    return { id, path, name, folder, parent };
   }
 
-  /** Opens the folder again: after an error, the next step the list offers. */
-  retry(): Promise<void> {
-    const { listing } = this.store.getState();
-    const target = listing === undefined ? this.target : { kind: "listing" as const, listing };
-    return target ? this.open(target) : Promise.resolve();
+  /**
+   * Opens the folder again, keeping the selection, the focus, the filter and the scroll position
+   * by name: Ctrl+R, and Retry after an error.
+   */
+  refresh(): Promise<ListingOpened | undefined> {
+    const { listing, entries, selected, focused, filter } = this.store.getState();
+    if (listing === undefined) {
+      return this.target ? this.open(this.target) : Promise.resolve(undefined);
+    }
+    const name = (id: number) => entries.names[id] ?? "";
+    return this.open(
+      { kind: "listing", listing },
+      {
+        selected: [...selected].map(name),
+        focus: focused === undefined ? undefined : name(focused),
+        scrollTop: this.scrollTop,
+        filter,
+      },
+    );
   }
 
-  /** Opens entry `id` if it is a folder. Files open in their app with #31. */
-  openEntry(id: number): void {
-    const { entries, listing } = this.store.getState();
-    if (listing !== undefined && entries.isFolder(id)) {
-      void this.open({ kind: "entry", listing, entry: id });
+  /** The list made the scroll `scrollTo` asked for. */
+  scrolled(): void {
+    if (this.store.getState().scrollTo !== undefined) {
+      this.store.setState({ scrollTo: undefined });
     }
   }
 
@@ -193,6 +252,8 @@ export class Folder {
       selection.anchor !== state.anchor ||
       selection.focused !== state.focused
     ) {
+      // The user's own selection wins over one a reopened folder would get back.
+      this.restore = undefined;
       this.store.setState(selection);
     }
   }
@@ -322,8 +383,10 @@ export class Folder {
       }
       case "done":
         this.store.setState({ status: "ready" });
+        this.giveBack();
         break;
       case "error":
+        this.restore = undefined;
         this.store.setState({ status: "failed", error: message.error });
         break;
     }
@@ -356,13 +419,45 @@ export class Folder {
       });
     }
   }
-}
 
-/** Each pane's folder, until tabs (#31) give every tab its own. The core's tab ids 1 and 2. */
-const paneFolders: Record<PaneSide, Folder> = { left: new Folder(1), right: new Folder(2) };
-
-export function paneFolder(pane: PaneSide): Folder {
-  return paneFolders[pane];
+  /**
+   * The folder's entries are all in: gives back what `open` was asked to restore, by name. The
+   * focused entry is selected too unless `selected` says otherwise, and the list scrolls to where
+   * it was or to the focused entry. Names the folder no longer has are left out.
+   */
+  private giveBack(): void {
+    const restore = this.restore;
+    this.restore = undefined;
+    if (!restore) {
+      return;
+    }
+    const { entries } = this.store.getState();
+    const wanted = new Set(restore.selected ?? []);
+    if (restore.focus !== undefined) {
+      wanted.add(restore.focus);
+    }
+    const ids = new Map<string, number>();
+    for (let id = 0; id < entries.count && ids.size < wanted.size; id++) {
+      const name = entries.names[id];
+      if (name !== undefined && wanted.has(name) && !entries.removed.has(id)) {
+        ids.set(name, id);
+      }
+    }
+    const focused = restore.focus === undefined ? undefined : ids.get(restore.focus);
+    const names = restore.selected ?? (restore.focus === undefined ? [] : [restore.focus]);
+    const selected = new Set<number>();
+    for (const name of names) {
+      const id = ids.get(name);
+      if (id !== undefined) selected.add(id);
+    }
+    const scrollTo: ScrollTo | undefined =
+      restore.scrollTop !== undefined
+        ? { kind: "top", top: restore.scrollTop }
+        : focused !== undefined
+          ? { kind: "reveal", id: focused }
+          : undefined;
+    this.store.setState({ selected, anchor: focused, focused, scrollTo });
+  }
 }
 
 /** A slice of a folder's state; the component re-renders when it changes. */

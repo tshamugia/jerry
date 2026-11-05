@@ -126,6 +126,12 @@ fn window(raw: isize) -> HWND {
     HWND(raw as *mut core::ffi::c_void)
 }
 
+/// Jerry's own message-only window on the main thread, once [`init`] has run: the clipboard's
+/// owner.
+pub(crate) fn message_window() -> Option<HWND> {
+    WINDOW.get().map(|&raw| window(raw))
+}
+
 /// A message-only window of Jerry's class, owned by the calling thread.
 pub(crate) fn create_window() -> Result<HWND, JerryError> {
     let class = w!("JerryMainThread");
