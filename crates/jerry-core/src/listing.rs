@@ -584,6 +584,10 @@ pub fn list(
 ) -> Result<(), JerryError> {
     let long = long_path(folder)?;
     let cancelled = || JerryError::new(ErrorCode::Cancelled).at(&long);
+    // Cancelled before it starts (its volume is being removed, say): don't open the folder.
+    if cancel.load(Ordering::Relaxed) {
+        return Err(cancelled());
+    }
     let pattern = search_pattern(&long);
     let mut data = WIN32_FIND_DATAW::default();
     // SAFETY: `pattern` is NUL-terminated and outlives the call; `data` is the WIN32_FIND_DATAW

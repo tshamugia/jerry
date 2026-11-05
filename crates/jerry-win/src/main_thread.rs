@@ -7,6 +7,9 @@
 //! tao's event callback, where tao holds back events sent from other threads (Rust → page
 //! `emit`s such as transfer progress) until the loop ends.
 //!
+//! The same window receives Windows' device notifications (`WM_DEVICECHANGE`), which
+//! [`devices`](crate::devices) handles.
+//!
 //! Dev builds also watch the main thread: whenever it was busy for longer than [`SLOW_TASK`]
 //! (the window was frozen that long), a warning goes to the log.
 
@@ -24,7 +27,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, HWND_MESSAGE, PostMessageW, RegisterClassW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WNDCLASSW,
+    WINDOW_STYLE, WM_APP, WM_DEVICECHANGE, WNDCLASSW,
 };
 use windows::core::w;
 
@@ -60,7 +63,8 @@ pub(crate) fn is_main_sta() -> bool {
 }
 
 /// Initializes OLE on the calling thread, which must be Jerry's main (STA) thread, and creates
-/// the window [`run_on_main`] posts to. Call it once, from Tauri's `setup`.
+/// the window [`run_on_main`] posts to and device notifications come to. Call it once, from
+/// Tauri's `setup`.
 ///
 /// [`enter_sta`] already made the thread an STA, but OLE drag & drop, the clipboard and some
 /// context menu handlers need `OleInitialize`. OLE stays initialized for the life of the process.
@@ -70,6 +74,7 @@ pub fn init() -> Result<(), JerryError> {
     if WINDOW.get().is_none() {
         let hwnd = create_window()?;
         let _ = WINDOW.set(hwnd.0 as isize);
+        crate::devices::start(hwnd.0 as isize);
         #[cfg(debug_assertions)]
         watchdog::start(hwnd.0 as isize);
     }
@@ -121,7 +126,8 @@ fn window(raw: isize) -> HWND {
     HWND(raw as *mut core::ffi::c_void)
 }
 
-fn create_window() -> Result<HWND, JerryError> {
+/// A message-only window of Jerry's class, owned by the calling thread.
+pub(crate) fn create_window() -> Result<HWND, JerryError> {
     let class = w!("JerryMainThread");
     // SAFETY: the module handle of this process.
     let instance = unsafe { GetModuleHandleW(None) }?;
@@ -167,6 +173,7 @@ unsafe extern "system" fn window_proc(
             run_task(*task);
             LRESULT(0)
         }
+        WM_DEVICECHANGE => crate::devices::on_device_change(wparam, lparam),
         #[cfg(debug_assertions)]
         watchdog::WM_HEARTBEAT => {
             watchdog::beat(wparam);

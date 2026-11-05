@@ -11,6 +11,11 @@
 //!
 //! The folder is opened with every share mode and `FILE_FLAG_BACKUP_SEMANTICS`, so Explorer can
 //! still rename, move and delete it while Jerry watches.
+//!
+//! An open folder keeps its volume in use: Windows removes a USB drive ("Safely remove") or locks
+//! a volume only once nothing on it is open (#126). When Windows asks, [`Watchers::release`] has
+//! every watcher on that volume close its folder; [`Watchers::keep`] opens them again if the
+//! volume stays, and [`Watchers::gone`] ends them with [`ErrorCode::DeviceGone`] if it goes.
 
 use std::collections::{HashMap, HashSet};
 use std::os::windows::ffi::OsStrExt;
@@ -44,6 +49,7 @@ use crate::listing::{
     Diff, Entries, Listing, Observed, find_data_name, find_name, folder_error, list, list_error,
 };
 use crate::path::long_path;
+use crate::volume::{self, same_root};
 
 /// How long changes collect, from the first one on, before they go out together.
 pub const COLLECT: Duration = Duration::from_millis(100);
@@ -148,8 +154,13 @@ impl Changes {
 
 /// Looks up what `folder` holds now under every name in `changes`. An entry found by its 8.3
 /// short name or another case is reported under its exact name; a name the folder doesn't have
-/// exactly is absent. Blocking IO: one directory lookup per name.
-pub fn observe(folder: &Path, changes: &Changes) -> Result<Observed, JerryError> {
+/// exactly is absent. Setting `cancel` stops it with [`ErrorCode::Cancelled`]. Blocking IO: one
+/// directory lookup per name.
+pub fn observe(
+    folder: &Path,
+    changes: &Changes,
+    cancel: &AtomicBool,
+) -> Result<Observed, JerryError> {
     let folder = long_path(folder)?;
     let mut observed = Observed {
         renames: changes.renames.clone(),
@@ -157,6 +168,9 @@ pub fn observe(folder: &Path, changes: &Changes) -> Result<Observed, JerryError>
     };
     let mut found: HashSet<Vec<u16>> = HashSet::new();
     for name in &changes.names {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(JerryError::new(ErrorCode::Cancelled).at(&folder));
+        }
         let mut exact = false;
         find_name(&folder, name, |data| {
             let found_name = find_data_name(data);
@@ -201,10 +215,11 @@ pub fn refresh(
     cancel: &AtomicBool,
 ) -> Result<Refresh, JerryError> {
     if !changes.is_lost() {
-        match observe(folder, changes) {
+        match observe(folder, changes, cancel) {
             Ok(observed) if !observed.absent.iter().any(|name| is_short_name(name)) => {
                 return Ok(Refresh::Names(observed));
             }
+            Err(error) if error.code == ErrorCode::Cancelled => return Err(error),
             Ok(_) => tracing::debug!("a short name went away; listing the folder again"),
             Err(error) => {
                 tracing::debug!(code = ?error.code, "changed names didn't resolve; listing the folder again");
@@ -254,8 +269,33 @@ type Subscriber = Arc<dyn Fn(Event<'_>) + Send + Sync>;
 pub struct Watchers(Arc<Registry>);
 
 struct Registry {
-    folders: Mutex<HashMap<PathBuf, Arc<Watch>>>,
+    folders: Mutex<Folders>,
     buffer_bytes: usize,
+}
+
+#[derive(Default)]
+struct Folders {
+    watches: HashMap<PathBuf, Arc<Watch>>,
+    /// The roots of volumes Windows is removing or locking: no folder on them is opened until
+    /// [`Watchers::keep`] or [`Watchers::gone`].
+    released: Vec<PathBuf>,
+}
+
+impl Folders {
+    fn is_released(&self, root: &Path) -> bool {
+        self.released
+            .iter()
+            .any(|released| same_root(released, root))
+    }
+
+    /// The watchers of folders on the volume at `root`.
+    fn on(&self, root: &Path) -> Vec<Arc<Watch>> {
+        self.watches
+            .values()
+            .filter(|watch| watch.is_on(root))
+            .cloned()
+            .collect()
+    }
 }
 
 impl Default for Watchers {
@@ -269,7 +309,7 @@ impl Watchers {
     /// overflow; everything else uses [`Watchers::default`].
     pub fn with_buffer(bytes: usize) -> Self {
         Self(Arc::new(Registry {
-            folders: Mutex::new(HashMap::new()),
+            folders: Mutex::new(Folders::default()),
             buffer_bytes: bytes,
         }))
     }
@@ -277,21 +317,32 @@ impl Watchers {
     /// Calls `subscriber` on the watcher's thread with every change to `folder` from now on, and
     /// once with [`Event::Gone`] if the folder goes away. A folder already watched shares its
     /// watcher. Returns once changes are being recorded, so nothing after it is missed. Fails
-    /// when the folder can't be opened, with the listing's error codes. Blocking IO.
+    /// when the folder can't be opened, with the listing's error codes, and with
+    /// [`ErrorCode::DeviceGone`] while its volume is released ([`Watchers::release`]).
+    /// Blocking IO.
     pub fn subscribe(
         &self,
         folder: &Path,
         subscriber: impl Fn(Event<'_>) + Send + Sync + 'static,
     ) -> Result<Subscription, JerryError> {
         let folder = long_path(folder)?;
+        // Blocking IO, so before the lock. Without a root the folder is watched all the same;
+        // only Windows' notices about its volume don't reach it.
+        let root = volume::root(&folder).ok();
         let (watch, id) = {
             let mut folders = self.folders();
-            let watch = match folders.get(&folder) {
+            if root
+                .as_deref()
+                .is_some_and(|root| folders.is_released(root))
+            {
+                return Err(JerryError::new(ErrorCode::DeviceGone).at(&folder));
+            }
+            let watch = match folders.watches.get(&folder) {
                 Some(watch) => watch.clone(),
                 None => {
-                    let watch = Arc::new(Watch::new(folder.clone())?);
+                    let watch = Arc::new(Watch::new(folder.clone(), root)?);
                     self.start(&watch)?;
-                    folders.insert(folder, watch.clone());
+                    folders.watches.insert(folder, watch.clone());
                     watch
                 }
             };
@@ -309,7 +360,56 @@ impl Watchers {
 
     /// How many folders are watched.
     pub fn watched(&self) -> usize {
-        self.folders().len()
+        self.folders().watches.len()
+    }
+
+    /// Lets go of every folder watched on the volume at `root` ([`volume::root`]): Windows wants
+    /// to remove or lock the volume, and does so only once nothing on it is open. Each watcher
+    /// closes its folder and waits to hear whether the volume stays ([`Watchers::keep`]) or goes
+    /// ([`Watchers::gone`]). Until then no folder on it is opened, and subscribing to one fails
+    /// with [`ErrorCode::DeviceGone`].
+    ///
+    /// Returns `true` once every one of them has closed its folder, `false` if some haven't by
+    /// `deadline`. It only signals the watchers' threads and waits for them, so the main thread
+    /// can call it from a device notification.
+    pub fn release(&self, root: &Path, deadline: Instant) -> bool {
+        let watches = {
+            let mut folders = self.folders();
+            if !folders.is_released(root) {
+                folders.released.push(root.to_path_buf());
+            }
+            folders.on(root)
+        };
+        for watch in &watches {
+            watch.release();
+        }
+        watches.iter().all(|watch| watch.wait_released(deadline))
+    }
+
+    /// The volume at `root` stays after all: its removal or lock failed, or the lock is over.
+    /// The watchers [`Watchers::release`] closed open their folders again and list them anew, as
+    /// changes made meanwhile weren't recorded. Doesn't wait.
+    pub fn keep(&self, root: &Path) {
+        for watch in self.unrelease(root) {
+            watch.order(Hold::Reopen);
+        }
+    }
+
+    /// The volume at `root` is gone: its watchers end with [`Event::Gone`] and
+    /// [`ErrorCode::DeviceGone`]. Doesn't wait.
+    pub fn gone(&self, root: &Path) {
+        for watch in self.unrelease(root) {
+            watch.order(Hold::Gone);
+        }
+    }
+
+    /// Takes `root` off the released volumes; returns its watchers.
+    fn unrelease(&self, root: &Path) -> Vec<Arc<Watch>> {
+        let mut folders = self.folders();
+        folders
+            .released
+            .retain(|released| !same_root(released, root));
+        folders.on(root)
     }
 
     fn start(&self, watch: &Arc<Watch>) -> Result<(), JerryError> {
@@ -326,6 +426,7 @@ impl Watchers {
                     Ok(())
                 });
                 watch.set_started(Err(JerryError::internal()));
+                watch.end();
                 forget(&registry, &watch);
             })
             .map(drop)
@@ -335,7 +436,7 @@ impl Watchers {
             })
     }
 
-    fn folders(&self) -> MutexGuard<'_, HashMap<PathBuf, Arc<Watch>>> {
+    fn folders(&self) -> MutexGuard<'_, Folders> {
         self.0
             .folders
             .lock()
@@ -353,10 +454,11 @@ fn forget(registry: &Weak<Registry>, watch: &Arc<Watch>) {
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
     if folders
+        .watches
         .get(&watch.folder)
         .is_some_and(|running| Arc::ptr_eq(running, watch))
     {
-        folders.remove(&watch.folder);
+        folders.watches.remove(&watch.folder);
     }
 }
 
@@ -374,34 +476,79 @@ impl Drop for Subscription {
         if self.watch.remove(self.id) == 0 {
             self.watch.stop();
             if folders
+                .watches
                 .get(&self.watch.folder)
                 .is_some_and(|running| Arc::ptr_eq(running, &self.watch))
             {
-                folders.remove(&self.watch.folder);
+                folders.watches.remove(&self.watch.folder);
             }
         }
     }
 }
 
+/// Where a watcher stands with its volume (#126). [`Watchers::release`] asks for
+/// [`Hold::Release`] and the thread answers [`Hold::Released`] once its folder is closed;
+/// [`Watchers::keep`] and [`Watchers::gone`] then say what comes next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Hold {
+    /// The folder is open, or about to be.
+    Open,
+    /// Windows wants the volume: close the folder.
+    Release,
+    /// The folder is closed until the volume stays or goes.
+    Released,
+    /// The volume stays: open the folder again.
+    Reopen,
+    /// The volume is gone.
+    Gone,
+    /// The thread is done, its folder closed for good.
+    Ended,
+}
+
+/// What a watcher's thread does about its volume when it wakes.
+enum Order {
+    /// Nothing.
+    Stay,
+    /// Close the folder and wait for [`Watch::wait_for_volume`].
+    Release,
+    /// The volume was released and kept before the folder was closed: reads were interrupted,
+    /// so list the folder again.
+    Resume,
+    /// End with [`ErrorCode::DeviceGone`].
+    Gone,
+}
+
 /// One folder's watcher, shared by its subscriptions and its thread.
 struct Watch {
     folder: PathBuf,
+    /// The root of the volume the folder is on, if Windows could say.
+    root: Option<PathBuf>,
     subscribers: Mutex<Vec<(u64, Subscriber)>>,
     next_id: AtomicU64,
-    stop_signal: Signal,
+    /// Wakes the thread: to stop, or to follow its volume ([`Watch::hold`]). Manual reset: the
+    /// thread resets it when it wakes, before it looks at what changed.
+    wake: Signal,
     stopped: AtomicBool,
+    /// Stops the folder read the thread is doing (a refresh): set to stop it or release it.
+    interrupt: AtomicBool,
+    hold: Mutex<Hold>,
+    hold_changed: Condvar,
     started: Mutex<Option<Result<(), JerryError>>>,
     started_changed: Condvar,
 }
 
 impl Watch {
-    fn new(folder: PathBuf) -> Result<Self, JerryError> {
+    fn new(folder: PathBuf, root: Option<PathBuf>) -> Result<Self, JerryError> {
         Ok(Self {
             folder,
+            root,
             subscribers: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(0),
-            stop_signal: Signal::new()?,
+            wake: Signal::new()?,
             stopped: AtomicBool::new(false),
+            interrupt: AtomicBool::new(false),
+            hold: Mutex::new(Hold::Open),
+            hold_changed: Condvar::new(),
             started: Mutex::new(None),
             started_changed: Condvar::new(),
         })
@@ -441,11 +588,122 @@ impl Watch {
 
     fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
-        self.stop_signal.set();
+        self.interrupt.store(true, Ordering::Relaxed);
+        self.wake.set();
+        // A thread waiting for its volume waits on `hold_changed`.
+        let _hold = self.hold();
+        self.hold_changed.notify_all();
     }
 
     fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::Relaxed)
+    }
+
+    fn is_on(&self, root: &Path) -> bool {
+        self.root
+            .as_deref()
+            .is_some_and(|mine| same_root(mine, root))
+    }
+
+    /// Asks the thread to close the folder, interrupting what it reads.
+    fn release(&self) {
+        let mut hold = self.hold();
+        if matches!(*hold, Hold::Open | Hold::Reopen) {
+            *hold = Hold::Release;
+        }
+        self.interrupt.store(true, Ordering::Relaxed);
+        drop(hold);
+        self.wake.set();
+    }
+
+    /// Tells the thread what became of its released volume: [`Hold::Reopen`] or [`Hold::Gone`].
+    fn order(&self, order: Hold) {
+        let mut hold = self.hold();
+        match (*hold, order) {
+            // Done already, or never released: nothing to reopen.
+            (Hold::Ended, _) | (Hold::Open, Hold::Reopen) => return,
+            _ => *hold = order,
+        }
+        self.hold_changed.notify_all();
+        drop(hold);
+        self.wake.set();
+    }
+
+    /// Waits until the thread has closed the folder, or until `deadline`; whether it has.
+    fn wait_released(&self, deadline: Instant) -> bool {
+        let mut hold = self.hold();
+        while *hold == Hold::Release {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            hold = self
+                .hold_changed
+                .wait_timeout(hold, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
+
+    /// The thread's side: what its volume asks of it now. Taking a [`Hold::Reopen`] here means
+    /// the folder was never closed.
+    fn volume_order(&self) -> Order {
+        let mut hold = self.hold();
+        match *hold {
+            Hold::Release => Order::Release,
+            Hold::Reopen => {
+                *hold = Hold::Open;
+                self.resume();
+                Order::Resume
+            }
+            Hold::Gone => Order::Gone,
+            Hold::Open | Hold::Released | Hold::Ended => Order::Stay,
+        }
+    }
+
+    /// The thread's side, once its folder is closed: says so to [`Watch::wait_released`] and
+    /// waits for the volume to stay ([`Order::Resume`]) or go ([`Order::Gone`]). `None` once the
+    /// watch stops.
+    fn wait_for_volume(&self) -> Option<Order> {
+        let mut hold = self.hold();
+        if *hold == Hold::Release {
+            *hold = Hold::Released;
+            self.hold_changed.notify_all();
+        }
+        loop {
+            if self.is_stopped() {
+                return None;
+            }
+            match *hold {
+                Hold::Reopen => {
+                    *hold = Hold::Open;
+                    self.resume();
+                    return Some(Order::Resume);
+                }
+                Hold::Gone => return Some(Order::Gone),
+                Hold::Open | Hold::Release | Hold::Released | Hold::Ended => {
+                    hold = self
+                        .hold_changed
+                        .wait(hold)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+            }
+        }
+    }
+
+    /// Reads may run again, unless the watch is stopping.
+    fn resume(&self) {
+        if !self.is_stopped() {
+            self.interrupt.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// The thread is done and its folder closed: a release waiting for it is over.
+    fn end(&self) {
+        let mut hold = self.hold();
+        *hold = Hold::Ended;
+        self.hold_changed.notify_all();
     }
 
     /// Records how starting went; only the first call counts.
@@ -475,6 +733,10 @@ impl Watch {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn hold(&self) -> MutexGuard<'_, Hold> {
+        self.hold.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// The watcher thread: watches until the last subscription goes or the folder does.
@@ -491,6 +753,7 @@ fn watch_folder(watch: &Arc<Watch>, registry: &Weak<Registry>, buffer_bytes: usi
     // Close the folder before anyone hears it's gone: a folder being deleted goes once no handle
     // is open on it.
     drop(source);
+    watch.end();
     forget(registry, watch);
     if let Some(error) = gone {
         tracing::info!(code = ?error.code, "watched folder is gone");
@@ -518,10 +781,14 @@ fn watch_changes(watch: &Watch, source: &mut Source, buffer_bytes: usize) -> Opt
             let left = deadline.saturating_duration_since(Instant::now());
             u32::try_from(left.as_millis() + 1).unwrap_or(INFINITE - 1)
         });
-        let mut handles = vec![watch.stop_signal.0];
+        let mut handles = vec![watch.wake.0];
         handles.extend(source.event());
-        // SAFETY: every handle is a live event: the watch's stop signal and the source's.
+        // SAFETY: every handle is a live event: the watch's wake signal and the source's.
         let woke = unsafe { WaitForMultipleObjects(&handles, false, timeout) };
+        if woke == WAIT_OBJECT_0 {
+            // Reset before looking, so a wake that comes meanwhile isn't lost.
+            watch.wake.reset();
+        }
         if watch.is_stopped() {
             return None;
         }
@@ -529,6 +796,35 @@ fn watch_changes(watch: &Watch, source: &mut Source, buffer_bytes: usize) -> Opt
             let error = windows::core::Error::from_thread();
             tracing::error!(%error, "watcher wait failed");
             return Some(JerryError::internal());
+        }
+        match watch.volume_order() {
+            Order::Stay => {}
+            Order::Release => {
+                // Windows removes or locks the volume only once nothing on it is open.
+                *source = Source::Closed;
+                tracing::info!("watched folder closed: its volume is being removed or locked");
+                match watch.wait_for_volume() {
+                    None => return None,
+                    Some(Order::Resume) => match Source::open(folder, buffer_bytes) {
+                        Ok(open) => *source = open,
+                        Err(error) => return Some(error),
+                    },
+                    Some(_) => return Some(JerryError::new(ErrorCode::DeviceGone).at(folder)),
+                }
+                tracing::info!("watched folder open again: its volume stays");
+                // Changes made meanwhile weren't recorded: list the folder again right away.
+                changes.lose();
+                flush_at = Some(Instant::now());
+                poll_at = None;
+                check_at = Instant::now() + CHECK_PATH;
+                continue;
+            }
+            Order::Resume => {
+                // A refresh may have been interrupted, and what it was looking up is lost.
+                changes.lose();
+                flush_at = Some(Instant::now());
+            }
+            Order::Gone => return Some(JerryError::new(ErrorCode::DeviceGone).at(folder)),
         }
         if woke.0 == WAIT_OBJECT_0.0 + 1
             && let Err(error) = source.collect(&mut changes)
@@ -586,7 +882,7 @@ fn flush(watch: &Watch, changes: &mut Changes) -> Result<(), JerryError> {
         return Ok(());
     }
     let started = Instant::now();
-    match refresh(&watch.folder, &changes, &watch.stopped) {
+    match refresh(&watch.folder, &changes, &watch.interrupt) {
         Ok(now) => {
             tracing::debug!(
                 names = changes.names().len(),
@@ -611,6 +907,8 @@ enum Source {
     Notify { dir: Dir, path: Option<Vec<u16>> },
     /// None: the folder is listed again every [`POLL`].
     Poll,
+    /// None for now: the folder is closed while its volume is released.
+    Closed,
 }
 
 impl Source {
@@ -633,7 +931,7 @@ impl Source {
     fn event(&self) -> Option<HANDLE> {
         match self {
             Self::Notify { dir, .. } => Some(dir.signal.0),
-            Self::Poll => None,
+            Self::Poll | Self::Closed => None,
         }
     }
 

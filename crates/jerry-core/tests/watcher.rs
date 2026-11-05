@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use jerry_core::listing::{Diff, Listing};
 use jerry_core::path::long_path;
+use jerry_core::volume;
 use jerry_core::watcher::{Event, Refresh, Subscription, Watchers};
 use jerry_core::{ErrorCode, JerryError};
 use tempfile::TempDir;
@@ -375,4 +376,82 @@ fn a_missing_folder_is_not_watched() {
         .err()
         .expect("nothing to watch");
     assert_eq!(error.code, ErrorCode::NotFound);
+}
+
+#[test]
+fn a_released_volume_holds_nothing_and_a_kept_one_is_listed_again() {
+    let dir = temp();
+    let parent = dir.path().join("USB");
+    let watched = parent.join("ნახაზები");
+    std::fs::create_dir_all(&watched).expect("mkdir");
+    write(&watched, "a.dwg", b"a");
+    let watchers = Watchers::default();
+    let mut live = Live::new(&watchers, &watched);
+    let root = volume::root(&long_path(&watched).expect("long path")).expect("a root");
+    let moved = dir.path().join("USB (moved)");
+    assert!(
+        std::fs::rename(&parent, &moved).is_err(),
+        "held while watched"
+    );
+
+    // Windows asks for the volume: once `release` returns, nothing on it is open.
+    assert!(watchers.release(&root, Instant::now() + WAIT));
+    std::fs::rename(&parent, &moved).expect("nothing holds the folder");
+    std::fs::rename(&moved, &parent).expect("and back");
+    // Meanwhile no folder on the volume opens, and changes go unseen.
+    let error = watchers
+        .subscribe(dir.path(), |_| {})
+        .err()
+        .expect("released");
+    assert_eq!(error.code, ErrorCode::DeviceGone);
+    write(&watched, "while released.txt", b"");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(live.told.try_recv().is_err(), "nothing told while released");
+
+    // The removal failed: the folder opens again and is listed anew.
+    watchers.keep(&root);
+    let (_, listed) = live.until("listed again", |listing| listing.len() == 2);
+    assert!(listed, "the whole folder was listed again");
+    assert_eq!(watchers.watched(), 1);
+    write(&watched, "after.txt", b"");
+    live.until("live again", |listing| listing.len() == 3);
+    assert!(std::fs::rename(&parent, &moved).is_err(), "held again");
+    let other = watchers.subscribe(dir.path(), |_| {});
+    assert!(other.is_ok(), "folders on the volume open again");
+}
+
+#[test]
+fn a_released_volume_that_goes_ends_its_watchers_with_device_gone() {
+    let dir = temp();
+    let watchers = Watchers::default();
+    let mut live = Live::new(&watchers, dir.path());
+    let root = volume::root(&long_path(dir.path()).expect("long path")).expect("a root");
+
+    assert!(watchers.release(&root, Instant::now() + WAIT));
+    watchers.gone(&root);
+
+    let error = live.gone();
+    assert_eq!(error.code, ErrorCode::DeviceGone);
+    assert_eq!(watchers.watched(), 0);
+    // A volume that comes back is watched again.
+    let again = Live::new(&watchers, dir.path());
+    assert_eq!(watchers.watched(), 1);
+    drop(again);
+}
+
+#[test]
+fn releasing_another_volume_or_keeping_an_unreleased_one_changes_nothing() {
+    let dir = temp();
+    let watchers = Watchers::default();
+    let mut live = Live::new(&watchers, dir.path());
+    let root = volume::root(&long_path(dir.path()).expect("long path")).expect("a root");
+
+    // No folder is watched on a drive with no volume, so nothing waits.
+    assert!(watchers.release(Path::new(r"\?\Q:\"), Instant::now()));
+    watchers.keep(&root);
+    write(dir.path(), "seen.txt", b"");
+    let (_, listed) = live.until("still live", |listing| listing.len() == 1);
+    assert!(!listed, "looked up by name, not listed again");
+    watchers.gone(Path::new(r"\?\Q:\"));
+    assert_eq!(watchers.watched(), 1);
 }
