@@ -140,7 +140,7 @@ test("a restored folder that no longer exists opens its nearest parent, with a t
     {
       id: expect.any(Number),
       title: "“Right” no longer exists",
-      detail: String.raw`Opened C:\Work instead`,
+      detail: "Opened “Work”, the nearest folder left",
     },
   ]);
   // The folder that is there opened as it was: no toast for it.

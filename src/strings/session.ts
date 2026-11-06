@@ -3,7 +3,7 @@
 export const sessionStrings = {
   /** A restored tab's folder went away; the tab shows the nearest folder left instead. */
   folderGone: (name: string) => `“${name}” no longer exists`,
-  nearestOpened: (path: string) => `Opened ${path} instead`,
+  nearestOpened: (name: string) => `Opened “${name}”, the nearest folder left`,
   /** A toast's close button. */
   dismiss: "Dismiss",
 };

@@ -592,6 +592,7 @@ impl Listings {
         match prestarted {
             Some((id, outbox)) => {
                 outbox.attach(channel);
+                tracing::debug!(id, tab, "the page took a listing started at process start");
                 id
             }
             None => self.start(tab, folder, sort, Some(channel), visit),

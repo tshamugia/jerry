@@ -73,7 +73,7 @@ function reopen(tab: Tab): void {
   tab.restore((gone, shown) =>
     showToast({
       title: strings.session.folderGone(gone.name),
-      detail: strings.session.nearestOpened(shown.path),
+      detail: strings.session.nearestOpened(shown.name),
     }),
   );
 }
