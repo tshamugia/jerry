@@ -83,19 +83,38 @@ export async function copyEntries(cut: boolean): Promise<void> {
 }
 
 /**
- * Ctrl+V: the files on the clipboard go into the active pane's folder, copied, or moved after a
- * cut. Windows shows the progress; the list shows them as they arrive. Text or an image on the
- * clipboard does nothing (Paste as comes later).
+ * Ctrl+V: the files on the clipboard go into the active pane's folder, or into its subfolder
+ * `into` (a folder's context menu), copied, or moved after a cut. Windows shows the progress; the
+ * list shows them as they arrive. Text or an image on the clipboard does nothing (Paste as comes
+ * later).
  */
-export async function pasteEntries(): Promise<void> {
+export async function pasteEntries(into: number | null = null): Promise<void> {
   const listing = activeFolder()?.store.getState().listing;
   if (listing === undefined) {
     return;
   }
-  const result = await commands.clipboardPaste(listing, null);
+  const result = await commands.clipboardPaste(listing, into);
   if (result.status === "error") {
-    fail("paste", result.error, () => void pasteEntries());
+    fail("paste", result.error, () => void pasteEntries(into));
   }
+}
+
+/**
+ * Whether the clipboard holds files to paste, asked when the component mounts (a menu opening):
+ * undefined until the core answers. Paste stays grayed out without them, as in Explorer.
+ */
+export function useClipboardHasFiles(): boolean | undefined {
+  const [files, setFiles] = useState<boolean>();
+  useEffect(() => {
+    let current = true;
+    void commands.clipboardHasFiles().then((answer) => {
+      if (current) setFiles(answer);
+    });
+    return () => {
+      current = false;
+    };
+  }, []);
+  return files;
 }
 
 /** Ctrl+Shift+C (`path`) or Ctrl+Alt+C (`name`). */

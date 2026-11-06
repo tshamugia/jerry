@@ -168,6 +168,14 @@ pub async fn clipboard_cut_entries(app: AppHandle, listing: u32) -> Result<Vec<u
     .await
 }
 
+/// Whether the clipboard holds files to paste, whoever put them there: the context menu grays out
+/// Paste without them, as Explorer does.
+#[tauri::command]
+#[specta::specta]
+pub async fn clipboard_has_files() -> bool {
+    clipboard::has_files()
+}
+
 /// At exit, on the main thread: Jerry's files stay on the clipboard once it is gone.
 pub fn flush_on_exit() {
     clipboard::flush();

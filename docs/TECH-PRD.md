@@ -2,7 +2,7 @@
 
 ტექნიკური სპეციფიკაცია · Oct 31, 2026 · @Tengo
 
-> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 06.11.2026).
+> წყარო: [Claude Doc](https://claude.ai/artifact/M8R2P7e9LGTitUdDakEAzz). ეს ფაილი მისი ასლია (ექსპორტი 07.11.2026).
 
 ## მიმოხილვა
 
@@ -273,6 +273,7 @@ Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შ�
 ### Context menu
 
 - Jerry-ის საკუთარი მენიუ React-შია (Radix), ყოველ ბრძანებასთან shortcut-ით.
+- ფაილების სიის მენიუ (#39, `src/features/file-list/ListMenu.tsx`) ბრძანებების რეესტრიდან იგება: სათაური და shortcut რეესტრიდანაა (shortcut მარჯვნივ იხატება, screen reader-ს `aria-keyshortcuts`-ით ესმის). აუგებელი ბრძანება (Quick Look, Duplicate, Properties, New file) არ ჩანს, სანამ არ აიგება; "Windows options…" ბოლოშია, გამორთული (v1.0). ელემენტზე: Open, Open in new tab (მხოლოდ საქაღალდეებზე), Cut, Copy, Paste, Rename, Delete (Shift-ით სამუდამოდ, Explorer-ივით), Copy path, Copy name, Add to favorites (ერთ საქაღალდეზე), Open in Terminal, Show in Explorer. ცარიელ ადგილზე: New folder, Paste, View (Details; Hidden files, Compact rows), Sort by (სვეტი და მიმართულება, საქაღალდე იმახსოვრებს), Refresh, Open in Terminal. მარჯვენა კლიკი რიგზე მას მონიშნავს (თუ უკვე მონიშნული არ იყო) და ელემენტის მენიუს ხსნის; ცარიელ ადგილზე მონიშვნას ასუფთავებს და საქაღალდის მენიუს ხსნის. Shift+F10 და Menu კლავიში მენიუს ფოკუსირებულ მონიშნულ რიგთან ხსნის (სია მას ჯერ აჩენს), მონიშვნის გარეშე კი საქაღალდის მენიუს. Paste ერთ საქაღალდეზე მასში სვამს (`clipboard_paste`-ის `into`) და ნაცრისფერია, როცა clipboard-ზე ფაილები არ არის (`clipboard_has_files`: `IsClipboardFormatAvailable(CF_HDROP)`).
 - "Windows options…" Explorer-ის კლასიკური მენიუა ("Show more options"), Windows 11-ის packaged handler-ებითაც (WinRAR, Notepad, Terminal): `IShellFolder::GetUIObjectOf` → `IContextMenu` → `QueryContextMenu` (`CMF_NORMAL | CMF_CANRENAME | CMF_ITEMMENU`, Shift-ით `CMF_EXTENDEDVERBS`) → `TrackPopupMenuEx(TPM_RETURNCMD)` მთავარ ფანჯარაზე. `async` ბრძანება მენიუს `run_on_main`-ით უშვებს (იხ. «Thread-ების მოდელი») და მისი დახურვისას ბრუნდება.
 - ფანჯრის subclass (`SetWindowSubclass`, მხოლოდ მენიუს დროს) გადასცემს `WM_INITMENUPOPUP`, `WM_DRAWITEM`, `WM_MEASUREITEM` და `WM_MENUCHAR`-ს `IContextMenu3::HandleMenuMsg2`-ს (ან `IContextMenu2`-ს). მის გარეშე ცარიელი რჩება ქვემენიუები, რომლებიც გახსნისას ივსება: WinRAR, "Open with", "Give access to". "Send to" Windows 11-ზე მენიუს message loop-იდან ივსება (spike #6).
 - არჩეული ბრძანება: `InvokeCommand` (`CMINVOKECOMMANDINFOEX`: Unicode, `PTINVOKE`, `ASYNCOK`, Shift და Ctrl, მშობელი საქაღალდე სამუშაო დირექტორიად). Jerry-ის საკუთარი verb-ები (`rename`, `delete`, `cut`, `copy`, `paste`, საქაღალდეზე `open`) Shell-ს არ ეგზავნება და Jerry-ის ბრძანებით სრულდება (Undo, ჟურნალი, ამოჭრის სტილი). Shell-ის `rename` Explorer-ის view-ს ითხოვს და Jerry-ში არაფერს აკეთებს.
@@ -285,8 +286,8 @@ Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შ�
 
 - Open (#31, `open_entries`): `ShellExecuteExW` ნაგულისხმევი verb-ით, `SEE_MASK_NOASYNC | SEE_MASK_FLAG_LOG_USAGE`, Jerry-ის ფანჯრით owner-ად და ფაილის საქაღალდით სამუშაო საქაღალდედ (`jerry_win::open`). ყოველ მოთხოვნას საკუთარი მოკლევადიანი STA thread აქვს და არა Shell pool-ის worker: გახსნას წამები სჭირდება (DDE-ით მომუშავე პროგრამა, მაგ. AutoCAD DWG-ით, ჯერ ირთვება), pool-ის worker კი ამ დროს აიკონებს დააყოვნებდა; ჩამოკიდებული handler მხოლოდ თავის thread-ს აჩერებს. ბრძანება 5 წამს ელოდება, მერე ბრუნდება, გახსნა კი გრძელდება. გზა `\\?\`-ის გარეშე გადაეცემა, თუ 260 სიმბოლოზე მოკლეა. შეცდომისას („How do you want to open this file?“, ფაილი ვერ იხსნება) Windows თავის ფანჯარას აჩვენებს, როგორც Explorer-ში; გაუქმებული prompt შეცდომა არ არის. Enter მონიშნულს (ან ფოკუსირებულს) ხსნის: ერთი საქაღალდე ტაბშივე, რამდენიმე ელემენტისას საქაღალდეები ფონურ ტაბებში, ფაილები პროგრამებში; 15-ზე მეტი ელემენტი ჯერ კითხულობს (Explorer-ის მსგავსად). .lnk საქაღალდის shortcut ჯერ Explorer-ში იხსნება.
 - Open with: `SHAssocEnumHandlers` (რეკომენდებული პროგრამები) + ბოლოს გამოყენებული SQLite-დან. "სხვა პროგრამა…" ხსნის `SHOpenWithDialog`-ს.
-- Open in Terminal: `wt.exe -d <path>`, თუ არ არის, PowerShell.
-- Show in Explorer: `SHOpenFolderAndSelectItems`.
+- Open in Terminal (#39, `open_terminal`): Windows Terminal მომხმარებლის ნაგულისხმევი პროფილით, `wt.exe -d .`, საქაღალდე კი პროგრამის სამუშაო საქაღალდეა (`CreateProcessW`). გზა ბრძანების სტრიქონში არ გადის: Windows Terminal მასში `;`-ს ბრძანებების გამყოფად კითხულობს. `wt.exe` (App Execution Alias) მხოლოდ `PATH`-ის აბსოლუტურ საქაღალდეებში იძებნება, Jerry-ის სამუშაო საქაღალდეში არა. თუ არ არის ან არ ჩაირთო, Windows PowerShell (`System32\WindowsPowerShell\v1.0\powershell.exe`) საკუთარ კონსოლში. ერთ მონიშნულ საქაღალდეზე მასში იხსნება, სხვა შემთხვევაში და ცარიელ ადგილზე მიმდინარე საქაღალდეში.
+- Show in Explorer (#39, `show_in_explorer`): `SHOpenFolderAndSelectItems` listing-ის საქაღალდეზე, არჩეული ელემენტების მონიშვნით. ID list-ებს `SHParseDisplayName` აკეთებს `\\?\`-ის გარეშე (MAX\_PATH-ზე გრძელი გზაც ასე მუშაობს). Explorer-ს გაშვება სჭირდება, ამიტომ ეს Open-ივით საკუთარ მოკლევადიან STA thread-ზე სრულდება, ბრძანება კი მაქსიმუმ 5 წამს ელოდება. შეცდომას (ამასაც და Open in Terminal-ისასაც) UI ფანჯარაში აჩვენებს, Retry-ით.
 - "Open in…" ბრძანებები: პროგრამა + არგუმენტების შაბლონი (`{path}`), გაშვება `CreateProcessW`-ით.
 - "ფაილი სხვა პროგრამაშია გახსნილი": პროგრამის სახელს Restart Manager (`RmGetList`) აბრუნებს.
 
