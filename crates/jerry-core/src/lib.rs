@@ -6,6 +6,7 @@
 pub mod address;
 pub mod create;
 pub mod delete;
+pub mod drives;
 pub mod error;
 pub mod job;
 pub mod listing;

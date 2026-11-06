@@ -108,6 +108,33 @@ export const commands = {
 	 *  refuses; with `NotFound` when the entry is gone.
 	 */
 	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
+	/**
+	 *  The drives as last read; `drives:changed` brings every later list. Keep the one with the
+	 *  highest `generation`.
+	 */
+	drivesList: () => typedError<DriveList, JerryError>(__TAURI_INVOKE("drives_list")),
+	/**
+	 *  Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
+	 *  something holds the drive; the list follows with `drives:changed`.
+	 */
+	eject: (letter: string) => typedError<null, JerryError>(__TAURI_INVOKE("eject", { letter })),
+	/**  Desktop, Downloads, Documents, Pictures and OneDrive (once it is set up), in sidebar order. */
+	sidebarPlaces: () => typedError<SidebarPlace[], JerryError>(__TAURI_INVOKE("sidebar_places")),
+	/**  The network locations the user added, in sidebar order. */
+	networkPlacesList: () => typedError<NetworkPlace[], JerryError>(__TAURI_INVOKE("network_places_list")),
+	/**
+	 *  Adds the network location `text` (`\\server\share`, typed) at the end of the sidebar's
+	 *  Network section, without contacting the server. `InvalidName` for text that isn't a share;
+	 *  one that is there already stays where it is. Every window gets `network-places:changed`.
+	 */
+	networkPlaceAdd: (text: string) => typedError<null, JerryError>(__TAURI_INVOKE("network_place_add", { text })),
+	/**
+	 *  Removes the network location `path` (as `NetworkPlace::path` gives it) from the sidebar; the
+	 *  share itself is untouched. Every window gets `network-places:changed`.
+	 */
+	networkPlaceRemove: (path: string) => typedError<null, JerryError>(__TAURI_INVOKE("network_place_remove", { path })),
+	/**  Opens Recycle Bin in Explorer; Jerry's own view comes in v1.0. */
+	recycleBinOpen: () => typedError<null, JerryError>(__TAURI_INVOKE("recycle_bin_open")),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**
@@ -167,6 +194,8 @@ export const commands = {
 /** Events */
 export const events = {
 	appearanceChanged: makeEvent<AppearanceChanged, AppearanceChanged>("appearance:changed"),
+	drivesChanged: makeEvent<DrivesChanged, DrivesChanged>("drives:changed"),
+	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
 };
 
@@ -248,6 +277,54 @@ export type Density = "comfortable" | "compact";
 export type DragAction = 
 /**  The Windows rule: move on the same drive, copy to another one. */
 "windows" | "copy" | "move";
+
+/**  A drive as the sidebar shows it. */
+export type Drive = {
+	/**  The drive letter, upper case: `"C"`. */
+	letter: string,
+	kind: DriveKind,
+	/**
+	 *  The volume label; for a network drive, its share's name. None without one, or before the
+	 *  drive has been read.
+	 */
+	label: string | null,
+	/**  A network drive's share as display text (`\\server\share`). */
+	remote: string | null,
+	/**  False for a network drive Windows remembers but isn't connected to now. */
+	connected: boolean,
+	/**  The drive can be ejected: removable media, an optical drive, a USB disk. */
+	ejectable: boolean,
+	/**  Size and free space, once a local drive has been read with media in it. */
+	space: Space | null,
+};
+
+/**  What kind of drive a letter is. */
+export type DriveKind = 
+/**  A local disk. */
+"fixed" | 
+/**  Removable media: a USB stick, a memory card. */
+"removable" | 
+/**  A CD, DVD or Blu-ray drive. */
+"optical" | 
+/**  A mapped network share. */
+"network" | 
+/**  A RAM disk. */
+"ram";
+
+/**
+ *  The drives, numbered: a later list has a higher generation, so a window that hears of the
+ *  drives two ways (`drives_list` and `drives:changed`) keeps the newest.
+ */
+export type DriveList = {
+	generation: number,
+	drives: Drive[],
+};
+
+/**
+ *  Sent to every window when the drives change: one plugged in, pulled out or ejected, a network
+ *  drive mapped or disconnected, a label or the free space.
+ */
+export type DrivesChanged = DriveList;
 
 /**  What went wrong, with the parameters the UI needs to explain it. */
 export type ErrorCode = 
@@ -363,6 +440,22 @@ export type ListingTarget =
 /**  The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set. */
 { kind: "home" };
 
+/**
+ *  A network location the user added: its path as display text (`\\server\share`), the name
+ *  the sidebar shows (the share's) and its server.
+ */
+export type NetworkPlace = {
+	path: string,
+	name: string,
+	server: string,
+};
+
+/**  Sent to every window when a network location is added to the sidebar or removed. */
+export type NetworkPlacesChanged = NetworkPlace[];
+
+/**  The standard places, as `icon://` names them. */
+export type PlaceName = "desktop" | "downloads" | "documents" | "pictures" | "onedrive";
+
 /**  What the address bar's text names. */
 export type ResolvedPath = {
 	/**  The folder to open, as a token for `ListingTarget::Folder`. */
@@ -421,6 +514,8 @@ export type Settings = {
 	openInJerry: boolean,
 	/**  Check for new versions. */
 	checkUpdates: boolean,
+	/**  Show the sidebar (Ctrl+B). */
+	showSidebar: boolean,
 	/**  Sidebar width, in CSS pixels (drag its edge). */
 	sidebarWidth: number,
 	/**  Preview panel width, in CSS pixels (drag its edge). */
@@ -434,6 +529,16 @@ export type Settings = {
  *  (`window::apply`).
  */
 export type SettingsChanged = Settings;
+
+/**
+ *  A standard place: which one (its `icon://` name), its folder as display text, and for OneDrive
+ *  its folder's own name (`OneDrive - Insta LLC`); the UI names the others.
+ */
+export type SidebarPlace = {
+	place: PlaceName,
+	path: string,
+	name: string | null,
+};
 
 /**  How a list is sorted. */
 export type Sort = {
@@ -456,6 +561,12 @@ export type SortColumn = "name" |
 "created" | 
 /**  The extension: what follows the name's last dot. Folders have none. */
 "extension";
+
+/**  A volume's size and the space free on it for the user, in bytes. */
+export type Space = {
+	total: number,
+	free: number,
+};
 
 /**  What Jerry opens at start. */
 export type Startup = 

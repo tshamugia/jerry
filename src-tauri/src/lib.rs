@@ -4,6 +4,7 @@
 pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
+pub mod drives;
 pub mod icons;
 pub mod ipc;
 pub mod jobs;
@@ -89,6 +90,13 @@ macro_rules! commands {
             delete::delete_permanently,
             rename::create_folder,
             rename::rename,
+            drives::drives_list,
+            drives::eject,
+            drives::sidebar_places,
+            drives::network_places_list,
+            drives::network_place_add,
+            drives::network_place_remove,
+            drives::recycle_bin_open,
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,
@@ -120,7 +128,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .commands(commands)
         .events(collect_events![
             storage::SettingsChanged,
-            window::AppearanceChanged
+            window::AppearanceChanged,
+            drives::DrivesChanged,
+            drives::NetworkPlacesChanged
         ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
@@ -173,6 +183,7 @@ pub fn run() -> tauri::Result<()> {
             if let Err(error) = jerry_win::main_thread::init() {
                 tracing::error!(%error, "main thread setup failed: OLE and run_on_main won't work");
             }
+            app.manage(drives::Drives::start(app.handle()));
 
             // The window gets its theme and Mica at creation, so it needs the settings now.
             let waited = Instant::now();
