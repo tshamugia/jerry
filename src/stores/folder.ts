@@ -209,6 +209,11 @@ export class Folder {
     );
   }
 
+  /** Asks the list to scroll until entry `id` is in view: a new folder, a renamed entry. */
+  reveal(id: number): void {
+    this.store.setState({ scrollTo: { kind: "reveal", id } });
+  }
+
   /** The list made the scroll `scrollTo` asked for. */
   scrolled(): void {
     if (this.store.getState().scrollTo !== undefined) {

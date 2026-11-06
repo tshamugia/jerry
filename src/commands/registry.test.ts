@@ -168,8 +168,19 @@ describe("the shortcut table", () => {
         group: "files",
         title: "Files",
         rows: [
+          { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
+          { id: "rename", title: "Rename", keys: ["F2"] },
           { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
           { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
+        ],
+      },
+      {
+        group: "rename",
+        title: "Renaming",
+        rows: [
+          { id: "renameSave", title: "Save name", keys: ["Enter"] },
+          { id: "renameCancel", title: "Cancel rename", keys: ["Esc"] },
+          { id: "renameNext", title: "Rename next file", keys: ["Tab"] },
         ],
       },
       {
@@ -186,14 +197,14 @@ describe("the shortcut table", () => {
   });
 
   it("shows a new command by itself, from its one entry", () => {
-    const newFolder: Command = {
-      id: "newFolder",
+    const newFile: Command = {
+      id: "newFile",
       group: "files",
-      keys: ["Ctrl+Shift+N"],
+      keys: ["Ctrl+Alt+N"],
       context: "list",
       run: () => {},
     };
-    const commands = [...COMMANDS.filter((command) => command.id !== "newFolder"), newFolder];
+    const commands = [...COMMANDS.filter((command) => command.id !== "newFile"), newFile];
     const table = shortcutTable(buildKeymap(commands), commands);
     expect(table.map((group) => group.group)).toEqual([
       "navigation",
@@ -202,13 +213,16 @@ describe("the shortcut table", () => {
       "view",
       "selection",
       "files",
+      "rename",
       "search",
       "other",
     ]);
     expect(table[5]?.rows.map((row) => row.id)).toEqual([
+      "newFolder",
+      "rename",
       "recycle",
       "deletePermanently",
-      "newFolder",
+      "newFile",
     ]);
   });
 
@@ -282,8 +296,19 @@ describe("the shortcut table", () => {
         group: "files",
         title: "Files",
         rows: [
+          { id: "newFolder", title: "New folder", keys: ["Ctrl+Shift+N"] },
+          { id: "rename", title: "Rename", keys: ["F2"] },
           { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
           { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
+        ],
+      },
+      {
+        group: "rename",
+        title: "Renaming",
+        rows: [
+          { id: "renameSave", title: "Save name", keys: ["Enter"] },
+          { id: "renameCancel", title: "Cancel rename", keys: ["Esc"] },
+          { id: "renameNext", title: "Rename next file", keys: ["Tab"] },
         ],
       },
       {

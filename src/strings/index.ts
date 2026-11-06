@@ -2,6 +2,7 @@
 
 import type { SortColumn } from "../ipc";
 import { deleteStrings } from "./delete";
+import { renameStrings } from "./rename";
 
 const integer = new Intl.NumberFormat("en-US");
 const decimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
@@ -214,6 +215,8 @@ export const strings = {
   },
   /** Deleting (Del, Shift+Del). */
   deleting: deleteStrings,
+  /** New folder (Ctrl+Shift+N) and inline rename (F2). */
+  rename: renameStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",
