@@ -21,6 +21,7 @@ export type {
   CaptionButton,
   CaptionButtonRect,
   ClickToOpen,
+  CopyText,
   Crumb,
   DeleteFailure,
   DeleteOutcome,

@@ -15,6 +15,7 @@ pub mod folders;
 pub mod icons;
 pub mod main_thread;
 pub mod open;
+pub mod paste;
 pub mod recycle;
 pub mod shell_pool;
 pub mod title_bar;

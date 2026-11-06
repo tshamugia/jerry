@@ -8,7 +8,8 @@
 //! `emit`s such as transfer progress) until the loop ends.
 //!
 //! The same window receives Windows' device notifications (`WM_DEVICECHANGE`), which
-//! [`devices`](crate::devices) handles.
+//! [`devices`](crate::devices) handles, owns the clipboard and hears its changes
+//! (`WM_CLIPBOARDUPDATE`, [`clipboard`](crate::clipboard)).
 //!
 //! Dev builds also watch the main thread: whenever it was busy for longer than [`SLOW_TASK`]
 //! (the window was frozen that long), a warning goes to the log.
@@ -27,7 +28,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, HWND_MESSAGE, PostMessageW, RegisterClassW, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_DEVICECHANGE, WNDCLASSW,
+    WINDOW_STYLE, WM_APP, WM_CLIPBOARDUPDATE, WM_DEVICECHANGE, WNDCLASSW,
 };
 use windows::core::w;
 
@@ -180,6 +181,7 @@ unsafe extern "system" fn window_proc(
             LRESULT(0)
         }
         WM_DEVICECHANGE => crate::devices::on_device_change(wparam, lparam),
+        WM_CLIPBOARDUPDATE => crate::clipboard::on_update(),
         #[cfg(debug_assertions)]
         watchdog::WM_HEARTBEAT => {
             watchdog::beat(wparam);

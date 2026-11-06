@@ -1,6 +1,7 @@
 //! Jerry's Tauri shell: windows, IPC commands, events and protocols. Thin glue only: file work
 //! lives in `jerry-core`, Shell and COM work in `jerry-win`.
 
+pub mod clipboard;
 pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
@@ -83,6 +84,10 @@ macro_rules! commands {
             navigation::folder_subfolders,
             shell::open_entries,
             shell::folder_copy_path,
+            clipboard::clipboard_copy,
+            clipboard::clipboard_paste,
+            clipboard::clipboard_copy_text,
+            clipboard::clipboard_cut_entries,
             delete::delete_check,
             delete::delete_measure,
             delete::delete_measure_cancel,
@@ -128,6 +133,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .commands(commands)
         .events(collect_events![
             storage::SettingsChanged,
+            clipboard::ClipboardChanged,
             window::AppearanceChanged,
             drives::DrivesChanged,
             drives::NetworkPlacesChanged
@@ -183,6 +189,7 @@ pub fn run() -> tauri::Result<()> {
             if let Err(error) = jerry_win::main_thread::init() {
                 tracing::error!(%error, "main thread setup failed: OLE and run_on_main won't work");
             }
+            clipboard::watch(app.handle());
             app.manage(drives::Drives::start(app.handle()));
 
             // The window gets its theme and Mica at creation, so it needs the settings now.
@@ -211,6 +218,8 @@ pub fn run() -> tauri::Result<()> {
     app.run(|_, event| {
         if let RunEvent::Exit = event {
             tracing::info!("Jerry exiting");
+            // On the main thread, which put Jerry's files on the clipboard.
+            clipboard::flush_on_exit();
             logging::flush();
         }
     });

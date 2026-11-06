@@ -1,3 +1,10 @@
+import {
+  canCopy,
+  canPaste,
+  copyEntries,
+  copyText,
+  pasteEntries,
+} from "../features/clipboard/clipboard";
 import { canDelete, startDelete } from "../features/delete/flow";
 import { focusFilter } from "../features/filter/focus";
 import { canEditAddress, editAddress } from "../features/navigation/address";
@@ -317,8 +324,22 @@ export const COMMANDS: readonly Command[] = [
     run: () => void startDelete(true),
   },
   { id: "properties", group: "files", keys: ["Alt+Enter"], context: "list" },
-  { id: "copyPath", group: "files", keys: ["Ctrl+Shift+C"], context: "list" },
-  { id: "copyName", group: "files", keys: ["Ctrl+Alt+C"], context: "list" },
+  {
+    id: "copyPath",
+    group: "files",
+    keys: ["Ctrl+Shift+C"],
+    context: "list",
+    enabled: canCopy,
+    run: () => void copyText("path"),
+  },
+  {
+    id: "copyName",
+    group: "files",
+    keys: ["Ctrl+Alt+C"],
+    context: "list",
+    enabled: canCopy,
+    run: () => void copyText("name"),
+  },
 
   // Inline rename (PRD «ფაილური ოპერაციები»).
   {
@@ -347,9 +368,30 @@ export const COMMANDS: readonly Command[] = [
   },
 
   // Clipboard.
-  { id: "copy", group: "clipboard", keys: ["Ctrl+C"], context: "list" },
-  { id: "cut", group: "clipboard", keys: ["Ctrl+X"], context: "list" },
-  { id: "paste", group: "clipboard", keys: ["Ctrl+V"], context: "list" },
+  {
+    id: "copy",
+    group: "clipboard",
+    keys: ["Ctrl+C"],
+    context: "list",
+    enabled: canCopy,
+    run: () => void copyEntries(false),
+  },
+  {
+    id: "cut",
+    group: "clipboard",
+    keys: ["Ctrl+X"],
+    context: "list",
+    enabled: canCopy,
+    run: () => void copyEntries(true),
+  },
+  {
+    id: "paste",
+    group: "clipboard",
+    keys: ["Ctrl+V"],
+    context: "list",
+    enabled: canPaste,
+    run: () => void pasteEntries(),
+  },
 
   // Search.
   { id: "filter", group: "search", keys: ["Ctrl+F"], context: "global", run: focusFilter },
