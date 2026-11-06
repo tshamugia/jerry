@@ -16,6 +16,7 @@ pub mod path;
 pub mod rename;
 pub mod settings;
 pub mod sort;
+pub mod space;
 pub mod storage;
 pub mod synth;
 pub mod volume;
