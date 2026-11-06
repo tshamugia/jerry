@@ -5,6 +5,7 @@ import { DeleteDialog } from "../features/delete/DeleteDialog";
 import { DevPanel } from "../features/dev/DevPanel";
 import { PaneList } from "../features/file-list/PaneList";
 import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
+import { RenameDialogs } from "../features/rename/RenameDialogs";
 import { SelectByPattern } from "../features/selection/SelectByPattern";
 import { commands } from "../ipc";
 import { useAppearance } from "../stores/appearance";
@@ -41,6 +42,7 @@ export function App() {
       <SelectByPattern />
       <OpenManyDialog />
       <DeleteDialog />
+      <RenameDialogs />
     </>
   );
 }

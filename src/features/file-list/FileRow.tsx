@@ -3,6 +3,7 @@
 import { memo } from "react";
 import type { ColumnId } from "../../stores/columns";
 import { Attribute } from "../../stores/entries";
+import { RenameField } from "../rename/RenameField";
 import { NUMERIC, WIDTH_CLASS } from "./cells";
 import { dateText, extensionOf, nameText, sizeCell, typeName } from "./format";
 
@@ -30,6 +31,8 @@ export interface FileRowProps {
   focused: boolean;
   /** Selected rows are accent-tinted in the active pane, gray in the other one. */
   activePane: boolean;
+  /** The name shows as the inline rename field (F2). */
+  editing: boolean;
 }
 
 /**
@@ -39,7 +42,8 @@ export interface FileRowProps {
  * the item itself (`data-item`), the rest of the row is where a marquee can start.
  */
 export const FileRow = memo(function FileRow(props: FileRowProps) {
-  const { id, idPrefix, index, top, columns, attributes, selected, focused, activePane } = props;
+  const { id, idPrefix, index, top, columns, attributes, selected, focused, activePane, editing } =
+    props;
   const folder = (attributes & Attribute.directory) !== 0;
   const background = selected ? (activePane ? "bg-sel" : "bg-sel-inactive") : "hover:bg-hover";
   const focus = focused
@@ -52,7 +56,8 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
       aria-rowindex={index + 2}
       aria-selected={selected}
       data-id={id}
-      className={`absolute top-0 right-1 left-1 flex h-row items-center rounded-ctrl px-2 ${background} ${focus}`}
+      // The rename hint can reach over the rows below.
+      className={`absolute top-0 right-1 left-1 flex h-row items-center rounded-ctrl px-2 ${background} ${focus} ${editing ? "z-1" : ""}`}
       style={{ transform: `translateY(${top}px)` }}
     >
       {columns.map((column, at) =>
@@ -77,6 +82,7 @@ function NameCell({
   icon,
   attributes,
   showExtensions,
+  editing,
   folder,
   first,
 }: FileRowProps & { folder: boolean; first: boolean }) {
@@ -85,7 +91,8 @@ function NameCell({
   return (
     <div
       role="gridcell"
-      className={`${WIDTH_CLASS.name} flex items-center gap-2 overflow-hidden ${first ? "" : "pl-2"}`}
+      // The rename field's hint shows past the cell.
+      className={`${WIDTH_CLASS.name} flex items-center gap-2 ${editing ? "" : "overflow-hidden"} ${first ? "" : "pl-2"}`}
     >
       {icon ? (
         <img
@@ -98,9 +105,14 @@ function NameCell({
       ) : (
         <span data-item className="size-4 shrink-0" />
       )}
-      <span data-item className={`truncate ${dimmed}`}>
-        {nameText(name, folder, showExtensions)}
-      </span>
+      {editing ? (
+        <RenameField folder={folder} />
+      ) : (
+        // `data-name`: a slow second click here renames.
+        <span data-item data-name className={`truncate ${dimmed}`}>
+          {nameText(name, folder, showExtensions)}
+        </span>
+      )}
     </div>
   );
 }

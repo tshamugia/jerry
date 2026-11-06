@@ -3,7 +3,9 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   memo,
+  type PointerEvent,
   type RefObject,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -16,7 +18,7 @@ import { lookup } from "../../commands/keymap";
 import { isEnabled } from "../../commands/registry";
 import { type Density, entryIconUrl, IconKey } from "../../ipc";
 import { shownColumns } from "../../stores/columns";
-import { useFolder } from "../../stores/folder";
+import { type Folder, useFolder } from "../../stores/folder";
 import { useKeymap } from "../../stores/keymap";
 import { useSetting } from "../../stores/settings";
 import type { Tab } from "../../stores/tabs";
@@ -24,6 +26,7 @@ import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
 import { openItems } from "../navigation/open";
 import { nothingFocused } from "../navigation/panes";
+import { beginRename, cancelRename, useRename } from "../rename/rename";
 import { selectionOf } from "../selection/commands";
 import {
   clickRow,
@@ -49,6 +52,11 @@ const ICON_PX = 16;
 const LOADING_DELAY_MS = 200;
 /** Comfortable rows, if the density token can't be read (tests). */
 const FALLBACK_ROW_PX = 30;
+/**
+ * A second click on a selected name renames it once this has passed without a third: Windows'
+ * double-click time, as Explorer waits it out.
+ */
+const SLOW_CLICK_MS = 500;
 
 /**
  * A pane's file list in the Details view: the column header and a virtualized list of rows with
@@ -58,8 +66,9 @@ const FALLBACK_ROW_PX = 30;
  * End, PageUp and PageDown (Shift selects a range, Ctrl moves only the focus) and by typing the
  * first letters of a name. A double click (or a single one, by the "click to open" setting)
  * opens the row: a folder in the tab, a file in its program; a middle click opens a folder in a
- * new tab. The list shows `tab`'s folder and keeps its scroll position for when the tab shows
- * again; the pane mounts one per tab shown (`key`).
+ * new tab. A slow second click on the name of the one selected row renames it, as F2 does (the
+ * field stays in the list while it scrolls). The list shows `tab`'s folder and keeps its scroll
+ * position for when the tab shows again; the pane mounts one per tab shown (`key`).
  */
 export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: PaneSide }) {
   const { folder } = tab;
@@ -128,6 +137,17 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   const typeAhead = useMemo(() => new TypeAhead(), []);
   const rowIds = useId();
 
+  // The entry being renamed here, and where it is among the rows.
+  const editing = useRename((state) =>
+    state.editing?.folder === folder ? state.editing.id : undefined,
+  );
+  const editingAt = useMemo(
+    () => (editing === undefined ? undefined : indexOf(rows, editing)),
+    [rows, editing],
+  );
+  useRenameEnd(scroller, editing, editingAt);
+  const slowClick = useSlowClick(folder, activePane, clickToOpen === "double");
+
   /** The rows wholly in view: under the header, above the bottom edge. */
   const page = (): Page => {
     const view = scroller.current;
@@ -173,12 +193,14 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
     if (scrollTo.kind === "top") {
       view.scrollTop = scrollTo.top;
     } else {
-      center(rows.indexOf(scrollTo.id));
+      const at = indexOf(rows, scrollTo.id);
+      if (at !== undefined) center(at);
     }
     folder.scrolled();
   }, [folder, scrollTo, rows]);
 
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    slowClick.cancel();
     // The list's own keys work while it has the focus, not a header button in it.
     if (
       event.defaultPrevented ||
@@ -226,13 +248,17 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   const click = (event: MouseEvent) => {
     const id = rowAt(event);
     if (pointer.wasDrag(event) || id === undefined || event.ctrlKey || event.shiftKey) {
+      slowClick.cancel();
       return;
     }
     if (clickToOpen === "single") {
       openItems(pane, tab, [id]);
+    } else {
+      slowClick.clicked(id, event.detail);
     }
   };
   const doubleClick = (event: MouseEvent) => {
+    slowClick.cancel();
     const id = rowAt(event);
     if (id !== undefined && clickToOpen === "double") {
       openItems(pane, tab, [id]);
@@ -270,6 +296,11 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   const items = virtualizer.getVirtualItems();
   const focusShown = items.some((item) => rows[item.index] === focused);
   const { rect } = pointer;
+  // The row being renamed stays, scrolled out of view or not, so its field keeps the typing.
+  const shown = items.map((item) => ({ index: item.index, top: item.start - margin }));
+  if (editingAt !== undefined && !items.some((item) => item.index === editingAt)) {
+    shown.push({ index: editingAt, top: editingAt * rowHeight });
+  }
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
@@ -294,6 +325,10 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
         // No autoscroll on a middle press: it opens a folder in a new tab.
         onMouseDown={(event) => event.button === 1 && event.preventDefault()}
         {...pointer.handlers}
+        onPointerDown={(event) => {
+          slowClick.pressed(event);
+          pointer.handlers.onPointerDown(event);
+        }}
         onScroll={() => {
           folder.scrollTop = scroller.current?.scrollTop ?? 0;
           pointer.handlers.onScroll();
@@ -312,7 +347,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
             className="relative mt-1 shrink-0"
             style={{ height: virtualizer.getTotalSize() }}
           >
-            {items.map((item) => {
+            {shown.map((item) => {
               const id = rows[item.index] ?? 0;
               const key = entries.iconKeys[id] ?? IconKey.file;
               const modified = entries.modified[id] ?? 0;
@@ -322,7 +357,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
                   id={id}
                   idPrefix={rowIds}
                   index={item.index}
-                  top={item.start - margin}
+                  top={item.top}
                   columns={stableColumns}
                   name={entries.names[id] ?? ""}
                   size={entries.sizes[id] ?? 0}
@@ -339,6 +374,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
                   selected={selected.has(id)}
                   focused={focused === id}
                   activePane={activePane}
+                  editing={editing === id}
                 />
               );
             })}
@@ -383,6 +419,73 @@ function useKeyboardHandOver(scroller: RefObject<HTMLDivElement | null>, pane: P
       }
     };
   }, [scroller, pane]);
+}
+
+/**
+ * The end of a rename here gives the keyboard back to the list if the field had it, and an entry
+ * the list no longer shows (filtered out, hidden) stops being renamed.
+ */
+function useRenameEnd(
+  scroller: RefObject<HTMLDivElement | null>,
+  editing: number | undefined,
+  at: number | undefined,
+): void {
+  useEffect(() => {
+    if (editing !== undefined && at === undefined) {
+      cancelRename();
+    }
+  }, [editing, at]);
+  const was = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const ended = was.current !== undefined && editing === undefined;
+    was.current = editing;
+    if (ended && nothingFocused()) {
+      scroller.current?.focus({ preventScroll: true });
+    }
+  }, [scroller, editing]);
+}
+
+/**
+ * Explorer's slow double click: a press on the name of the one selected row, which has the focus,
+ * in the active pane, then no second click within `SLOW_CLICK_MS`, renames it. Keys, a double
+ * click or another press call it off.
+ */
+function useSlowClick(folder: Folder, activePane: boolean, enabled: boolean) {
+  const armed = useRef<number | undefined>(undefined);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const cancel = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = undefined;
+  }, []);
+  useEffect(() => cancel, [cancel]);
+  const alone = (id: number) => {
+    const { selected, focused } = folder.store.getState();
+    return focused === id && selected.size === 1 && selected.has(id);
+  };
+  return {
+    cancel,
+    pressed(event: PointerEvent) {
+      cancel();
+      armed.current = undefined;
+      const target = event.target as Element;
+      const row = target.closest<HTMLElement>("[data-id]");
+      const plain = event.button === 0 && !event.ctrlKey && !event.shiftKey && !event.altKey;
+      if (enabled && activePane && plain && row && target.closest("[data-name]")) {
+        const id = Number(row.dataset.id);
+        armed.current = alone(id) ? id : undefined;
+      }
+    },
+    clicked(id: number, clicks: number) {
+      const was = armed.current;
+      armed.current = undefined;
+      if (was === id && clicks === 1) {
+        timer.current = setTimeout(() => {
+          timer.current = undefined;
+          if (alone(id)) beginRename(folder, id);
+        }, SLOW_CLICK_MS);
+      }
+    },
+  };
 }
 
 /** Whether a key press runs a command where it lands ("?" opens the shortcut table). */

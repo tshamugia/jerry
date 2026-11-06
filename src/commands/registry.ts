@@ -20,6 +20,15 @@ import {
   toggleDualPane,
 } from "../features/navigation/panes";
 import {
+  canCreateFolder,
+  cancelRename,
+  canRename,
+  isRenaming,
+  newFolder,
+  saveRename,
+  startRename,
+} from "../features/rename/rename";
+import {
   clearSelection,
   invertSelection,
   selectAllRows,
@@ -265,9 +274,23 @@ export const COMMANDS: readonly Command[] = [
   { id: "clearSelection", group: "selection", keys: ["Esc"], context: "list", run: clearSelection },
 
   // Files.
-  { id: "newFolder", group: "files", keys: ["Ctrl+Shift+N"], context: "list" },
+  {
+    id: "newFolder",
+    group: "files",
+    keys: ["Ctrl+Shift+N"],
+    context: "list",
+    enabled: canCreateFolder,
+    run: () => void newFolder(),
+  },
   { id: "newFile", group: "files", keys: ["Ctrl+Alt+N"], context: "list" },
-  { id: "rename", group: "files", keys: ["F2"], context: "list" },
+  {
+    id: "rename",
+    group: "files",
+    keys: ["F2"],
+    context: "list",
+    enabled: canRename,
+    run: startRename,
+  },
   { id: "duplicate", group: "files", keys: ["Ctrl+D"], context: "list" },
   {
     id: "recycle",
@@ -290,9 +313,30 @@ export const COMMANDS: readonly Command[] = [
   { id: "copyName", group: "files", keys: ["Ctrl+Alt+C"], context: "list" },
 
   // Inline rename (PRD «ფაილური ოპერაციები»).
-  { id: "renameSave", group: "rename", keys: ["Enter"], context: "rename" },
-  { id: "renameCancel", group: "rename", keys: ["Esc"], context: "rename" },
-  { id: "renameNext", group: "rename", keys: ["Tab"], context: "rename" },
+  {
+    id: "renameSave",
+    group: "rename",
+    keys: ["Enter"],
+    context: "rename",
+    enabled: isRenaming,
+    run: () => void saveRename("close"),
+  },
+  {
+    id: "renameCancel",
+    group: "rename",
+    keys: ["Esc"],
+    context: "rename",
+    enabled: isRenaming,
+    run: cancelRename,
+  },
+  {
+    id: "renameNext",
+    group: "rename",
+    keys: ["Tab"],
+    context: "rename",
+    enabled: isRenaming,
+    run: () => void saveRename("next"),
+  },
 
   // Clipboard.
   { id: "copy", group: "clipboard", keys: ["Ctrl+C"], context: "list" },
