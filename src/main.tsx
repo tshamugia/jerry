@@ -4,6 +4,7 @@ import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
 import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
+import { syncFavorites } from "./features/sidebar/favorites";
 import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
@@ -32,6 +33,7 @@ const unsubscribe = useSettings.subscribe(({ settings }) => {
 syncAppearance();
 syncClipboard();
 syncSidebar();
+syncFavorites();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

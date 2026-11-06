@@ -6,6 +6,7 @@ pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
 pub mod drives;
+pub mod favorites;
 pub mod icons;
 pub mod ipc;
 pub mod jobs;
@@ -103,6 +104,17 @@ macro_rules! commands {
             drives::network_place_add,
             drives::network_place_remove,
             drives::recycle_bin_open,
+            favorites::favorites_list,
+            favorites::favorites_add,
+            favorites::favorites_rename,
+            favorites::favorites_remove,
+            favorites::favorites_move,
+            favorites::favorites_group_add,
+            favorites::favorites_group_rename,
+            favorites::favorites_group_remove,
+            favorites::favorites_group_move,
+            favorites::favorites_check,
+            favorites::recent_folders_list,
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,
@@ -137,7 +149,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             clipboard::ClipboardChanged,
             window::AppearanceChanged,
             drives::DrivesChanged,
-            drives::NetworkPlacesChanged
+            drives::NetworkPlacesChanged,
+            favorites::FavoritesChanged,
+            favorites::RecentFoldersChanged
         ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
@@ -162,6 +176,7 @@ pub fn run() -> tauri::Result<()> {
     }
     // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
     let db = storage::Db::open(storage::db_path());
+    let recent = favorites::Recent::new(db.clone());
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -173,8 +188,8 @@ pub fn run() -> tauri::Result<()> {
     let app = tauri::Builder::default()
         .manage(db.clone())
         .manage(listing::Listings::new({
-            let db = db.clone();
-            move |folder| db.visit_folder(folder)
+            let recent = recent.clone();
+            move |folder| recent.visit(folder)
         }))
         .manage(delete::Deleting::default())
         .manage(jerry_win::icons::Icons::new())
@@ -192,6 +207,7 @@ pub fn run() -> tauri::Result<()> {
             }
             clipboard::watch(app.handle());
             app.manage(drives::Drives::start(app.handle()));
+            recent.attach(app.handle());
 
             // The window gets its theme and Mica at creation, so it needs the settings now.
             let waited = Instant::now();

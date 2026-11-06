@@ -252,6 +252,16 @@ export function SectionIcon({ folded }: { folded: boolean }) {
   );
 }
 
+/** Recent folders: a clock. */
+export function RecentIcon() {
+  return (
+    <Icon>
+      <circle cx="8" cy="8" r="6.2" />
+      <path d="M8 4.5V8l2.3 1.5" />
+    </Icon>
+  );
+}
+
 /** Eject: a triangle over a bar. */
 export function EjectIcon() {
   return (

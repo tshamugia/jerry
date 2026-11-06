@@ -1,24 +1,32 @@
-import {
-  type ComponentProps,
-  type KeyboardEvent,
-  type MouseEvent,
-  memo,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import { createStore, useStore } from "zustand";
+import { memo, useEffect, useRef, useState } from "react";
 import { commandById, isEnabled, runCommand } from "../../commands/registry";
 import { type Drive, driveIconUrl, type NetworkPlace, type Place, placeIconUrl } from "../../ipc";
 import { useCommandLabel } from "../../stores/keymap";
-import { type TabState, useActiveTab } from "../../stores/tabs";
-import { useWindow } from "../../stores/window";
 import { errorText, sizeText, strings } from "../../strings";
 import { ContextMenu, MenuItem } from "../../ui/ContextMenu";
 import { Dialog } from "../../ui/Dialog";
 import { IconButton } from "../../ui/IconButton";
-import { EjectIcon, PlusIcon, SectionIcon, SettingsIcon, SidebarIcon } from "../../ui/icons";
+import { EjectIcon, PlusIcon, SettingsIcon, SidebarIcon } from "../../ui/icons";
+import {
+  FavoriteExplained,
+  FavoritesFailed,
+  FavoritesSection,
+  RecentSection,
+} from "./FavoritesSection";
+import {
+  BUTTON,
+  Caption,
+  folderKey,
+  ITEM,
+  ITEM_LOOK,
+  ItemIcon,
+  moveFocus,
+  NavItem,
+  openHandlers,
+  Pill,
+  Separator,
+  useCurrentPath,
+} from "./items";
 import {
   addNetworkPlace,
   dismissEjectFailed,
@@ -28,11 +36,9 @@ import {
   openPlace,
   openRecycleBin,
   removeNetworkPlace,
-  type Section,
   splitDrives,
   startAdding,
   stopAdding,
-  toggleSection,
   toggleSidebar,
   usedShare,
   useSidebar,
@@ -40,18 +46,10 @@ import {
 
 const t = strings.sidebar;
 
-/** Every item that opens something, for the arrow keys. */
-const ITEM = "data-nav-item";
-
-const BUTTON = "h-8 rounded-ctrl border border-ctrl-border bg-ctrl px-3 text-fg hover:bg-hover";
-
-const ITEM_LOOK =
-  "relative flex w-full min-w-0 items-center gap-2.5 rounded-ctrl px-2 text-left hover:bg-hover";
-
 /**
- * The sidebar, as the design draws it on Mica: the top row (hide the sidebar, settings), the
- * standard places, Drives with their free space, Network (mapped drives and the locations the
- * user added) and Recycle Bin. Favorites and recent folders come with #35. A click opens the
+ * The sidebar, as the design draws it on Mica: the top row (hide the sidebar, settings),
+ * Favorites with their groups, Recent, the standard places, Drives with their free space,
+ * Network (mapped drives and the locations the user added) and Recycle Bin. A click opens the
  * place in the active pane's tab, Ctrl+click or a middle click in a new tab; the item of the
  * folder the active tab shows is selected. Up and Down move between the items.
  */
@@ -84,11 +82,14 @@ export const Sidebar = memo(function Sidebar() {
         </IconButton>
       </div>
       <div data-nav-items className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pb-2">
+        <FavoritesSection current={current} />
+        <RecentSection />
+        <Separator />
         {places.map((place) => (
           <NavItem
             key={place.place}
             path={place.path}
-            icon={placeIconUrl(place.place, 16)}
+            icon={<ItemIcon src={placeIconUrl(place.place, 16)} />}
             label={place.name ?? t.places[place.place]}
             selected={selected(place.path)}
           />
@@ -136,123 +137,11 @@ export const Sidebar = memo(function Sidebar() {
         <RecycleBinItem />
       </div>
       <EjectFailed />
+      <FavoriteExplained />
+      <FavoritesFailed />
     </nav>
   );
 });
-
-/** A path as the sidebar compares folders: case-blind, without a trailing backslash. */
-function folderKey(path: string | undefined): string | undefined {
-  return path?.replace(/\\+$/, "").toLowerCase();
-}
-
-const NO_TAB = createStore<TabState>(() => ({ history: [], index: -1 }));
-
-/** The folder the active pane's tab shows, as display text. */
-function useCurrentPath(): string | undefined {
-  const pane = useWindow((state) => state.activePane);
-  const tab = useActiveTab(pane);
-  return useStore(tab?.store ?? NO_TAB, (state) => state.history[state.index]?.path);
-}
-
-/** Opens on a click: in the tab, or with Ctrl in a new one. A middle click opens a new tab. */
-function openHandlers(path: string) {
-  return {
-    onClick: (event: MouseEvent) => openPlace(path, event.ctrlKey),
-    // No autoscroll on the middle button.
-    onMouseDown: (event: MouseEvent) => event.button === 1 && event.preventDefault(),
-    onAuxClick: (event: MouseEvent) => event.button === 1 && openPlace(path, true),
-    onKeyDown: (event: KeyboardEvent<HTMLElement>) => {
-      if (event.key === "Enter" && event.ctrlKey) {
-        event.preventDefault();
-        openPlace(path, true);
-      } else {
-        moveFocus(event);
-      }
-    },
-  };
-}
-
-/** An item of one line. Other props (a context menu's trigger props, its ref) go to the button. */
-function NavItem({
-  path,
-  icon,
-  label,
-  detail,
-  title,
-  selected,
-  ...rest
-}: Omit<ComponentProps<"button">, "title"> & {
-  path: string;
-  icon: string;
-  label: string;
-  /** Small text at the end: a network location's server. */
-  detail?: string;
-  title?: string;
-  selected: boolean;
-}) {
-  return (
-    <button
-      {...rest}
-      type="button"
-      {...{ [ITEM]: "" }}
-      title={title ?? path}
-      aria-current={selected ? "location" : undefined}
-      className={`${ITEM_LOOK} h-nav shrink-0 ${selected ? "bg-nav-sel" : ""}`}
-      {...openHandlers(path)}
-    >
-      {selected && <Pill />}
-      <ItemIcon src={icon} />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      {detail && <span className="shrink-0 text-caption text-fg-3">{detail}</span>}
-    </button>
-  );
-}
-
-/** The 3 × 16 px accent pill on the selected item's left edge. */
-function Pill() {
-  return (
-    <span className="absolute top-1/2 left-0 z-10 h-4 w-0.75 -translate-y-1/2 rounded-bar bg-accent" />
-  );
-}
-
-function ItemIcon({ src }: { src: string }) {
-  return (
-    <img src={src} alt="" width={16} height={16} draggable={false} className="size-4 shrink-0" />
-  );
-}
-
-function Separator() {
-  return <div className="mx-2 my-1 h-px shrink-0 bg-stroke" />;
-}
-
-/** A section's caption: a click folds or unfolds it. */
-function Caption({
-  section,
-  label,
-  folded,
-  action,
-}: {
-  section: Section;
-  label: string;
-  folded: boolean;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex h-section shrink-0 items-center gap-1">
-      <button
-        type="button"
-        aria-expanded={!folded}
-        aria-label={folded ? t.showSection(label) : t.hideSection(label)}
-        onClick={() => toggleSection(section)}
-        className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-ctrl px-2 font-semibold text-fg-2 text-small hover:bg-hover"
-      >
-        <SectionIcon folded={folded} />
-        <span className="truncate">{label}</span>
-      </button>
-      {action}
-    </div>
-  );
-}
 
 function driveName(drive: Drive): string {
   return t.driveName(drive.letter, drive.kind, drive.label);
@@ -275,8 +164,8 @@ function DriveItem({ drive, selected }: { drive: Drive; selected: boolean }) {
         {...{ [ITEM]: "" }}
         title={space ? t.driveDetails(name, sizeText(space.free), sizeText(space.total)) : root}
         aria-current={selected ? "location" : undefined}
-        className={`${ITEM_LOOK} items-start py-drive-pad`}
-        {...openHandlers(root)}
+        className={`${ITEM_LOOK} items-start px-2 py-drive-pad`}
+        {...openHandlers((newTab) => openPlace(root, newTab))}
       >
         <ItemIcon src={driveIconUrl(drive.letter, 16)} />
         <span className="flex min-w-0 flex-1 flex-col gap-1">
@@ -318,7 +207,7 @@ function NetworkDriveItem({ drive, selected }: { drive: Drive; selected: boolean
   return (
     <NavItem
       path={driveRoot(drive.letter)}
-      icon={driveIconUrl(drive.letter, 16)}
+      icon={<ItemIcon src={driveIconUrl(drive.letter, 16)} />}
       label={name}
       detail={server}
       title={drive.connected ? (drive.remote ?? undefined) : t.disconnected(drive.remote ?? name)}
@@ -341,7 +230,7 @@ function NetworkPlaceItem({ place, selected }: { place: NetworkPlace; selected: 
     >
       <NavItem
         path={place.path}
-        icon={placeIconUrl("share" satisfies Place, 16)}
+        icon={<ItemIcon src={placeIconUrl("share" satisfies Place, 16)} />}
         label={place.name}
         detail={place.server}
         selected={selected}
@@ -415,7 +304,7 @@ function RecycleBinItem() {
     <button
       type="button"
       {...{ [ITEM]: "" }}
-      className={`${ITEM_LOOK} h-nav shrink-0`}
+      className={`${ITEM_LOOK} h-nav shrink-0 px-2`}
       onClick={openRecycleBin}
       onKeyDown={moveFocus}
     >
@@ -450,22 +339,4 @@ function EjectFailed() {
       </div>
     </Dialog>
   );
-}
-
-/** Up and Down (Home, End) on an item move the focus between the sidebar's items. */
-function moveFocus(event: KeyboardEvent<HTMLElement>): void {
-  const step = { ArrowDown: 1, ArrowUp: -1 }[event.key];
-  const edge = { Home: 0, End: -1 }[event.key];
-  const list = event.currentTarget.closest("[data-nav-items]");
-  if ((step === undefined && edge === undefined) || !list) {
-    return;
-  }
-  const items = [...list.querySelectorAll<HTMLElement>(`[${ITEM}]`)];
-  const at = items.indexOf(event.currentTarget);
-  if (at < 0) {
-    return;
-  }
-  event.preventDefault();
-  const next = step !== undefined ? at + step : edge === 0 ? 0 : items.length - 1;
-  items[Math.max(0, Math.min(items.length - 1, next))]?.focus();
 }

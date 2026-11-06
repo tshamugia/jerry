@@ -8,6 +8,7 @@ pub mod create;
 pub mod delete;
 pub mod drives;
 pub mod error;
+pub mod favorites;
 pub mod job;
 pub mod listing;
 pub mod name;

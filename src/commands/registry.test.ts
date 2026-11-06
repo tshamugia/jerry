@@ -203,7 +203,10 @@ describe("the shortcut table", () => {
       {
         group: "other",
         title: "Other",
-        rows: [{ id: "shortcuts", title: "Keyboard shortcuts", keys: ["F1", "?"] }],
+        rows: [
+          { id: "addFavorite", title: "Add to favorites", keys: ["Ctrl+Shift+D"] },
+          { id: "shortcuts", title: "Keyboard shortcuts", keys: ["F1", "?"] },
+        ],
       },
     ]);
   });
@@ -342,6 +345,12 @@ describe("the shortcut table", () => {
         group: "search",
         title: "Search",
         rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
+      },
+      // Keyboard shortcuts is left out: its only shortcut was removed.
+      {
+        group: "other",
+        title: "Other",
+        rows: [{ id: "addFavorite", title: "Add to favorites", keys: ["Ctrl+Shift+D"] }],
       },
     ]);
   });
