@@ -4,10 +4,13 @@ import {
   HEADER_BYTES,
   type JerryError,
   messageHeader,
+  type Startup,
   stream,
   type Theme,
 } from "../../ipc";
 import { setSetting, useSettings } from "../../stores/settings";
+import { activeTab } from "../../stores/tabs";
+import { useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
 import { DevButton } from "./DevButton";
 import { DevListing } from "./DevListing";
@@ -72,10 +75,28 @@ export function DevPanel() {
         >
           {strings.dev.toggleDualPane}
         </DevButton>
+        <DevButton onClick={run(() => saved(toggleStartFolder(settings?.startup)))}>
+          {strings.dev.toggleStartFolder}
+        </DevButton>
+        <DevButton
+          onClick={run(() =>
+            saved(setSetting("rememberFolderViews", !(settings?.rememberFolderViews ?? true))),
+          )}
+        >
+          {strings.dev.toggleFolderViews}
+        </DevButton>
       </div>
       <p className="text-small text-fg-2">
         {settings ? strings.dev.settings(settings) : strings.dev.settingsLoading}
       </p>
+      {settings?.startup && (
+        <p className="text-small text-fg-2">
+          {strings.dev.sessionSettings(
+            settings.startup.kind === "folder" ? settings.startup.path : undefined,
+            settings.rememberFolderViews,
+          )}
+        </p>
+      )}
       {result && (
         <p role="status" className="text-small text-fg-2">
           {result}
@@ -83,6 +104,20 @@ export function DevPanel() {
       )}
       <DevListing />
     </section>
+  );
+}
+
+/**
+ * The start place: the active pane's folder (as its path reads), or the previous session again.
+ * The Settings window (#82) will choose it properly.
+ */
+function toggleStartFolder(startup: Startup | undefined) {
+  const path = activeTab(useWindow.getState().activePane)?.current()?.path;
+  return setSetting(
+    "startup",
+    startup?.kind === "folder" || path === undefined
+      ? { kind: "previousSession" }
+      : { kind: "folder", path },
   );
 }
 

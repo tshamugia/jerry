@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Crumb, ListingOpened, ListingTarget, Startup } from "../ipc";
+import type { Crumb, ListingOpened, ListingTarget } from "../ipc";
 import { Folder, type Restore } from "./folder";
 import type { PaneSide } from "./window";
 
@@ -61,8 +61,7 @@ export class Tab {
   ) {
     this.folder = new Folder(id);
     if (from?.look) {
-      this.folder.setSort(from.look.sort);
-      this.folder.setColumns(from.look.columns);
+      this.folder.applyLook(from.look);
     }
     const history = from?.history ?? [];
     const index = Math.min(from?.index ?? history.length - 1, history.length - 1);
@@ -138,6 +137,60 @@ export class Tab {
   /** Ctrl+R: the same folder, read again, keeping the selection and the scroll position. */
   refresh(): void {
     void this.folder.refresh();
+  }
+
+  /**
+   * Opens the folder shown, as a restored tab does (#42), focusing the entry focused when it was
+   * left. If the folder no longer exists, the tab goes to the nearest folder that does, in its
+   * place in the history, and calls `moved` with the folder that went away and the one shown.
+   */
+  restore(moved?: (gone: HistoryEntry, shown: HistoryEntry) => void): void {
+    const entry = this.current();
+    if (!entry) {
+      return;
+    }
+    const mine = ++this.navigation;
+    const stop = this.folder.listen((message) => {
+      if (message.kind !== "done" && message.kind !== "error") {
+        return;
+      }
+      stop();
+      if (
+        message.kind === "error" &&
+        message.error.code === "NotFound" &&
+        mine === this.navigation
+      ) {
+        void this.openNearest(entry, moved);
+      }
+    });
+    void this.folder
+      .open({ kind: "folder", folder: entry.folder }, { focus: entry.focus })
+      .then((opened) => {
+        if (!opened) stop();
+      });
+  }
+
+  /** The nearest folder to `gone` that still exists, in its place in the history. */
+  private async openNearest(
+    gone: HistoryEntry,
+    moved?: (gone: HistoryEntry, shown: HistoryEntry) => void,
+  ): Promise<void> {
+    const mine = ++this.navigation;
+    const opened = await this.folder.open({ kind: "nearest", folder: gone.folder });
+    if (!opened || mine !== this.navigation) {
+      return;
+    }
+    const shown = entryOf(opened);
+    const { history, index } = this.store.getState();
+    // Gone from the folder it was opened from: that one is already the step before.
+    this.store.setState(
+      history[index - 1]?.folder === shown.folder
+        ? { history: history.toSpliced(index, 1), index: index - 1 }
+        : { history: history.with(index, shown) },
+    );
+    if (shown.folder !== gone.folder) {
+      moved?.(gone, shown);
+    }
   }
 
   /** Stops the tab's listing. */
@@ -242,18 +295,22 @@ function insertAt(tabs: readonly PaneTab[], index: number, tab: PaneTab): PaneTa
 
 /**
  * Adds a tab to `pane` at `index` (default: the end) and returns it; `activate` shows it. The
- * caller opens its folder.
+ * caller opens its folder. A restored tab keeps its `id` (its listing may have started already);
+ * others get the next one.
  */
 export function addTab(
   pane: PaneSide,
   options: {
+    id?: number;
     index?: number;
     activate?: boolean;
     pinned?: boolean;
     from?: ConstructorParameters<typeof Tab>[1];
   } = {},
 ): Tab {
-  const tab = new Tab(++lastId, options.from);
+  const id = options.id ?? lastId + 1;
+  lastId = Math.max(lastId, id);
+  const tab = new Tab(id, options.from);
   registry.set(tab.id, tab);
   const current = useTabs.getState()[pane];
   const entry = { id: tab.id, pinned: options.pinned ?? false };
@@ -438,20 +495,6 @@ export function showTabNumber(pane: PaneSide, n: number): void {
   const tab = n === 9 ? tabs.at(-1) : tabs[n - 1];
   if (tab) {
     activateTab(pane, tab.id);
-  }
-}
-
-/**
- * Gives each pane its first tab, on the startup folder from the settings, or the user's own
- * folder until the session comes back (#42). Does nothing once a pane has tabs.
- */
-export function startTabs(startup: Startup): void {
-  const target: ListingTarget =
-    startup.kind === "folder" ? { kind: "path", path: startup.path } : { kind: "home" };
-  for (const pane of ["left", "right"] as const) {
-    if (useTabs.getState()[pane].tabs.length === 0) {
-      void addTab(pane, { activate: true }).open(target);
-    }
   }
 }
 

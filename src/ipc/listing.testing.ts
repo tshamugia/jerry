@@ -66,6 +66,7 @@ export function fakeListings({
         folder: 100 + id,
         parent: null,
         crumbs: [{ name, folder: 100 + id }],
+        look: { kind: "tab" },
       };
       return { ...answer, ...opened(payload.target as ListingTarget, id) };
     }

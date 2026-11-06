@@ -7,6 +7,7 @@ import {
   type ListingMessage,
   type ListingOpened,
   type ListingTarget,
+  type Look,
   type OpenListing,
   openListing,
   type Sort,
@@ -87,6 +88,24 @@ const DEFAULT_SORT: Sort = { column: "name", descending: false, foldersFirst: tr
 const sameSort = (a: Sort, b: Sort) =>
   a.column === b.column && a.descending === b.descending && a.foldersFirst === b.foldersFirst;
 
+/**
+ * A folder's view is remembered this long after the user's last change to its sort or columns,
+ * so dragging a column's edge saves once. Leaving the folder saves it at once.
+ */
+export const REMEMBER_VIEW_MS = 500;
+
+/** The sort and columns a look gives a tab; nothing for a tab that keeps its own. */
+export function lookOf(look: Look): Pick<FolderState, "sort" | "columns"> | undefined {
+  switch (look.kind) {
+    case "tab":
+      return undefined;
+    case "default":
+      return { sort: look.sort, columns: DEFAULT_COLUMNS };
+    case "saved":
+      return { sort: look.view.sort, columns: look.view.columns };
+  }
+}
+
 /** What a folder view shows before it has a folder, and right when it opens one. */
 function emptyFolder() {
   return {
@@ -107,8 +126,9 @@ function emptyFolder() {
  * One tab's folder view: its live listing (`listing_open`), sort, columns, quick filter,
  * selection and scroll position. Messages from the core go into the store as they arrive: rows
  * show batch by batch, then in the core's order, and follow every change in the folder. Every
- * tab has one (`Tab.folder`, `src/stores/tabs.ts`), which keeps its sort, columns and scroll as
- * the tab goes from folder to folder.
+ * tab has one (`Tab.folder`, `src/stores/tabs.ts`). A folder it opens comes with its look (#42):
+ * with views remembered per folder, the folder's own sort and columns (or the defaults), which
+ * the user's changes update; otherwise the tab keeps its sort and columns from folder to folder.
  */
 export class Folder {
   readonly store: StoreApi<FolderState>;
@@ -121,6 +141,14 @@ export class Folder {
   /** Counts opens, so messages and answers for an earlier folder are dropped. */
   private generation = 0;
   private target: ListingTarget | undefined;
+  /** The folder shown, as the core's token, once it has answered. */
+  private folder: number | undefined;
+  /** The core hasn't answered the open yet: an order for the folder's own sort may come first. */
+  private waiting = false;
+  /** A sort was asked for since the open began: it wins over the folder's own. */
+  private sortAsked = false;
+  /** The user changed the view of folder `folder`; it is remembered when `timer` fires. */
+  private unsaved: { folder: number; timer: ReturnType<typeof setTimeout> } | undefined;
   private readonly listeners = new Set<(message: ListingMessage) => void>();
   private shownCache:
     | { key: readonly unknown[]; showHidden: boolean; shown: ShownRows }
@@ -145,12 +173,17 @@ export class Folder {
    * it failed (the list shows why) or another open came after this one.
    */
   async open(target: ListingTarget, restore?: Restore): Promise<ListingOpened | undefined> {
+    // The folder left keeps the view the user just gave it.
+    this.rememberView();
     const previous = this.current;
     this.current = undefined;
+    this.folder = undefined;
     const mine = ++this.generation;
     this.target = target;
     this.restore = restore;
     this.scrollTop = 0;
+    this.waiting = true;
+    this.sortAsked = false;
     const { sort, version } = this.store.getState();
     this.store.setState({
       ...emptyFolder(),
@@ -169,6 +202,7 @@ export class Folder {
       }
       if (mine === this.generation) {
         this.restore = undefined;
+        this.waiting = false;
         this.store.setState({ status: "failed", error: result.error });
       }
       return undefined;
@@ -177,15 +211,24 @@ export class Folder {
       void result.data.close();
       return undefined;
     }
+    this.waiting = false;
     this.current = result.data;
-    this.store.setState({ listing: result.data.id, path: result.data.path });
+    this.folder = result.data.folder;
+    // The folder's own look, unless the tab keeps its own; a sort asked for meanwhile wins.
+    const look = lookOf(result.data.look);
+    const started = look?.sort ?? sort;
+    this.store.setState({
+      listing: result.data.id,
+      path: result.data.path,
+      ...(look && (this.sortAsked ? { columns: look.columns } : look)),
+    });
     // A sort asked for before the core answered: the stream's order follows it from now on.
     const wanted = this.store.getState().sort;
-    if (!sameSort(wanted, sort)) {
+    if (!sameSort(wanted, started)) {
       void result.data.sort(wanted);
     }
     const { id, path, name, folder, parent, crumbs } = result.data;
-    return { id, path, name, folder, parent, crumbs };
+    return { id, path, name, folder, parent, crumbs, look: result.data.look };
   }
 
   /**
@@ -221,7 +264,10 @@ export class Folder {
     }
   }
 
-  /** Like a column header: a new column sorts ascending, the sorted one flips direction. */
+  /**
+   * Like a column header: a new column sorts ascending, the sorted one flips direction. The
+   * folder remembers it (with views remembered per folder).
+   */
   sortBy(column: SortColumn): void {
     const { sort } = this.store.getState();
     this.setSort({
@@ -229,6 +275,7 @@ export class Folder {
       column,
       descending: column === sort.column ? !sort.descending : false,
     });
+    this.viewChanged();
   }
 
   /** Follows the "Folders before files" setting. */
@@ -240,12 +287,24 @@ export class Folder {
   }
 
   setSort(sort: Sort): void {
+    this.sortAsked = true;
     this.store.setState({ sort });
     // Without a listing yet, `open` passes it on once the core answers.
     void this.current?.sort(sort);
   }
 
+  /** The user's columns: shown, hidden, moved or resized. The folder remembers them. */
   setColumns(columns: ColumnLayout): void {
+    this.store.setState({ columns });
+    this.viewChanged();
+  }
+
+  /**
+   * Takes a sort and columns without remembering them for the folder: a new tab's from the one it
+   * opened from, a restored tab's.
+   */
+  applyLook({ sort, columns }: Pick<FolderState, "sort" | "columns">): void {
+    this.setSort(sort);
     this.store.setState({ columns });
   }
 
@@ -320,6 +379,8 @@ export class Folder {
 
   /** Stops the listing: the view shows no folder. */
   close(): void {
+    this.rememberView();
+    this.folder = undefined;
     this.generation += 1;
     void this.current?.close();
     this.current = undefined;
@@ -331,6 +392,41 @@ export class Folder {
   listen(listener: (message: ListingMessage) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** The user changed the folder's sort or columns: remember them once the changes settle. */
+  private viewChanged(): void {
+    const folder = this.folder;
+    if (folder === undefined) {
+      return;
+    }
+    if (this.unsaved) {
+      clearTimeout(this.unsaved.timer);
+    }
+    this.unsaved = { folder, timer: setTimeout(() => this.rememberView(), REMEMBER_VIEW_MS) };
+  }
+
+  /**
+   * Remembers the view the user gave the folder shown, if one waits: the core keeps it while
+   * views are remembered per folder. v0.1 shows only Details (List and Grid come in v0.3).
+   */
+  private rememberView(): void {
+    const unsaved = this.unsaved;
+    if (!unsaved) {
+      return;
+    }
+    clearTimeout(unsaved.timer);
+    this.unsaved = undefined;
+    const { sort, columns } = this.store.getState();
+    void commands.folderViewSave(unsaved.folder, {
+      view: "details",
+      sort,
+      columns: {
+        order: [...columns.order],
+        hidden: [...columns.hidden],
+        widths: { ...columns.widths },
+      },
+    });
   }
 
   private receive(mine: number, message: ListingMessage): void {
@@ -348,6 +444,9 @@ export class Folder {
         // An order for an earlier sort can still be on its way.
         if (sameSort(message.sort, state.sort)) {
           this.store.setState({ order: message.ids, version });
+        } else if (this.waiting && !this.sortAsked) {
+          // The folder's own sort (its look), before the core's answer says so.
+          this.store.setState({ sort: message.sort, order: message.ids, version });
         }
         break;
       case "diff": {

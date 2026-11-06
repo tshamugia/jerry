@@ -1,6 +1,8 @@
+import type { Channel } from "@tauri-apps/api/core";
+import { mockIPC } from "@tauri-apps/api/mocks";
 import { waitFor } from "@testing-library/react";
-import { expect, test } from "vitest";
-import type { Sort } from "../ipc";
+import { expect, test, vi } from "vitest";
+import type { ListingOpened, Look, Sort } from "../ipc";
 import {
   batchMessage,
   diffMessage,
@@ -9,7 +11,8 @@ import {
   fakeListings,
   orderMessage,
 } from "../ipc/listing.testing";
-import { Folder } from "./folder";
+import { DEFAULT_COLUMNS } from "./columns";
+import { Folder, REMEMBER_VIEW_MS } from "./folder";
 
 const BY_NAME: Sort = { column: "name", descending: false, foldersFirst: true };
 const work = { kind: "path", path: String.raw`C:\Work` } as const;
@@ -78,6 +81,26 @@ test("clicking the sorted column again flips it; an order for an earlier sort is
   expect(names(folder)).toEqual(["a.txt", "b.txt"]);
   core.send(orderMessage([0, 1], { column: 3, descending: true }));
   expect(names(folder)).toEqual(["b.txt", "a.txt"]);
+
+  // The folder remembers the user's sort once the clicks settle, or as the tab leaves it.
+  expect(core.calls.some((call) => call.cmd === "folder_view_save")).toBe(false);
+  folder.close();
+  expect(
+    core.calls.filter((call) => call.cmd === "folder_view_save").map((call) => call.args),
+  ).toEqual([
+    {
+      folder: 101,
+      view: {
+        view: "details",
+        sort: { ...BY_NAME, column: "size", descending: true },
+        columns: {
+          order: [...DEFAULT_COLUMNS.order],
+          hidden: [...DEFAULT_COLUMNS.hidden],
+          widths: {},
+        },
+      },
+    },
+  ]);
 });
 
 test("a diff updates entries; removed ones leave the order and the selection at once", async () => {
@@ -267,4 +290,104 @@ test("messages for a folder that was left are dropped", async () => {
   folder.close();
   expect(folder.store.getState()).toMatchObject({ status: "none", listing: undefined });
   expect(core.calls.at(-1)).toMatchObject({ cmd: "listing_close", args: { id: 2 } });
+});
+
+const BY_SIZE: Sort = { column: "size", descending: true, foldersFirst: true };
+const NARROW = { order: [...DEFAULT_COLUMNS.order], hidden: [], widths: { size: 90 } };
+
+test("a folder opens with the look the core gives it: its own view, or the defaults", async () => {
+  let look: Look = { kind: "saved", view: { view: "details", sort: BY_SIZE, columns: NARROW } };
+  const core = fakeListings({ opened: () => ({ look }) });
+  const folder = new Folder(7);
+  folder.applyLook({ sort: BY_NAME, columns: DEFAULT_COLUMNS });
+
+  await folder.open(work);
+  expect(folder.store.getState()).toMatchObject({ sort: BY_SIZE, columns: NARROW });
+  // The core started the listing with the folder's sort: nothing to sort again.
+  expect(core.calls.some((call) => call.cmd === "listing_sort")).toBe(false);
+
+  look = { kind: "default", view: "details", sort: BY_NAME };
+  await folder.open({ kind: "path", path: String.raw`D:\Other` });
+  expect(folder.store.getState()).toMatchObject({ sort: BY_NAME, columns: DEFAULT_COLUMNS });
+
+  // A tab that keeps its own look (views not remembered per folder, or Refresh).
+  folder.applyLook({ sort: BY_SIZE, columns: NARROW });
+  look = { kind: "tab" };
+  await folder.open(work);
+  expect(folder.store.getState()).toMatchObject({ sort: BY_SIZE, columns: NARROW });
+  folder.close();
+});
+
+test("an order for the folder's own sort that comes before the core's answer is shown", async () => {
+  const calls: string[] = [];
+  mockIPC((cmd, args) => {
+    calls.push(cmd);
+    if (cmd !== "listing_open") return null;
+    const stream = (args as { onMessage: Channel<ArrayBuffer> }).onMessage;
+    stream.onmessage(
+      batchMessage(0, [
+        { name: "small.txt", size: 1 },
+        { name: "big.txt", size: 9 },
+      ]),
+    );
+    stream.onmessage(orderMessage([1, 0], { column: 3, descending: true }));
+    stream.onmessage(doneMessage(2, 1, 1));
+    const answer: ListingOpened = {
+      id: 1,
+      path: String.raw`C:\Work`,
+      name: "Work",
+      folder: 5,
+      parent: null,
+      crumbs: [],
+      look: { kind: "saved", view: { view: "details", sort: BY_SIZE, columns: NARROW } },
+    };
+    return answer;
+  });
+  const folder = new Folder(7);
+  await folder.open(work);
+  await waitFor(() => expect(folder.store.getState().status).toBe("ready"));
+  expect(folder.store.getState().sort).toEqual(BY_SIZE);
+  expect(names(folder)).toEqual(["big.txt", "small.txt"]);
+  expect(calls).not.toContain("listing_sort");
+});
+
+test("the user's sort and columns are remembered for the folder once the changes settle", async () => {
+  vi.useFakeTimers();
+  try {
+    const core = fakeListings();
+    const folder = new Folder(7);
+    await folder.open(work);
+    const saves = () => core.calls.filter((call) => call.cmd === "folder_view_save");
+
+    // A column's edge dragged: many changes, one save.
+    for (const px of [100, 120, 140]) {
+      folder.setColumns({ ...DEFAULT_COLUMNS, widths: { modified: px } });
+    }
+    vi.advanceTimersByTime(REMEMBER_VIEW_MS - 1);
+    expect(saves()).toHaveLength(0);
+    vi.advanceTimersByTime(1);
+    expect(saves().map((call) => call.args)).toEqual([
+      {
+        folder: 101,
+        view: {
+          view: "details",
+          sort: BY_NAME,
+          columns: { ...DEFAULT_COLUMNS, widths: { modified: 140 } },
+        },
+      },
+    ]);
+
+    // Leaving the folder saves at once, for the folder left.
+    folder.sortBy("type");
+    await folder.open({ kind: "path", path: String.raw`D:\Other` });
+    expect(saves().at(-1)?.args).toMatchObject({ folder: 101, view: { sort: { column: "type" } } });
+
+    // A look the tab takes isn't the user's: nothing is saved.
+    folder.applyLook({ sort: BY_SIZE, columns: NARROW });
+    vi.advanceTimersByTime(REMEMBER_VIEW_MS);
+    expect(saves()).toHaveLength(2);
+    folder.close();
+  } finally {
+    vi.useRealTimers();
+  }
 });

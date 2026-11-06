@@ -35,8 +35,10 @@ const KEY_CHUNK: usize = 2048;
 /// Entries per parallel work item when packing and unpacking an order.
 const ORDER_CHUNK: usize = 4096;
 
-/// A column the list sorts by.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+/// A column the list sorts by. Ordered as declared, for maps keyed by column.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Type,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum SortColumn {
     #[default]

@@ -3,6 +3,7 @@
 import type { SortColumn } from "../ipc";
 import { deleteStrings } from "./delete";
 import { renameStrings } from "./rename";
+import { sessionStrings } from "./session";
 
 const integer = new Intl.NumberFormat("en-US");
 const decimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
@@ -217,6 +218,8 @@ export const strings = {
   deleting: deleteStrings,
   /** New folder (Ctrl+Shift+N) and inline rename (F2). */
   rename: renameStrings,
+  /** Session restore and its toasts. */
+  session: sessionStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",
@@ -248,6 +251,11 @@ export const strings = {
     nextTheme: "Next theme",
     openWindow: "Open another window",
     toggleDualPane: "Toggle dual pane",
+    /** Session restore (#42) until the Settings window (#82). */
+    toggleStartFolder: "Start here / previous session",
+    toggleFolderViews: "Toggle folder views",
+    sessionSettings: (startFolder: string | undefined, folderViews: boolean) =>
+      `Start: ${startFolder ?? "previous session"}. Views ${folderViews ? "per folder" : "per tab"}.`,
     settingsLoading: "Settings: loading…",
     settings: (settings: {
       showHidden: boolean;

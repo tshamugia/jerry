@@ -110,10 +110,10 @@ pub fn expand(text: &str, var: &dyn Fn(&str) -> Option<OsString>) -> OsString {
     out
 }
 
-/// The paths `text` may name, most likely first, before looking at the disk: an absolute path;
-/// or, for a relative one, the folder shown joined with it, then the known folder its first part
-/// names joined with the rest. `D:` alone is the drive's root.
-fn candidates(text: &str, context: &Context<'_>) -> Vec<PathBuf> {
+/// The paths `text` (already [`clean`]) may name, most likely first, before looking at the disk:
+/// an absolute path; or, for a relative one, the folder shown joined with it, then the known
+/// folder its first part names joined with the rest. `D:` alone is the drive's root.
+pub fn candidates(text: &str, context: &Context<'_>) -> Vec<PathBuf> {
     let expanded = PathBuf::from(expand(text, context.var));
     if is_drive(text) {
         return vec![PathBuf::from(format!(r"{text}\"))];

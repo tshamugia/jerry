@@ -88,13 +88,18 @@ impl Db {
     /// Notes in `recent_folders` that the user went to `folder`. Blocks: listings call it from their
     /// job, once the folder is read.
     pub fn visit_folder(&self, folder: &Path) {
-        let at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| since.as_millis() as i64);
+        let at = now_ms();
         if let Err(error) = self.with(|storage| storage.visit_folder(folder, at)) {
             tracing::warn!(code = ?error.code, "couldn't note a recent folder");
         }
     }
+}
+
+/// Now, in ms since the Unix epoch: how the tables keep times.
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
 }
 
 impl Shared {

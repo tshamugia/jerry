@@ -14,13 +14,14 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use rusqlite_migration::{M, Migrations};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use specta::Type;
 
 use crate::error::{ErrorCode, JerryError};
+use crate::session::{FolderView, Session};
 use crate::settings::Settings;
 
 /// The schema, one entry per version. Append only: a released migration never changes.
@@ -44,6 +45,9 @@ pub struct Keybinding {
 
 /// Recently opened folders kept in `recent_folders`; past it the ones opened longest ago go.
 pub const RECENT_FOLDERS: usize = 500;
+
+/// Folders whose views `folder_views` keeps; past it the ones used longest ago go.
+pub const FOLDER_VIEWS: usize = 5_000;
 
 /// A folder from `recent_folders`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,6 +163,118 @@ impl Storage {
             })?
             .collect::<Result<_, _>>()?;
         Ok(rows)
+    }
+
+    /// The view `folder` (the exact path) was last left in, if Jerry remembers one, and notes
+    /// that it was used at `at` (ms since the Unix epoch), so it is the last to go. A row that
+    /// can't be read is forgotten.
+    pub fn folder_view(
+        &mut self,
+        folder: &Path,
+        at: i64,
+    ) -> Result<Option<FolderView>, JerryError> {
+        let row: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "UPDATE folder_views SET last_used = ?2 WHERE path = ?1
+                 RETURNING view, sort, columns",
+                params![path_blob(folder), at],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((view, sort, columns)) = row else {
+            return Ok(None);
+        };
+        let parsed = (|| {
+            let view = FolderView {
+                view: serde_json::from_value(Value::String(view)).ok()?,
+                sort: serde_json::from_str(&sort).ok()?,
+                columns: serde_json::from_str(&columns).ok()?,
+            };
+            view.columns.is_sane().then_some(view)
+        })();
+        if parsed.is_none() {
+            tracing::warn!("forgetting a folder view that can't be read");
+            self.conn.execute(
+                "DELETE FROM folder_views WHERE path = ?1",
+                [path_blob(folder)],
+            )?;
+        }
+        Ok(parsed)
+    }
+
+    /// Remembers `view` for `folder` (the exact path), used at `at`. Past [`FOLDER_VIEWS`]
+    /// folders, the ones used longest ago go.
+    pub fn save_folder_view(
+        &mut self,
+        folder: &Path,
+        view: &FolderView,
+        at: i64,
+    ) -> Result<(), JerryError> {
+        self.save_folder_view_keeping(folder, view, at, FOLDER_VIEWS)
+    }
+
+    fn save_folder_view_keeping(
+        &mut self,
+        folder: &Path,
+        view: &FolderView,
+        at: i64,
+        keep: usize,
+    ) -> Result<(), JerryError> {
+        let json = |value: Result<Value, serde_json::Error>| {
+            value.map_err(|error| {
+                tracing::warn!(%error, "a folder view didn't serialize");
+                JerryError::internal()
+            })
+        };
+        let kind = match json(serde_json::to_value(view.view))? {
+            Value::String(kind) => kind,
+            _ => return Err(JerryError::internal()),
+        };
+        let sort = json(serde_json::to_value(view.sort))?.to_string();
+        let columns = json(serde_json::to_value(&view.columns))?.to_string();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO folder_views (path, view, sort, columns, last_used)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (path) DO UPDATE SET view = excluded.view, sort = excluded.sort,
+                 columns = excluded.columns, last_used = excluded.last_used",
+            params![path_blob(folder), kind, sort, columns, at],
+        )?;
+        tx.execute(
+            "DELETE FROM folder_views WHERE path IN (
+                 SELECT path FROM folder_views ORDER BY last_used DESC LIMIT -1 OFFSET ?1
+             )",
+            [keep as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The saved session, made safe to restore; `None` if there is none, or it can't be read or
+    /// is in another format (logged).
+    pub fn session(&self) -> Result<Option<Session>, JerryError> {
+        let state: Option<String> = self
+            .conn
+            .query_row("SELECT state FROM session WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        Ok(state.as_deref().and_then(Session::from_json))
+    }
+
+    /// Saves `session` in place of the one before, at `at` (ms since the Unix epoch).
+    pub fn save_session(&mut self, session: &Session, at: i64) -> Result<(), JerryError> {
+        let state = serde_json::to_string(session).map_err(|error| {
+            tracing::warn!(%error, "the session didn't serialize");
+            JerryError::internal()
+        })?;
+        self.conn.execute(
+            "INSERT INTO session (id, state, saved) VALUES (1, ?1, ?2)
+             ON CONFLICT (id) DO UPDATE SET state = excluded.state, saved = excluded.saved",
+            params![state, at],
+        )?;
+        Ok(())
     }
 
     pub(crate) fn open_with(path: &Path, migrations: &Migrations<'_>) -> Result<Self, JerryError> {
@@ -346,6 +462,8 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::settings::View;
+    use crate::sort::SortColumn;
 
     const EXTRA_TABLE: M<'static> = M::up("CREATE TABLE extra (x INTEGER) STRICT;");
 
@@ -442,6 +560,109 @@ mod tests {
                 keybinding("ბრძანება", Some("Ctrl+K")),
             ])
         );
+    }
+
+    fn view(column: SortColumn, descending: bool) -> FolderView {
+        let mut view = FolderView::new(View::Details);
+        view.sort.column = column;
+        view.sort.descending = descending;
+        view
+    }
+
+    #[test]
+    fn folder_views_are_remembered_by_exact_path() {
+        let mut storage = Storage::in_memory().expect("opens");
+        let drawings = Path::new(r"\\?\D:\პროექტები\ნახაზები");
+        assert_eq!(storage.folder_view(drawings, 1), Ok(None));
+
+        let mut by_date = view(SortColumn::Modified, true);
+        by_date.columns.widths.insert(SortColumn::Modified, 150);
+        by_date
+            .columns
+            .hidden
+            .retain(|&column| column != SortColumn::Created);
+        storage
+            .save_folder_view(drawings, &by_date, 2)
+            .expect("saves");
+        assert_eq!(storage.folder_view(drawings, 3), Ok(Some(by_date.clone())));
+        // Case matters to the key: the path is exact.
+        assert_eq!(
+            storage.folder_view(Path::new(r"\\?\d:\პროექტები\ნახაზები"), 4),
+            Ok(None)
+        );
+
+        let by_size = view(SortColumn::Size, false);
+        storage
+            .save_folder_view(drawings, &by_size, 5)
+            .expect("replaces");
+        assert_eq!(storage.folder_view(drawings, 6), Ok(Some(by_size)));
+    }
+
+    #[test]
+    fn folder_views_keep_the_most_recently_used() {
+        let mut storage = Storage::in_memory().expect("opens");
+        let folder = |n: u32| PathBuf::from(format!(r"\\?\C:\f{n}"));
+        for n in 0..3 {
+            storage
+                .save_folder_view_keeping(&folder(n), &view(SortColumn::Size, false), n.into(), 3)
+                .expect("saves");
+        }
+        // Using f0 makes f1 the oldest, so it goes when f3 comes.
+        assert!(
+            storage
+                .folder_view(&folder(0), 10)
+                .expect("reads")
+                .is_some()
+        );
+        storage
+            .save_folder_view_keeping(&folder(3), &view(SortColumn::Type, false), 11, 3)
+            .expect("saves");
+        let kept: Vec<bool> = (0..4)
+            .map(|n| {
+                storage
+                    .folder_view(&folder(n), 20)
+                    .expect("reads")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(kept, [true, false, true, true]);
+    }
+
+    #[test]
+    fn a_folder_view_that_cant_be_read_is_forgotten() {
+        let mut storage = Storage::in_memory().expect("opens");
+        let folder = Path::new(r"\\?\C:\x");
+        storage
+            .conn
+            .execute(
+                "INSERT INTO folder_views (path, view, sort, columns, last_used)
+                 VALUES (?1, 'details', '{}', '[]', 0)",
+                [path_blob(folder)],
+            )
+            .expect("inserts");
+        assert_eq!(storage.folder_view(folder, 1), Ok(None));
+        let rows: i64 = storage
+            .conn
+            .query_row("SELECT count(*) FROM folder_views", [], |row| row.get(0))
+            .expect("counts");
+        assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn the_session_is_one_row() {
+        let mut storage = Storage::in_memory().expect("opens");
+        assert_eq!(storage.session(), Ok(None));
+        let first = Session::at(Path::new(r"\\?\C:\Users\თენგო"), View::Details);
+        storage.save_session(&first, 1).expect("saves");
+        let second = Session::at(Path::new(r"\\?\D:\ნახაზები"), View::Details);
+        storage.save_session(&second, 2).expect("replaces");
+        assert_eq!(storage.session(), Ok(Some(second)));
+
+        storage
+            .conn
+            .execute("UPDATE session SET state = 'garbage'", [])
+            .expect("damages");
+        assert_eq!(storage.session(), Ok(None), "a damaged session starts anew");
     }
 
     #[test]
