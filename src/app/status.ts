@@ -26,7 +26,7 @@ export interface SelectionSize {
   bytes: number;
 }
 
-/** One pass over the selection: 100 000 selected entries take a millisecond or two. */
+/** One pass over the selection. */
 export function selectionSize(
   entries: FolderEntries,
   selected: ReadonlySet<number>,
