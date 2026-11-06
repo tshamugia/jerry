@@ -64,8 +64,8 @@ impl Look {
 
 /// How a tab shows `folder` (an exact path) as it opens it, folders first or not as
 /// `folders_first`: the folder's remembered view or the defaults when views are remembered per
-/// folder, otherwise the tab's own. Notes that the folder's view was used. Blocking: call it from
-/// a background job.
+/// folder, otherwise the tab's own. Only reads the database; that the view was used is written
+/// with the session (`Db::touch_used_views`). Blocking: call it from a background job.
 pub fn look(db: &Db, folder: &Path, folders_first: bool) -> Look {
     let looked = db.with(|storage| {
         let settings = storage.settings();
@@ -73,8 +73,11 @@ pub fn look(db: &Db, folder: &Path, folders_first: bool) -> Look {
             return Ok(Look::Tab);
         }
         let default_view = settings.default_view;
-        Ok(match storage.folder_view(folder, now_ms())? {
-            Some(view) => Look::saved(view, folders_first),
+        Ok(match storage.folder_view(folder)? {
+            Some(view) => {
+                db.note_view_used(folder);
+                Look::saved(view, folders_first)
+            }
             None => Look::default_for(default_view, folders_first),
         })
     });

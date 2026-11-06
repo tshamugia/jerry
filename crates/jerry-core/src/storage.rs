@@ -168,20 +168,16 @@ impl Storage {
         Ok(rows)
     }
 
-    /// The view `folder` (the exact path) was last left in, if Jerry remembers one, and notes
-    /// that it was used at `at` (ms since the Unix epoch), so it is the last to go. A row that
-    /// can't be read is forgotten.
-    pub fn folder_view(
-        &mut self,
-        folder: &Path,
-        at: i64,
-    ) -> Result<Option<FolderView>, JerryError> {
+    /// The view `folder` (the exact path) was last left in, if Jerry remembers one. Only reads,
+    /// so opening a folder never waits for another Jerry's write: when it was used goes in later
+    /// ([`Storage::touch_folder_views`]). A row that can't be read counts as none; the next save
+    /// replaces it.
+    pub fn folder_view(&self, folder: &Path) -> Result<Option<FolderView>, JerryError> {
         let row: Option<(String, String, String)> = self
             .conn
             .query_row(
-                "UPDATE folder_views SET last_used = ?2 WHERE path = ?1
-                 RETURNING view, sort, columns",
-                params![path_blob(folder), at],
+                "SELECT view, sort, columns FROM folder_views WHERE path = ?1",
+                [path_blob(folder)],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
@@ -197,13 +193,23 @@ impl Storage {
             view.columns.is_sane().then_some(view)
         })();
         if parsed.is_none() {
-            tracing::warn!("forgetting a folder view that can't be read");
-            self.conn.execute(
-                "DELETE FROM folder_views WHERE path = ?1",
-                [path_blob(folder)],
-            )?;
+            tracing::warn!("ignoring a folder view that can't be read");
         }
         Ok(parsed)
+    }
+
+    /// Notes that the views of `folders` (exact paths) were used at `at` (ms since the Unix
+    /// epoch), so they are the last to go. Folders without a remembered view are skipped.
+    pub fn touch_folder_views(&mut self, folders: &[PathBuf], at: i64) -> Result<(), JerryError> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut touch = tx.prepare("UPDATE folder_views SET last_used = ?2 WHERE path = ?1")?;
+            for folder in folders {
+                touch.execute(params![path_blob(folder), at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Remembers `view` for `folder` (the exact path), used at `at`. Past [`FOLDER_VIEWS`]
@@ -608,7 +614,7 @@ mod tests {
     fn folder_views_are_remembered_by_exact_path() {
         let mut storage = Storage::in_memory().expect("opens");
         let drawings = Path::new(r"\\?\D:\პროექტები\ნახაზები");
-        assert_eq!(storage.folder_view(drawings, 1), Ok(None));
+        assert_eq!(storage.folder_view(drawings), Ok(None));
 
         let mut by_date = view(SortColumn::Modified, true);
         by_date.columns.widths.insert(SortColumn::Modified, 150);
@@ -619,10 +625,10 @@ mod tests {
         storage
             .save_folder_view(drawings, &by_date, 2)
             .expect("saves");
-        assert_eq!(storage.folder_view(drawings, 3), Ok(Some(by_date.clone())));
+        assert_eq!(storage.folder_view(drawings), Ok(Some(by_date.clone())));
         // Case matters to the key: the path is exact.
         assert_eq!(
-            storage.folder_view(Path::new(r"\\?\d:\პროექტები\ნახაზები"), 4),
+            storage.folder_view(Path::new(r"\\?\d:\პროექტები\ნახაზები")),
             Ok(None)
         );
 
@@ -630,7 +636,7 @@ mod tests {
         storage
             .save_folder_view(drawings, &by_size, 5)
             .expect("replaces");
-        assert_eq!(storage.folder_view(drawings, 6), Ok(Some(by_size)));
+        assert_eq!(storage.folder_view(drawings), Ok(Some(by_size)));
     }
 
     #[test]
@@ -642,29 +648,22 @@ mod tests {
                 .save_folder_view_keeping(&folder(n), &view(SortColumn::Size, false), n.into(), 3)
                 .expect("saves");
         }
-        // Using f0 makes f1 the oldest, so it goes when f3 comes.
-        assert!(
-            storage
-                .folder_view(&folder(0), 10)
-                .expect("reads")
-                .is_some()
-        );
+        // Using f0 makes f1 the oldest, so it goes when f3 comes. A folder without a view is
+        // skipped.
+        storage
+            .touch_folder_views(&[folder(0), folder(9)], 10)
+            .expect("touches");
         storage
             .save_folder_view_keeping(&folder(3), &view(SortColumn::Type, false), 11, 3)
             .expect("saves");
         let kept: Vec<bool> = (0..4)
-            .map(|n| {
-                storage
-                    .folder_view(&folder(n), 20)
-                    .expect("reads")
-                    .is_some()
-            })
+            .map(|n| storage.folder_view(&folder(n)).expect("reads").is_some())
             .collect();
         assert_eq!(kept, [true, false, true, true]);
     }
 
     #[test]
-    fn a_folder_view_that_cant_be_read_is_forgotten() {
+    fn a_folder_view_that_cant_be_read_counts_as_none() {
         let mut storage = Storage::in_memory().expect("opens");
         let folder = Path::new(r"\\?\C:\x");
         storage
@@ -675,12 +674,11 @@ mod tests {
                 [path_blob(folder)],
             )
             .expect("inserts");
-        assert_eq!(storage.folder_view(folder, 1), Ok(None));
-        let rows: i64 = storage
-            .conn
-            .query_row("SELECT count(*) FROM folder_views", [], |row| row.get(0))
-            .expect("counts");
-        assert_eq!(rows, 0);
+        assert_eq!(storage.folder_view(folder), Ok(None));
+        storage
+            .save_folder_view(folder, &view(SortColumn::Size, false), 2)
+            .expect("the next save replaces it");
+        assert!(storage.folder_view(folder).expect("reads").is_some());
     }
 
     #[test]

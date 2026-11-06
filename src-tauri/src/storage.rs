@@ -3,7 +3,7 @@
 //! live here; the storage itself is `jerry_core::storage`.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use jerry_core::JerryError;
@@ -39,6 +39,11 @@ struct Shared {
     storage: OnceLock<Result<Mutex<Storage>, JerryError>>,
     /// Signalled once `storage` is set, for [`Db::settings_within`].
     opened: (Mutex<()>, Condvar),
+    /// The settings as last read or saved: the main thread reads these, never waiting for the
+    /// storage lock behind a write that waits for another Jerry's lock.
+    settings: RwLock<Option<Settings>>,
+    /// Folders whose remembered views were used since the last [`Db::touch_used_views`].
+    used_views: Mutex<Vec<PathBuf>>,
 }
 
 impl Db {
@@ -53,6 +58,12 @@ impl Db {
                 let started = Instant::now();
                 let storage = run_job("open storage", || open_or_in_memory(path));
                 tracing::info!(ms = started.elapsed().as_millis(), "storage ready");
+                if let Ok(storage) = &storage {
+                    *shared
+                        .settings
+                        .write()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(storage.settings().clone());
+                }
                 shared.set(storage.map(Mutex::new));
             });
         if let Err(error) = opening {
@@ -87,7 +98,53 @@ impl Db {
             );
             return None;
         }
-        self.with(|storage| Ok(storage.settings().clone())).ok()
+        let cached = self
+            .0
+            .settings
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        cached.or_else(|| self.with(|storage| Ok(storage.settings().clone())).ok())
+    }
+
+    /// Keeps `settings` for [`Db::settings_within`]: the settings just saved.
+    fn cache_settings(&self, settings: Settings) {
+        *self
+            .0
+            .settings
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(settings);
+    }
+
+    /// Notes that `folder`'s remembered view was used, so it is the last to be forgotten. The
+    /// table is updated later, off the path that opens the folder ([`Db::touch_used_views`]).
+    pub fn note_view_used(&self, folder: &Path) {
+        let mut used = self
+            .0
+            .used_views
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !used.iter().any(|each| each == folder) {
+            used.push(folder.to_path_buf());
+        }
+    }
+
+    /// Writes when the views noted by [`Db::note_view_used`] were used. Blocks: the session
+    /// writer calls it.
+    pub fn touch_used_views(&self) {
+        let used = std::mem::take(
+            &mut *self
+                .0
+                .used_views
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        if used.is_empty() {
+            return;
+        }
+        if let Err(error) = self.with(|storage| storage.touch_folder_views(&used, now_ms())) {
+            tracing::warn!(code = ?error.code, "couldn't note the folder views used");
+        }
     }
 
     /// Notes in `recent_folders` that the user went to `folder`. Blocks: listings call it from their
@@ -154,6 +211,7 @@ pub async fn settings_set(
     jobs::background("settings set", move || {
         db.with(|storage| {
             if storage.set_setting(&key, value.0)? {
+                db.cache_settings(storage.settings().clone());
                 // Still locked, so windows hear the changes in the order they were saved.
                 if let Err(error) = SettingsChanged(storage.settings().clone()).emit(&app) {
                     tracing::error!(%error, "can't send settings:changed");
@@ -209,6 +267,40 @@ mod tests {
         let started = Instant::now();
         assert_eq!(never.settings_within(Duration::from_millis(50)), None);
         assert!(started.elapsed() >= Duration::from_millis(50));
+    }
+
+    #[test]
+    fn the_windows_settings_never_wait_behind_a_database_job() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("jerry.db");
+        let db = Db::open(Ok(path.clone()));
+        db.with(|storage| storage.set_setting("theme", json!("dark")))
+            .expect("saves");
+        drop(db);
+
+        let db = Db::open(Ok(path));
+        assert!(db.settings_within(Duration::from_secs(10)).is_some());
+        // A job holds the database, as a write waiting for another Jerry's lock would.
+        let (held, release) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                db.with(|_| {
+                    let _ = release.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                })
+            })
+        };
+        std::thread::sleep(Duration::from_millis(50));
+        let started = Instant::now();
+        let settings = db.settings_within(Duration::ZERO);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "didn't wait for the job"
+        );
+        assert_eq!(settings.map(|settings| settings.theme), Some(Theme::Dark));
+        drop(held);
+        holder.join().expect("joins").expect("the job ran");
     }
 
     #[test]

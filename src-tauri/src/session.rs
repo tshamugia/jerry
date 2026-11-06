@@ -285,6 +285,7 @@ impl Sessions {
         self.kept().exiting = true;
         self.0.changed.notify_all();
         self.write();
+        self.0.db.touch_used_views();
     }
 
     /// Reads the session and starts its listings; on failure, the user's own folder.
@@ -471,6 +472,8 @@ impl Sessions {
             // The next change tries again.
             Err(error) => tracing::warn!(code = ?error.code, "can't save the session"),
         }
+        // Off the path that opens folders: which remembered views were used.
+        self.0.db.touch_used_views();
         let mut kept = self.kept();
         kept.saved = kept.saved.max(change);
     }
