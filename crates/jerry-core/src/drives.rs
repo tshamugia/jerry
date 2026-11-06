@@ -572,7 +572,7 @@ fn connection(letter: u8) -> (Option<String>, bool) {
 }
 
 /// The volume's size and the space free on it for this user.
-fn space(root: &[u16]) -> Option<Space> {
+pub(crate) fn space(root: &[u16]) -> Option<Space> {
     let (mut free, mut total) = (0u64, 0u64);
     // SAFETY: a NUL-terminated root; two valid out pointers, the third not wanted.
     unsafe {
@@ -646,7 +646,7 @@ fn on_external_bus(letter: u8) -> bool {
 
 /// No "There is no disk in the drive" box from Windows on this thread: a drive without media
 /// just fails.
-fn quiet_errors() {
+pub(crate) fn quiet_errors() {
     // SAFETY: sets this thread's own error mode; the old one isn't wanted.
     let _ = unsafe { SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX, None) };
 }

@@ -96,6 +96,7 @@ macro_rules! commands {
             rename::create_folder,
             rename::rename,
             drives::drives_list,
+            drives::folder_space,
             drives::eject,
             drives::sidebar_places,
             drives::network_places_list,

@@ -111,8 +111,22 @@ export const strings = {
     loading: "Loading…",
     retry: "Retry",
   },
-  /** The status bar. */
+  /** The status bar: the active pane's folder, and the switches. */
   status: {
+    /** The rows the list shows; with the quick filter on, out of how many. */
+    items: (shown: number, total: number, filtered: boolean) =>
+      filtered
+        ? `${integer.format(shown)} of ${integer.format(total)} ${total === 1 ? "item" : "items"}`
+        : `${integer.format(shown)} ${shown === 1 ? "item" : "items"}`,
+    /** "3 selected · 7.5 MB": the size of the selected files, none with only folders. */
+    selected: (count: number, size: string | undefined) =>
+      size === undefined
+        ? `${integer.format(count)} selected`
+        : `${integer.format(count)} selected · ${size}`,
+    /** On the selection when it has folders and files: the size is the files'. */
+    filesOnly: "Size of the selected files. Folder sizes aren't counted.",
+    /** "D: 612 GB free of 1.8 TB"; a share by its name. */
+    free: (volume: string, free: string, total: string) => `${volume}: ${free} free of ${total}`,
     comfortable: "Comfortable rows",
     compact: "Compact rows",
     singlePane: "One pane",
