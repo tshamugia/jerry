@@ -360,10 +360,15 @@ impl Sessions {
                 .map(|(at, tab)| {
                     next_id += 1;
                     let shown = &tab.history[tab.index].path.0;
-                    let look = if settings.remember_folder_views {
-                        views::look(db, shown, folders_first)
-                    } else {
-                        Look::saved(tab.view.clone(), folders_first)
+                    // The folder's view while views are remembered per folder; the tab's own
+                    // otherwise, or if the folder's can't be read (the listing must start with
+                    // the sort the page opens it with).
+                    let look = match settings
+                        .remember_folder_views
+                        .then(|| views::look(db, shown, folders_first))
+                    {
+                        Some(Look::Tab) | None => Look::saved(tab.view.clone(), folders_first),
+                        Some(look) => look,
                     };
                     if prestart && at == pane.active {
                         let sort = look.sort(tab.view.sort);
