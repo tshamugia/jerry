@@ -270,7 +270,9 @@ test("F2 renames a favorite in place; empty brings back its folder's name", asyn
 
   fireEvent.contextMenu(within(nav()).getByRole("button", { name: "Audi" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Rename" }));
-  const again = within(nav()).getByRole("textbox", { name: "Favorite name" });
+  // It opens once the menu has closed, and keeps the focus the menu would give back.
+  const again = await within(nav()).findByRole("textbox", { name: "Favorite name" });
+  await waitFor(() => expect(again).toHaveFocus());
   expect(again).toHaveAttribute("placeholder", "Audi");
   fireEvent.change(again, { target: { value: "  " } });
   fireEvent.keyDown(again, { key: "Enter" });
@@ -299,7 +301,8 @@ test("groups are made, renamed and removed from their menus", async () => {
 
   fireEvent.contextMenu(within(nav()).getByRole("button", { name: "Hide Favorites" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "New group" }));
-  const field = within(nav()).getByRole("textbox", { name: "Group name" });
+  const field = await within(nav()).findByRole("textbox", { name: "Group name" });
+  await waitFor(() => expect(field).toHaveFocus());
   fireEvent.change(field, { target: { value: " " } });
   fireEvent.keyDown(field, { key: "Enter" });
   expect(await within(nav()).findByText("Type a name for the group.")).toHaveClass("text-red");
