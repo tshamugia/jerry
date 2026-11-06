@@ -97,6 +97,12 @@ impl Place {
             .is_none_or(|folder| known_folder(folder).is_ok())
     }
 
+    /// The place's folder: None for Recycle Bin and a share, which have none, and for a place
+    /// this user doesn't have.
+    pub fn path(self) -> Option<std::path::PathBuf> {
+        self.folder().and_then(|folder| known_folder(folder).ok())
+    }
+
     /// The known folder of a place in the file system; Recycle Bin and a share have none.
     fn folder(self) -> Option<&'static GUID> {
         match self {

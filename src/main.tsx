@@ -2,9 +2,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
+import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
 import { restoreSession } from "./features/session/restore";
 import { saveSession } from "./features/session/save";
+import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
 import { syncSettings } from "./stores/settings";
@@ -24,6 +26,8 @@ syncSettings();
 // session before the window existed, and the shown folders' listings are running already.
 void restoreSession().then(() => saveSession());
 syncAppearance();
+syncClipboard();
+syncSidebar();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

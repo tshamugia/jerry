@@ -71,6 +71,32 @@ export const commands = {
 	 */
 	folderCopyPath: (folder: number) => typedError<null, JerryError>(__TAURI_INVOKE("folder_copy_path", { folder })),
 	/**
+	 *  Copy (Ctrl+C), or Cut (`cut`, Ctrl+X): puts entries `entries` of listing `listing` on the
+	 *  clipboard as Explorer does. `NotFound` for an entry or listing that is gone.
+	 */
+	clipboardCopy: (listing: number, entries: number[], cut: boolean) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_copy", { listing, entries, cut })),
+	/**
+	 *  Paste (Ctrl+V): copies the files on the clipboard, or moves them after a Cut, whoever put them
+	 *  there, into the folder of listing `listing`, or into its subfolder `into` (an entry that is a
+	 *  file pastes into the listing's folder). Windows shows the progress and its own messages over
+	 *  this window; a name that is taken gets a new one, never replaced (`jerry_win::paste`). After a
+	 *  cut, the clipboard is emptied as Explorer does. Nothing on the clipboard but text or an image:
+	 *  nothing happens. A cut that would move a system folder fails with `AccessDenied` (data safety
+	 *  rule 6).
+	 */
+	clipboardPaste: (listing: number, into: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_paste", { listing, into })),
+	/**
+	 *  Copy path (Ctrl+Shift+C) or Copy name (Ctrl+Alt+C): puts the full paths, or the names, of
+	 *  entries `entries` of listing `listing` on the clipboard as text, one per line, exactly (paths
+	 *  without the `\\?\` prefix). `NotFound` for an entry or listing that is gone.
+	 */
+	clipboardCopyText: (listing: number, entries: number[], text: CopyText) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_copy_text", { listing, entries, text })),
+	/**
+	 *  The entries of listing `listing` that Jerry cut, while the clipboard still holds that cut:
+	 *  they show dimmed. Asked again on every `clipboard:changed` and when a listing is in.
+	 */
+	clipboardCutEntries: (listing: number) => typedError<number[], JerryError>(__TAURI_INVOKE("clipboard_cut_entries", { listing })),
+	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.
 	 */
@@ -112,6 +138,33 @@ export const commands = {
 	 *  refuses; with `NotFound` when the entry is gone.
 	 */
 	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
+	/**
+	 *  The drives as last read; `drives:changed` brings every later list. Keep the one with the
+	 *  highest `generation`.
+	 */
+	drivesList: () => typedError<DriveList, JerryError>(__TAURI_INVOKE("drives_list")),
+	/**
+	 *  Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
+	 *  something holds the drive; the list follows with `drives:changed`.
+	 */
+	eject: (letter: string) => typedError<null, JerryError>(__TAURI_INVOKE("eject", { letter })),
+	/**  Desktop, Downloads, Documents, Pictures and OneDrive (once it is set up), in sidebar order. */
+	sidebarPlaces: () => typedError<SidebarPlace[], JerryError>(__TAURI_INVOKE("sidebar_places")),
+	/**  The network locations the user added, in sidebar order. */
+	networkPlacesList: () => typedError<NetworkPlace[], JerryError>(__TAURI_INVOKE("network_places_list")),
+	/**
+	 *  Adds the network location `text` (`\\server\share`, typed) at the end of the sidebar's
+	 *  Network section, without contacting the server. `InvalidName` for text that isn't a share;
+	 *  one that is there already stays where it is. Every window gets `network-places:changed`.
+	 */
+	networkPlaceAdd: (text: string) => typedError<null, JerryError>(__TAURI_INVOKE("network_place_add", { text })),
+	/**
+	 *  Removes the network location `path` (as `NetworkPlace::path` gives it) from the sidebar; the
+	 *  share itself is untouched. Every window gets `network-places:changed`.
+	 */
+	networkPlaceRemove: (path: string) => typedError<null, JerryError>(__TAURI_INVOKE("network_place_remove", { path })),
+	/**  Opens Recycle Bin in Explorer; Jerry's own view comes in v1.0. */
+	recycleBinOpen: () => typedError<null, JerryError>(__TAURI_INVOKE("recycle_bin_open")),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**
@@ -189,6 +242,9 @@ export const commands = {
 /** Events */
 export const events = {
 	appearanceChanged: makeEvent<AppearanceChanged, AppearanceChanged>("appearance:changed"),
+	clipboardChanged: makeEvent<ClipboardChanged, ClipboardChanged>("clipboard:changed"),
+	drivesChanged: makeEvent<DrivesChanged, DrivesChanged>("drives:changed"),
+	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
 };
 
@@ -228,6 +284,12 @@ export type CaptionButtonRect = {
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
 
+/**  Sent to every window on every clipboard change, Jerry's own included. */
+export type ClipboardChanged = {
+	/**  Jerry's cut is on the clipboard: its rows show dimmed (`clipboard_cut_entries`). */
+	cut: boolean,
+};
+
 /**
  *  The Details view's columns, as the UI's `ColumnLayout` (`src/stores/columns.ts`): their order,
  *  the ones that don't show and the widths the user dragged.
@@ -240,6 +302,13 @@ export type ColumnLayout = {
 	/**  Widths the user dragged, in CSS px. */
 	widths: Partial<{ [key in SortColumn]: number }>,
 };
+
+/**  What Copy path and Copy name put on the clipboard. */
+export type CopyText = 
+/**  The full path (Ctrl+Shift+C). */
+"path" | 
+/**  The name, with its extension (Ctrl+Alt+C). */
+"name";
 
 /**  A folder as the address bar shows it: its name and its token. */
 export type Crumb = {
@@ -283,6 +352,54 @@ export type Density = "comfortable" | "compact";
 export type DragAction = 
 /**  The Windows rule: move on the same drive, copy to another one. */
 "windows" | "copy" | "move";
+
+/**  A drive as the sidebar shows it. */
+export type Drive = {
+	/**  The drive letter, upper case: `"C"`. */
+	letter: string,
+	kind: DriveKind,
+	/**
+	 *  The volume label; for a network drive, its share's name. None without one, or before the
+	 *  drive has been read.
+	 */
+	label: string | null,
+	/**  A network drive's share as display text (`\\server\share`). */
+	remote: string | null,
+	/**  False for a network drive Windows remembers but isn't connected to now. */
+	connected: boolean,
+	/**  The drive can be ejected: removable media, an optical drive, a USB disk. */
+	ejectable: boolean,
+	/**  Size and free space, once a local drive has been read with media in it. */
+	space: Space | null,
+};
+
+/**  What kind of drive a letter is. */
+export type DriveKind = 
+/**  A local disk. */
+"fixed" | 
+/**  Removable media: a USB stick, a memory card. */
+"removable" | 
+/**  A CD, DVD or Blu-ray drive. */
+"optical" | 
+/**  A mapped network share. */
+"network" | 
+/**  A RAM disk. */
+"ram";
+
+/**
+ *  The drives, numbered: a later list has a higher generation, so a window that hears of the
+ *  drives two ways (`drives_list` and `drives:changed`) keeps the newest.
+ */
+export type DriveList = {
+	generation: number,
+	drives: Drive[],
+};
+
+/**
+ *  Sent to every window when the drives change: one plugged in, pulled out or ejected, a network
+ *  drive mapped or disconnected, a label or the free space.
+ */
+export type DrivesChanged = DriveList;
 
 /**  What went wrong, with the parameters the UI needs to explain it. */
 export type ErrorCode = 
@@ -455,6 +572,19 @@ export type Look =
 /**  A remembered view: the folder's, or a restored tab's own. */
 { kind: "saved"; view: FolderView };
 
+/**
+ *  A network location the user added: its path as display text (`\\server\share`), the name
+ *  the sidebar shows (the share's) and its server.
+ */
+export type NetworkPlace = {
+	path: string,
+	name: string,
+	server: string,
+};
+
+/**  Sent to every window when a network location is added to the sidebar or removed. */
+export type NetworkPlacesChanged = NetworkPlace[];
+
 /**  A pane's tabs, pinned ones first; at least one. */
 export type PaneRestore = {
 	tabs: TabRestore[],
@@ -471,6 +601,9 @@ export type PaneSave = {
 
 /**  One of a window's two panes. */
 export type PaneSide = "left" | "right";
+
+/**  The standard places, as `icon://` names them. */
+export type PlaceName = "desktop" | "downloads" | "documents" | "pictures" | "onedrive";
 
 /**  What the address bar's text names. */
 export type ResolvedPath = {
@@ -545,6 +678,8 @@ export type Settings = {
 	openInJerry: boolean,
 	/**  Check for new versions. */
 	checkUpdates: boolean,
+	/**  Show the sidebar (Ctrl+B). */
+	showSidebar: boolean,
 	/**  Sidebar width, in CSS pixels (drag its edge). */
 	sidebarWidth: number,
 	/**  Preview panel width, in CSS pixels (drag its edge). */
@@ -558,6 +693,16 @@ export type Settings = {
  *  (`window::apply`).
  */
 export type SettingsChanged = Settings;
+
+/**
+ *  A standard place: which one (its `icon://` name), its folder as display text, and for OneDrive
+ *  its folder's own name (`OneDrive - Insta LLC`); the UI names the others.
+ */
+export type SidebarPlace = {
+	place: PlaceName,
+	path: string,
+	name: string | null,
+};
 
 /**  How a list is sorted. */
 export type Sort = {
@@ -580,6 +725,12 @@ export type SortColumn = "name" |
 "created" | 
 /**  The extension: what follows the name's last dot. Folders have none. */
 "extension";
+
+/**  A volume's size and the space free on it for the user, in bytes. */
+export type Space = {
+	total: number,
+	free: number,
+};
 
 /**  What Jerry opens at start. */
 export type Startup = 

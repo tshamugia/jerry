@@ -47,7 +47,7 @@ fn stored_keys(path: &Path) -> Vec<String> {
 }
 
 #[test]
-fn a_new_database_has_the_v01_tables_in_wal_mode() {
+fn a_new_database_has_every_table_in_wal_mode() {
     let (_dir, path) = db_in_temp();
     let storage = Storage::open(&path).expect("opens");
     assert_eq!(storage.settings(), &Settings::default());
@@ -75,6 +75,7 @@ fn a_new_database_has_the_v01_tables_in_wal_mode() {
             "favorites",
             "folder_views",
             "keybindings",
+            "network_places",
             "recent_folders",
             "session",
             "settings",

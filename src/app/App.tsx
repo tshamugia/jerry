@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { useCommandKeys } from "../commands/dispatch";
 import { ShortcutTable } from "../commands/ShortcutTable";
+import { ClipboardDialog } from "../features/clipboard/ClipboardDialog";
 import { DeleteDialog } from "../features/delete/DeleteDialog";
 import { DevPanel } from "../features/dev/DevPanel";
 import { PaneList } from "../features/file-list/PaneList";
@@ -49,6 +50,7 @@ export function App() {
       <DeleteDialog />
       <RenameDialogs />
       <Toasts />
+      <ClipboardDialog />
     </>
   );
 }

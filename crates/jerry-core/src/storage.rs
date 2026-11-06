@@ -25,7 +25,10 @@ use crate::session::{FolderView, Session};
 use crate::settings::Settings;
 
 /// The schema, one entry per version. Append only: a released migration never changes.
-const MIGRATIONS: &[M<'static>] = &[M::up(include_str!("storage/migrations/0001-v0.1.sql"))];
+const MIGRATIONS: &[M<'static>] = &[
+    M::up(include_str!("storage/migrations/0001-v0.1.sql")),
+    M::up(include_str!("storage/migrations/0002-network-places.sql")),
+];
 
 /// The schema version this Jerry writes.
 pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
@@ -275,6 +278,38 @@ impl Storage {
             params![state, at],
         )?;
         Ok(())
+    }
+
+    /// The network locations the user added to the sidebar, in sidebar order: exact paths, as
+    /// [`add_network_place`](Self::add_network_place) got them.
+    pub fn network_places(&self) -> Result<Vec<PathBuf>, JerryError> {
+        let rows = self
+            .conn
+            .prepare("SELECT path FROM network_places ORDER BY position")?
+            .query_map([], |row| Ok(blob_path(&row.get::<_, Vec<u8>>(0)?)))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
+    /// Adds a network location (an exact path, as [`network_place`](crate::drives::network_place)
+    /// makes it) at the end. False if it was there already: it keeps its place.
+    pub fn add_network_place(&mut self, path: &Path) -> Result<bool, JerryError> {
+        let added = self.conn.execute(
+            "INSERT INTO network_places (path, position)
+             VALUES (?1, (SELECT COALESCE(MAX(position), 0) + 1 FROM network_places))
+             ON CONFLICT (path) DO NOTHING",
+            params![path_blob(path)],
+        )?;
+        Ok(added > 0)
+    }
+
+    /// Removes a network location from the sidebar. False if it wasn't there.
+    pub fn remove_network_place(&mut self, path: &Path) -> Result<bool, JerryError> {
+        let removed = self.conn.execute(
+            "DELETE FROM network_places WHERE path = ?1",
+            params![path_blob(path)],
+        )?;
+        Ok(removed > 0)
     }
 
     pub(crate) fn open_with(path: &Path, migrations: &Migrations<'_>) -> Result<Self, JerryError> {
@@ -663,6 +698,29 @@ mod tests {
             .execute("UPDATE session SET state = 'garbage'", [])
             .expect("damages");
         assert_eq!(storage.session(), Ok(None), "a damaged session starts anew");
+    }
+
+    #[test]
+    fn network_places_keep_their_order() {
+        let mut storage = Storage::in_memory().expect("opens");
+        assert_eq!(storage.network_places(), Ok(vec![]));
+        let nas = PathBuf::from(r"\\?\UNC\INSTA-NAS01\Projects");
+        let georgian = PathBuf::from(r"\\?\UNC\nas\პროექტები");
+        assert_eq!(storage.add_network_place(&nas), Ok(true));
+        assert_eq!(storage.add_network_place(&georgian), Ok(true));
+        assert_eq!(storage.add_network_place(&nas), Ok(false), "already there");
+        assert_eq!(
+            storage.network_places(),
+            Ok(vec![nas.clone(), georgian.clone()])
+        );
+        assert_eq!(storage.remove_network_place(&nas), Ok(true));
+        assert_eq!(storage.remove_network_place(&nas), Ok(false));
+        assert_eq!(
+            storage.add_network_place(&nas),
+            Ok(true),
+            "back, at the end"
+        );
+        assert_eq!(storage.network_places(), Ok(vec![georgian, nas]));
     }
 
     #[test]

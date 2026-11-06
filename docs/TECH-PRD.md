@@ -213,9 +213,12 @@ jerry/
 
 ### დისკები
 
-- სია და ადგილი: `GetLogicalDrives`, `GetDriveTypeW`, `GetDiskFreeSpaceExW`; ქსელური დისკები `WNetGetConnectionW`-ით.
-- USB-ის ჩართვა და გამოღება: `WM_DEVICECHANGE`.
-- Eject: Shell-ის "Eject" ბრძანება დისკის ელემენტზე; აქტიური ტრანსფერისას ჯერ გაფრთხილება.
+- სია და ადგილი: `jerry_core::drives::DriveMonitor` დისკების სიას საკუთარ thread-ზე ინახავს და ყოველ ცვლილებას `drives:changed`-ით ყველა ფანჯარას უგზავნის, ნომრით (`generation`): ფანჯარა უახლესს იტოვებს (#34).
+- სკანი მხოლოდ ლოკალურ ცხრილებს კითხულობს: `GetLogicalDrives`, `GetDriveTypeW` და ქსელურ დისკზე `WNetGetConnectionW` (share და დაკავშირებულია თუ არა). დისკსა და სერვერს არ ეხება. ეშვება ყოველ 2 წმ-ში, მოწყობილობის შეტყობინების შემდეგ კი რამდენჯერმე ზედიზედ, რადგან USB დისკი ასოს ტომის გამოჩენიდან ცოტა ხანში იღებს.
+- ლოკალური დისკის წაკითხვა (label `GetVolumeInformationW`-ით, ადგილი `GetDiskFreeSpaceExW`-ით) საკუთარ thread-ზე ხდება, ყოველ 10 წმ-ში, თითო დისკზე ერთდროულად მაქსიმუმ ერთი: ნელი ოპტიკური ან ვირტუალური დისკი სხვებს არ აჩერებს. ქსელური დისკი არასოდეს იკითხება: sidebar მის share-სა და სერვერს აჩვენებს, ამიტომ ნელი სერვერი ვერაფერს ყინავს. ცარიელი card reader (მოსახსნელი, მედიის გარეშე) Explorer-ივით არ ჩანს; Windows-ის "There is no disk in the drive" ფანჯარა `SetThreadErrorMode`-ით გამორთულია.
+- USB-ის ჩართვა და გამოღება: Jerry-ის message-only ფანჯარა `GUID_DEVINTERFACE_VOLUME`-ზე რეგისტრირდება (`WM_DEVICECHANGE`, `DBT_DEVICEARRIVAL` და `DBT_DEVICEREMOVECOMPLETE`) და monitor-ს მაშინვე ასკანინებს. message-only ფანჯარა broadcast-ს არ იღებს, ამიტომ mapped ქსელურ დისკს სკანი პოულობს.
+- Eject: Shell-ის "eject" verb (`ShellExecuteExW`, `SEE_MASK_INVOKEIDLIST`) საკუთარ Shell pool-ზე, 60 წმ timeout-ით; დაკავებულ დისკზე Windows საკუთარ შეტყობინებას აჩვენებს. Eject ღილაკი აქვს მოსახსნელ მედიას, ოპტიკურ დისკს და ლოკალურ დისკს USB, 1394, SD ან MMC bus-ზე (`IOCTL_STORAGE_QUERY_PROPERTY`). Hot-plug ნიშნები ვირტუალურ დისკსაც აქვს (Google Drive), რომელსაც Explorer-ში Eject არ აქვს, ამიტომ ისინი არ გამოდგება. აქტიური ტრანსფერისას გაფრთხილება v0.2-ში ემატება.
+- სტანდარტული ადგილები Known Folders-იდან მოდის (`jerry_win::drives::places`), OneDrive თავისი საქაღალდის სახელით (`OneDrive - Insta LLC`). ხელით დამატებული ქსელური მისამართები `network_places` ცხრილშია და სერვერთან დაკავშირების გარეშე ემატება; ცვლილებას `network-places:changed` ატყობინებს. Recycle Bin v1.0-მდე Explorer-ში იხსნება (`shell:RecycleBinFolder`).
 
 ## Windows ინტეგრაცია (jerry-win)
 
@@ -237,9 +240,12 @@ Windows-თან ყველა შეხება ერთ crate-შია, 
 
 - Copy და Cut: Explorer-ის Shell data object, CF\_HDROP-ით და Shell IDList Array-ით: `SHCreateShellItemArrayFromIDLists` + `BindToHandler(BHID_DataObject)`, ანუ მშობელი საქაღალდის `GetUIObjectOf`. `SHCreateDataObject` ცარიელ ობიექტს აბრუნებს და არ გამოიყენება (spike #3). `Preferred DropEffect` Explorer-ივით იწერება: Copy = COPY | LINK (5), Cut = MOVE (2). Clipboard-ზე დადებული `IDataObject` მთავარი thread-ის COM ობიექტია და main-thread `thread_local`-ში ინახება. Core-ის `\\?\` პრეფიქსი Shell-ისთვის და CF\_HDROP-ისთვის იშლება: Shell MAX\_PATH-ზე გრძელ ჩვეულებრივ გზას ამუშავებს, `\\?\` გზას კი ვერა. Jerry-ს დახურვისას `OleFlushClipboard`, რომ შიგთავსი დარჩეს: მის გარეშე CF\_HDROP ქრება, flush-ის შემდეგ კი Cut ისევ Cut რჩება (spike #5).
 - Paste: CF\_HDROP + `Preferred DropEffect`: MOVE COPY-ის გარეშე = Cut, დანარჩენი Copy. Explorer-იდან ამოჭრილის გადატანის შემდეგ Jerry წერს `Paste Succeeded = MOVE`-ს (`Performed DropEffect`-ის გარეშე) და clipboard-ს თავად ასუფთავებს, თუ `GetClipboardSequenceNumber` არ შეცვლილა: Explorer, როგორც წყარო, `Paste Succeeded`-ზე არ რეაგირებს. Explorer-ში ჩასმული Cut-ის შემდეგ Explorer წერს `Performed DropEffect = MOVE`-ს; Jerry ამაზე არაფერს შლის (ფაილები Explorer-მა უკვე გადაიტანა), მხოლოდ ამოჭრის სტილს აქრობს.
+- Paste-ის შესრულება v0.1-ში (#38, `jerry_win::paste`): `IFileOperation` Windows-ის პროგრესის ფანჯრით, საკუთარ მოკლევადიან STA thread-ზე (როგორც `jerry_win::open`), Jerry-ის ფანჯრით owner-ად; v0.2-ში ტრანსფერების ძრავზე გადადის. Ctrl+V მიმდინარე საქაღალდეში სვამს; `clipboard_paste`-ის `into` (ქვესაქაღალდე) context menu-სთვისაა (#39). დაკავებულ სახელს Jerry არ ანაცვლებს: `FOF_RENAMEONCOLLISION | FOFX_PRESERVEFILEEXTENSIONS`, ჩასმული ელემენტი „name (2).ext“-ს იღებს, საქაღალდეც (merge არ ხდება). #38-ის ცდამ აჩვენა, რომ Shell-ის Replace ძველ ფაილს სამუდამოდ გადააწერს ნებისმიერი დროშით: `FOFX_RECYCLEONDELETE` მხოლოდ წაშლილს აგზავნის Recycle Bin-ში, გადაწერილს არა, და progress sink-ს `PreDeleteItem` არ მოსდის, ეს კი data safety rule 3-ს არღვევს. Cut, რომელიც Windows-ს, Program Files-ს ან Users-ს გადაიტანდა, `AccessDenied`-ით უარდება (rule 6).
 - Virtual files (`FileGroupDescriptorW` + `FileContents`): Outlook-ის attachment ინახება ფაილად.
 - Paste as: სურათი (PNG ან CF\_DIBV5) → .png, ტექსტი → .txt.
 - `AddClipboardFormatListener` Jerry-ის message-only ფანჯარაზე, მთავარ thread-ზე. ცვლილებისას Jerry ამოწმებს `OleIsCurrentClipboard`-ს (export პირდაპირ იძახება: `windows` crate `S_FALSE`-ს `Ok`-ად აქცევს) და, თუ clipboard მისი აღარ არის, `clipboard:changed`-ით ამოჭრილი ფაილების ნახევრად გამჭვირვალე სტილი ქრება. `WM_CLIPBOARDUPDATE` Jerry-ის საკუთარ ცვლილებაზეც მოდის, ამიტომ ამოჭრის მდგომარეობა `OleSetClipboard`-მდე იწერება.
+- ამოჭრილ რიგებს UI `clipboard_cut_entries(listing)`-ით იგებს `clipboard:changed`-ზე და listing-ის დასრულებისას: ამოჭრა ჩანს იმავე საქაღალდეზე სხვა პანელსა თუ ტაბში და ხელახლა გახსნისასაც. ამოჭრის გზებს `jerry_win::clipboard` ინახავს, `IDataObject` კი main-thread `thread_local`-ში რჩება.
+- Copy path (Ctrl+Shift+C) და Copy name (Ctrl+Alt+C): `clipboard_copy_text`, მონიშნული (ან ფოკუსირებული) ელემენტები თითო ხაზზე (CRLF), ზუსტი UTF-16 `CF_UNICODETEXT`-ად, გზა `\\?\`-ის გარეშე.
 
 ### Drag & drop
 
@@ -415,7 +421,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | ბრძანება (`invoke`) | მოთხოვნა → პასუხი | `rename`, `create_folder`, `delete`, `open`, `settings_set` |
 | ნაკადი (Tauri `Channel`) | ეტაპობრივი შედეგი ერთი მომხმარებლისთვის | listing-ის batch-ები და diff-ები, ძებნის შედეგები |
-| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
+| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
 | Custom protocol | ბინარული მონაცემი `<img>` და `<video>`-სთვის | `icon://`, `thumb://`, asset protocol preview-სთვის |
 
 ### ბრძანებები
@@ -428,10 +434,10 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | ფაილური ოპერაციები | `create_folder`, `create_file`, `rename`, `batch_rename`, `delete_check`, `delete_measure`, `delete_recycle`, `delete_permanently`, `duplicate`, `zip_create`, `zip_extract`, `calculate_size` |
 | ტრანსფერები | `transfer_enqueue`, `transfer_control` (pause, resume, cancel), `transfer_reorder`, `conflict_resolve`, `transfer_retry_failed` |
 | ისტორია | `undo`, `redo`, `history_list`, `history_undo` |
-| Clipboard და DnD | `clipboard_copy`, `clipboard_paste`, `paste_as_file`, `drag_start`, `drop_target_update` |
+| Clipboard და DnD | `clipboard_copy`, `clipboard_paste`, `clipboard_copy_text`, `clipboard_cut_entries`, `paste_as_file`, `drag_start`, `drop_target_update` |
 | Shell | `open_entries`, `folder_copy_path`, `open_with_list`, `open_with`, `show_native_menu`, `show_in_explorer`, `open_terminal`, `properties` |
 | ძებნა | `search_start`, `search_cancel` |
-| სისტემა | `drives_list`, `eject`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
+| სისტემა | `drives_list`, `eject`, `sidebar_places`, `network_places_list`, `network_place_add`, `network_place_remove`, `recycle_bin_open`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
 | მონაცემები | `settings_get`, `settings_set`, `keybindings_get` (შეცვლილი shortcut-ები), `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_restore`, `session_save`, `folder_view_save`, `export_settings`, `import_settings` |
 | ფანჯარა | `title_bar_attach` (caption ღილაკების მდგომარეობა, `Channel`), `title_bar_set_buttons`, `title_bar_press` (Narrator და კლავიატურა) |
 
@@ -454,6 +460,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | `settings` | გასაღები → JSON მნიშვნელობა | — |
 | `favorites`, `favorite_groups` | გზა, სახელი, ჯგუფი, რიგი | — |
+| `network_places` | sidebar-ში ხელით დამატებული ქსელური მისამართები (`\\server\share`): გზა და რიგი (#34) | — |
 | `recent_folders` | გზა, ბოლო გახსნა, გახსნების რაოდენობა. წერს listing (#31), როცა საქაღალდე, რომელშიც მომხმარებელი გადავიდა, ბოლომდე იკითხება (არა Refresh ან ტაბის საწყისი საქაღალდე); გზა ზუსტია, \\?\ ფორმით | 500 |
 | `folder_views` | გზა, ხედი, დალაგება, სვეტები | 5 000, ყველაზე ძველი იშლება |
 | `session` | ფანჯრები, ტაბები, პანელები, ტაბების ისტორია (JSON) | ერთი ჩანაწერი |
@@ -564,7 +571,7 @@ Jerry ვრცელდება NSIS ინსტალერით, მომ
 | 2 | 100 000 ელემენტი | პირველი რიგები < 0.3 წმ, scroll 60 fps, დალაგება < 100 ms | **გავლილია.** პირველი რიგები ~15 ms, დალაგება ~30 ms, scroll 60 fps; ბინარული batch-ები ([ADR-0001](https://github.com/tshamugia/jerry/blob/main/docs/adr/0001-binary-listing-batches.md)) |
 | 3 | Drag & drop გარეთ | Explorer, Desktop, Outlook (attachment), Telegram, Chrome (upload) და AutoCAD ფაილს იღებს | **გავლილია** fallback-ის გარეშე, ექვსივე პროგრამაში; modal loop Jerry-ის საკუთარი ფანჯრით ([ADR-0002](https://github.com/tshamugia/jerry/blob/main/docs/adr/0002-modal-loops-on-own-window.md)) |
 | 4 | Drag & drop შიგნით | Explorer-იდან მუშაობს; Outlook-ის attachment ფაილად ინახება; ტაბი, breadcrumb და sidebar სწორად ინათება | **გავლილია fallback-ით:** drop target გამჭვირვალე ფანჯარაზე ([ADR-0003](https://github.com/tshamugia/jerry/blob/main/docs/adr/0003-drop-target-overlay.md)), round trip 4–5 ms |
-| 5 | Clipboard | Jerry ↔ Explorer copy, cut, paste ორივე მიმართულებით; ჩასმა Outlook-სა და Telegram-ში | **გავლილია** Explorer-თან ორივე მიმართულებით; Outlook, Telegram და ნამდვილი კლავიატურა v0.1-ში მოწმდება (#47) |
+| 5 | Clipboard | Jerry ↔ Explorer copy, cut, paste ორივე მიმართულებით; ჩასმა Outlook-სა და Telegram-ში | **გავლილია** Explorer-თან ორივე მიმართულებით; Outlook, Telegram და ნამდვილი კლავიატურა შემოწმდა #38-ში (06.11.2026) |
 | 6 | Windows options | 7-Zip-ისა და "Send to"-ს ქვემენიუები მუშაობს | **გავლილია** Send to-თი და WinRAR-ით; 7-Zip v0.1-ში მოწმდება (#47); მენიუ prewarm-ის შემდეგ 64–125 ms |
 | 7 | Title bar | ორად გაყოფილი ტაბების ზოლი, ფანჯრის გადათრევა, ორმაგი კლიკი, Snap Layouts, Aero Snap, სწორი maximize ზომები | **ტექნიკა არჩეულია** ([ADR-0004](https://github.com/tshamugia/jerry/blob/main/docs/adr/0004-title-bar-input-window.md)), ავტომატურად შემოწმებულია; ნამდვილი თაგვით შემოწმება #23-ის დასაწყისშია |
 | 8 | ქართული | ქართული ფაილის სახელების რენდერი სუფთაა; shortcut-ები ქართულ განლაგებაზე მუშაობს | **გავლილია** ავტომატურად: ჩაშენებული შრიფტი არ სჭირდება, shortcut-ები `KeyboardEvent.code`-ით; თვალით და ნამდვილი კლავიატურით v0.1-ში (#47) |
@@ -579,7 +586,7 @@ Spike-ის კოდი ცალკე branch-ზე რჩება. შე�
 
 **#4 Drag & drop შიგნით:** გავლილია 02.11.2026 ([#14](https://github.com/tshamugia/jerry/issues/14#issuecomment-6565149046)) fallback-ით: OLE target-ს WebView2-ის ფანჯრების ქვეშ ვერ პოულობს, ამიტომ drag-ის დროს გვერდის თავზე გამჭვირვალე ფანჯარა ჩნდება. Explorer, Desktop, Outlook (attachment და `.msg`), Chrome, Edge და Jerry-ის შიგნით გადათრევა მუშაობს; ტაბი, breadcrumb და sidebar ინათება. ტექნიკა «Drag & drop» და «Thread-ების მოდელი» სექციებშია.
 
-**#5 Clipboard:** Explorer-თან გავლილია 02.11.2026 ([#15](https://github.com/tshamugia/jerry/issues/15#issuecomment-6564949126)): Copy, Cut და Paste ორივე მიმართულებით მუშაობს ნამდვილ explorer.exe-სა და jerry.exe-ზე, ქართული სახელებით, MAX\_PATH-ზე გრძელი გზით და Jerry-ის დახურვის შემდეგაც; fallback არ დასჭირდა. ხელით ჯერ დარჩა: ნამდვილი Ctrl+C / X / V და ჩასმა Outlook-სა და Telegram-ში. ტექნიკა «Clipboard» სექციაშია.
+**#5 Clipboard:** Explorer-თან გავლილია 02.11.2026 ([#15](https://github.com/tshamugia/jerry/issues/15#issuecomment-6564949126)): Copy, Cut და Paste ორივე მიმართულებით მუშაობს ნამდვილ explorer.exe-სა და jerry.exe-ზე, ქართული სახელებით, MAX\_PATH-ზე გრძელი გზით და Jerry-ის დახურვის შემდეგაც; fallback არ დასჭირდა. ნამდვილი Ctrl+C / X / V და ჩასმა Outlook-სა და Telegram-ში ხელით შემოწმდა #38-ში (06.11.2026). ტექნიკა «Clipboard» სექციაშია.
 
 **#6 Windows options:** ტექნიკა შემოწმდა 03.11.2026 ([#16](https://github.com/tshamugia/jerry/issues/16#issuecomment-6587473737)): ნამდვილ jerry.exe-ში "Send to → Compressed (zipped) folder" და WinRAR-ის ქვემენიუ ერთ ფაილზე, რამდენიმე ფაილზე, საქაღალდეზე, ქართულ სახელსა და MAX\_PATH-ზე გრძელ გზაზე მუშაობს; Properties, Esc და Jerry-ის საკუთარი verb-ები სწორად იქცევა. 7-Zip ამ კომპიუტერზე დაყენებული არ არის: WinRAR-ის ქვემენიუც გახსნისას ივსება, 7-Zip-ის შემოწმება კი ხელით დარჩა, ნამდვილ მაუსთან და კლავიატურასთან ერთად. ტექნიკა «Context menu» და «Thread-ების მოდელი» სექციებშია.
 

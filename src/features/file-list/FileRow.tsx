@@ -33,6 +33,8 @@ export interface FileRowProps {
   activePane: boolean;
   /** The name shows as the inline rename field (F2). */
   editing: boolean;
+  /** Jerry cut it (Ctrl+X) and the clipboard still holds it: drawn half-transparent. */
+  cut: boolean;
 }
 
 /**
@@ -42,10 +44,23 @@ export interface FileRowProps {
  * the item itself (`data-item`), the rest of the row is where a marquee can start.
  */
 export const FileRow = memo(function FileRow(props: FileRowProps) {
-  const { id, idPrefix, index, top, columns, attributes, selected, focused, activePane, editing } =
-    props;
+  const {
+    id,
+    idPrefix,
+    index,
+    top,
+    columns,
+    attributes,
+    selected,
+    focused,
+    activePane,
+    editing,
+    cut,
+  } = props;
   const folder = (attributes & Attribute.directory) !== 0;
   const background = selected ? (activePane ? "bg-sel" : "bg-sel-inactive") : "hover:bg-hover";
+  // The cells, not the row: the selection's tint stays as it is.
+  const faded = cut && !editing ? "opacity-50" : "";
   const focus = focused
     ? "group-focus-visible:-outline-offset-2 group-focus-visible:outline-2 group-focus-visible:outline-focus"
     : "";
@@ -62,12 +77,12 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
     >
       {columns.map((column, at) =>
         column === "name" ? (
-          <NameCell key={column} {...props} folder={folder} first={at === 0} />
+          <NameCell key={column} {...props} folder={folder} first={at === 0} faded={faded} />
         ) : (
           <div
             key={column}
             role="gridcell"
-            className={`${WIDTH_CLASS[column]} truncate text-fg-2 text-small ${at === 0 ? "" : "pl-2"} ${column === "size" ? "text-right" : ""} ${NUMERIC.has(column) ? "tabular-nums" : ""}`}
+            className={`${WIDTH_CLASS[column]} truncate text-fg-2 text-small ${faded} ${at === 0 ? "" : "pl-2"} ${column === "size" ? "text-right" : ""} ${NUMERIC.has(column) ? "tabular-nums" : ""}`}
           >
             {cellText(column, props, folder)}
           </div>
@@ -85,14 +100,15 @@ function NameCell({
   editing,
   folder,
   first,
-}: FileRowProps & { folder: boolean; first: boolean }) {
+  faded,
+}: FileRowProps & { folder: boolean; first: boolean; faded: string }) {
   // Hidden and system entries show only with "Show hidden" on, dimmed.
   const dimmed = (attributes & (Attribute.hidden | Attribute.system)) !== 0 ? "opacity-60" : "";
   return (
     <div
       role="gridcell"
       // The rename field's hint shows past the cell.
-      className={`${WIDTH_CLASS.name} flex items-center gap-2 ${editing ? "" : "overflow-hidden"} ${first ? "" : "pl-2"}`}
+      className={`${WIDTH_CLASS.name} flex items-center gap-2 ${editing ? "" : "overflow-hidden"} ${faded} ${first ? "" : "pl-2"}`}
     >
       {icon ? (
         <img

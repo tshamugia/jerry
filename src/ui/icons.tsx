@@ -9,7 +9,7 @@ function Icon({
   stroke = 1.2,
   children,
 }: {
-  size?: 10 | 14 | 16;
+  size?: 10 | 12 | 14 | 16;
   stroke?: number;
   children: ReactNode;
 }) {
@@ -239,6 +239,44 @@ export function MoreIcon() {
   return (
     <Icon size={14} stroke={1.3}>
       <path d="M3.5 8h.01M8 8h.01M12.5 8h.01" strokeWidth={2.2} />
+    </Icon>
+  );
+}
+
+/** Show or hide the sidebar: a window with its left column marked off. */
+export function SidebarIcon() {
+  return (
+    <Icon>
+      <rect x="1.5" y="2.5" width="13" height="11" rx="2" />
+      <path d="M6 2.5v11" />
+    </Icon>
+  );
+}
+
+/** Settings: the design's gear. */
+export function SettingsIcon() {
+  return (
+    <Icon>
+      <circle cx="8" cy="8" r="2.3" />
+      <path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4" />
+    </Icon>
+  );
+}
+
+/** A sidebar section's caption arrow: down while the section is open, right while folded. */
+export function SectionIcon({ folded }: { folded: boolean }) {
+  return (
+    <Icon size={12} stroke={1.6}>
+      <path d={folded ? "M6 3.5L10.5 8 6 12.5" : "M3.5 6L8 10.5 12.5 6"} />
+    </Icon>
+  );
+}
+
+/** Eject: a triangle over a bar. */
+export function EjectIcon() {
+  return (
+    <Icon size={14} stroke={1.3}>
+      <path d="M8 3.5l4.5 5h-9zM3.5 12h9" />
     </Icon>
   );
 }

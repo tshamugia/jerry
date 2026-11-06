@@ -10,10 +10,12 @@
 pub mod appearance;
 pub mod clipboard;
 pub mod devices;
+pub mod drives;
 pub mod folders;
 pub mod icons;
 pub mod main_thread;
 pub mod open;
+pub mod paste;
 pub mod placement;
 pub mod recycle;
 pub mod shell_pool;

@@ -18,8 +18,13 @@ use tauri_specta::Event;
 use crate::ipc::Json;
 use crate::jobs;
 
-/// Where the database lives: `%APPDATA%\Jerry\jerry.db`.
+/// Where the database lives: `%APPDATA%\Jerry\jerry.db`. Dev builds take another file from
+/// `JERRY_DB`, so a dev run of a branch with a newer schema leaves the shared one alone.
 pub fn db_path() -> Result<PathBuf, JerryError> {
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("JERRY_DB") {
+        return Ok(PathBuf::from(path));
+    }
     Ok(jerry_win::folders::roaming_app_data()?
         .join("Jerry")
         .join("jerry.db"))
