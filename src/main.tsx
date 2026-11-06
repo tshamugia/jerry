@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
 import { reportLongTasks } from "./features/dev/longTasks";
+import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
 import { syncSettings, useSettings } from "./stores/settings";
@@ -28,6 +29,7 @@ const unsubscribe = useSettings.subscribe(({ settings }) => {
   }
 });
 syncAppearance();
+syncSidebar();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

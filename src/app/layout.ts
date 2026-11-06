@@ -36,13 +36,14 @@ function minPanes(dual: boolean): number {
   return dual ? 2 * MIN_PANE + DIVIDER : MIN_PANE;
 }
 
-export function layoutZones(width: number, wanted: ZoneSizes, dual = true): Zones {
-  const sidebar = clamp(wanted.sidebar, SIDEBAR_LIMITS.min, SIDEBAR_LIMITS.max);
+/** `sidebar` false: the user hid it (Ctrl+B), whatever the width. */
+export function layoutZones(width: number, wanted: ZoneSizes, dual = true, sidebar = true): Zones {
+  const sidebarWidth = sidebar ? clamp(wanted.sidebar, SIDEBAR_LIMITS.min, SIDEBAR_LIMITS.max) : 0;
   const preview = clamp(wanted.preview, PREVIEW_LIMITS.min, PREVIEW_LIMITS.max);
   const panes = minPanes(dual);
-  const showSidebar = width - sidebar >= panes;
-  const showPreview = width - sidebar - preview >= panes;
-  const zones = { sidebar: showSidebar ? sidebar : 0, preview: showPreview ? preview : 0 };
+  const showSidebar = sidebar && width - sidebarWidth >= panes;
+  const showPreview = width - sidebarWidth - preview >= panes;
+  const zones = { sidebar: showSidebar ? sidebarWidth : 0, preview: showPreview ? preview : 0 };
   return { ...zones, split: clampSplit(wanted.split, panesWidth(width, zones)), dual };
 }
 

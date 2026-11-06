@@ -45,6 +45,12 @@ describe("layoutZones", () => {
     expect(layoutZones(800, design)).toMatchObject({ sidebar: 232, preview: 0 });
   });
 
+  test("a sidebar the user hid (Ctrl+B) stays hidden and leaves its room to the preview", () => {
+    expect(layoutZones(1440, design, true, false)).toMatchObject({ sidebar: 0, preview: 288 });
+    expect(layoutZones(288 + 481, design, true, false)).toMatchObject({ sidebar: 0, preview: 288 });
+    expect(frameColumns(layoutZones(1440, design, false, false))).toBe("minmax(0, 1fr) 288px");
+  });
+
   test("sizes outside the limits are clamped, and both panes keep their minimum", () => {
     const zones = layoutZones(1440, { sidebar: 5000, preview: 10, split: 0.99 });
     expect(zones.sidebar).toBe(SIDEBAR_LIMITS.max);

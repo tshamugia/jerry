@@ -34,6 +34,7 @@ import {
   selectAllRows,
   toggleFocusedRow,
 } from "../features/selection/commands";
+import { toggleSidebar } from "../features/sidebar/store";
 import {
   canCloseTab,
   canReopenTab,
@@ -237,7 +238,14 @@ export const COMMANDS: readonly Command[] = [
     enabled: settingsLoaded,
     run: toggleHidden,
   },
-  { id: "toggleSidebar", group: "view", keys: ["Ctrl+B"], context: "global" },
+  {
+    id: "toggleSidebar",
+    group: "view",
+    keys: ["Ctrl+B"],
+    context: "global",
+    enabled: settingsLoaded,
+    run: toggleSidebar,
+  },
   { id: "togglePreview", group: "view", keys: ["Alt+P"], context: "global" },
   {
     id: "toggleDensity",
