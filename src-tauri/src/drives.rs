@@ -6,8 +6,11 @@
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use jerry_core::drives::{DriveList, DriveMonitor, System, network_place, server_name, share_name};
+use jerry_core::drives::{
+    DriveList, DriveMonitor, Space, System, network_place, server_name, share_name,
+};
 use jerry_core::error::display_path;
+use jerry_core::space::{SPACE_WAIT, SpaceReader};
 use jerry_core::{ErrorCode, JerryError};
 use jerry_win::icons::Place;
 use jerry_win::shell_pool::ShellPool;
@@ -17,6 +20,7 @@ use tauri::{AppHandle, State, WebviewWindow};
 use tauri_specta::Event;
 
 use crate::jobs;
+use crate::listing::Listings;
 use crate::storage::Db;
 use crate::title_bar::hwnd;
 
@@ -35,13 +39,14 @@ pub struct DrivesChanged(pub DriveList);
 #[tauri_specta(event_name = "network-places:changed")]
 pub struct NetworkPlacesChanged(pub Vec<NetworkPlace>);
 
-/// The drive monitor, and a Shell pool of its own for Eject, so a slow eject never holds up
-/// icons. Clones share them.
+/// The drive monitor, the status bar's reads of free space where the monitor has none, and a
+/// Shell pool of its own for Eject, so a slow eject never holds up icons. Clones share them.
 #[derive(Clone)]
 pub struct Drives(Arc<Inner>);
 
 struct Inner {
     monitor: DriveMonitor,
+    space: SpaceReader,
     /// Started with the first eject.
     shell: OnceLock<ShellPool>,
 }
@@ -58,6 +63,7 @@ impl Drives {
         });
         let drives = Self(Arc::new(Inner {
             monitor,
+            space: SpaceReader::default(),
             shell: OnceLock::new(),
         }));
         let weak = Arc::downgrade(&drives.0);
@@ -109,6 +115,24 @@ pub struct NetworkPlace {
 #[specta::specta]
 pub async fn drives_list(drives: State<'_, Drives>) -> Result<DriveList, JerryError> {
     Ok(drives.0.monitor.drives())
+}
+
+/// The size and free space of the volume listing `listing`'s folder is on, for the status bar
+/// where the drive list has none: a network drive or share (#41). None if the volume doesn't
+/// answer within [`SPACE_WAIT`] (the read goes on alone, and asking again waits for it), can't be
+/// read, or the listing isn't open.
+#[tauri::command]
+#[specta::specta]
+pub async fn folder_space(
+    drives: State<'_, Drives>,
+    listings: State<'_, Listings>,
+    listing: u32,
+) -> Result<Option<Space>, JerryError> {
+    let Some(folder) = listings.folder(listing) else {
+        return Ok(None);
+    };
+    let reader = drives.0.space.clone();
+    jobs::background("folder space", move || Ok(reader.read(&folder, SPACE_WAIT))).await
 }
 
 /// Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if

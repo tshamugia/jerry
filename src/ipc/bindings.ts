@@ -144,6 +144,13 @@ export const commands = {
 	 */
 	drivesList: () => typedError<DriveList, JerryError>(__TAURI_INVOKE("drives_list")),
 	/**
+	 *  The size and free space of the volume listing `listing`'s folder is on, for the status bar
+	 *  where the drive list has none: a network drive or share (#41). None if the volume doesn't
+	 *  answer within [`SPACE_WAIT`] (the read goes on alone, and asking again waits for it), can't be
+	 *  read, or the listing isn't open.
+	 */
+	folderSpace: (listing: number) => typedError<Space | null, JerryError>(__TAURI_INVOKE("folder_space", { listing })),
+	/**
 	 *  Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
 	 *  something holds the drive; the list follows with `drives:changed`.
 	 */
@@ -165,6 +172,58 @@ export const commands = {
 	networkPlaceRemove: (path: string) => typedError<null, JerryError>(__TAURI_INVOKE("network_place_remove", { path })),
 	/**  Opens Recycle Bin in Explorer; Jerry's own view comes in v1.0. */
 	recycleBinOpen: () => typedError<null, JerryError>(__TAURI_INVOKE("recycle_bin_open")),
+	/**  The favorites; `favorites:changed` brings every later list. */
+	favoritesList: () => typedError<FavoriteList, JerryError>(__TAURI_INVOKE("favorites_list")),
+	/**
+	 *  Adds a folder to the favorites, at the end of the top level: the folder the open listing
+	 *  `listing` shows, or its subfolder `entry`. Returns the favorite's id; a folder that is a
+	 *  favorite already stays where it is. Every window gets `favorites:changed`.
+	 */
+	favoritesAdd: (listing: number, entry: number | null) => typedError<number, JerryError>(__TAURI_INVOKE("favorites_add", { listing, entry })),
+	/**
+	 *  Names the favorite `id` `name` in the sidebar; empty or none: its folder's own name again.
+	 *  The folder isn't renamed. Every window gets `favorites:changed`.
+	 */
+	favoritesRename: (id: number, name: string | null) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_rename", { id, name })),
+	/**  Removes the favorite `id`; its folder is untouched. Every window gets `favorites:changed`. */
+	favoritesRemove: (id: number) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_remove", { id })),
+	/**
+	 *  Moves the favorite `id` into `group` (none: the top level), at `index` there. `NotFound` for a
+	 *  favorite or group that is gone. Every window gets `favorites:changed`.
+	 */
+	favoritesMove: (id: number, group: number | null, index: number) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_move", { id, group, index })),
+	/**
+	 *  Adds a group named `name` after the others; returns its id. `InvalidName` for an empty name.
+	 *  Every window gets `favorites:changed`.
+	 */
+	favoritesGroupAdd: (name: string) => typedError<number, JerryError>(__TAURI_INVOKE("favorites_group_add", { name })),
+	/**
+	 *  Renames the group `id`. `InvalidName` for an empty name. Every window gets
+	 *  `favorites:changed`.
+	 */
+	favoritesGroupRename: (id: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_group_rename", { id, name })),
+	/**
+	 *  Removes the group `id`; its favorites go to the end of the top level. Every window gets
+	 *  `favorites:changed`.
+	 */
+	favoritesGroupRemove: (id: number) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_group_remove", { id })),
+	/**
+	 *  Moves the group `id`, with its favorites, to `index` among the groups. Every window gets
+	 *  `favorites:changed`.
+	 */
+	favoritesGroupMove: (id: number, index: number) => typedError<null, JerryError>(__TAURI_INVOKE("favorites_group_move", { id, index })),
+	/**
+	 *  Why the favorite `id` can't be opened, if its folder isn't there: `NotFound` (deleted, moved
+	 *  or renamed) or `DeviceGone` (its drive or network location isn't connected), on its path.
+	 *  Null when it is there. Doesn't read the folder; a share that doesn't answer takes Windows' own
+	 *  timeout, so the UI checks each favorite on its own.
+	 */
+	favoritesCheck: (id: number) => typedError<JerryError | null, JerryError>(__TAURI_INVOKE("favorites_check", { id })),
+	/**
+	 *  The latest recently opened folders, at most [`RECENT`]; `recent-folders:changed` brings every
+	 *  later list.
+	 */
+	recentFoldersList: () => typedError<RecentFolder[], JerryError>(__TAURI_INVOKE("recent_folders_list")),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**
@@ -244,7 +303,9 @@ export const events = {
 	appearanceChanged: makeEvent<AppearanceChanged, AppearanceChanged>("appearance:changed"),
 	clipboardChanged: makeEvent<ClipboardChanged, ClipboardChanged>("clipboard:changed"),
 	drivesChanged: makeEvent<DrivesChanged, DrivesChanged>("drives:changed"),
+	favoritesChanged: makeEvent<FavoritesChanged, FavoritesChanged>("favorites:changed"),
 	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
+	recentFoldersChanged: makeEvent<RecentFoldersChanged, RecentFoldersChanged>("recent-folders:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
 };
 
@@ -435,6 +496,38 @@ export type ErrorCode =
 /**  Jerry's own bug, for example a job that panicked. The details are in the log. */
 { code: "Internal" };
 
+/**  A favorite folder. */
+export type Favorite = {
+	id: number,
+	/**  The folder as display text. */
+	path: string,
+	/**  The name the sidebar shows: the one the user gave it, or the folder's own. */
+	name: string,
+	/**  The user named it: `name` isn't the folder's own. */
+	renamed: boolean,
+	/**  Its group; none: the top level. */
+	group: number | null,
+};
+
+/**  A group of favorites. */
+export type FavoriteGroup = {
+	id: number,
+	name: string,
+};
+
+/**  The favorites, in sidebar order. */
+export type FavoriteList = {
+	groups: FavoriteGroup[],
+	/**  The top level first, then group by group. */
+	favorites: Favorite[],
+};
+
+/**
+ *  Sent to every window when the favorites change: one added, renamed, moved or removed, a group
+ *  added, renamed, moved or removed.
+ */
+export type FavoritesChanged = FavoriteList;
+
 /**  A folder in a tab's history. */
 export type FolderSave = {
 	/**  The folder's token (`ListingOpened::folder`). */
@@ -604,6 +697,15 @@ export type PaneSide = "left" | "right";
 
 /**  The standard places, as `icon://` names them. */
 export type PlaceName = "desktop" | "downloads" | "documents" | "pictures" | "onedrive";
+
+/**  A recently opened folder: its path as display text, and its name. */
+export type RecentFolder = {
+	path: string,
+	name: string,
+};
+
+/**  Sent to every window when the latest recent folders change. */
+export type RecentFoldersChanged = RecentFolder[];
 
 /**  What the address bar's text names. */
 export type ResolvedPath = {

@@ -6,6 +6,7 @@ import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
 import { restoreSession } from "./features/session/restore";
 import { saveSession } from "./features/session/save";
+import { syncFavorites } from "./features/sidebar/favorites";
 import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
@@ -28,6 +29,7 @@ void restoreSession().then(() => saveSession());
 syncAppearance();
 syncClipboard();
 syncSidebar();
+syncFavorites();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

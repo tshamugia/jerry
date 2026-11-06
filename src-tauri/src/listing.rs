@@ -923,7 +923,7 @@ fn watch(state: &Arc<ListingState>, watchers: &Watchers) {
 
 /// A folder's name in the address bar: its last part; a drive's root as `C:`, a share's as
 /// `\\server\share`.
-fn crumb_name(folder: &Path) -> String {
+pub(crate) fn crumb_name(folder: &Path) -> String {
     match folder.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => display_path(folder).trim_end_matches('\\').to_owned(),
