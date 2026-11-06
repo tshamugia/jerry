@@ -1,9 +1,15 @@
 import * as Radix from "@radix-ui/react-context-menu";
-import { createContext, type ReactNode, useContext, useRef } from "react";
+import {
+  createContext,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useContext,
+  useRef,
+} from "react";
 import { CheckIcon, ChevronIcon } from "./icons";
 
 const ITEM =
-  "group flex h-8 items-center gap-2 rounded-ctrl pr-3 pl-2 outline-none data-disabled:text-disabled data-highlighted:bg-hover";
+  "group flex h-8 items-center gap-2 rounded-ctrl pr-3 pl-2 outline-none data-disabled:text-disabled data-highlighted:bg-subtle-hover";
 
 const CONTENT =
   "z-50 min-w-48 rounded-flyout border border-flyout-border bg-flyout p-1 text-fg shadow-flyout";
@@ -48,6 +54,7 @@ export function ContextMenu({
               action();
             }
           }}
+          onContextMenu={noBrowserMenu}
           className={CONTENT}
         >
           <AfterClose.Provider
@@ -61,6 +68,14 @@ export function ContextMenu({
       </Radix.Portal>
     </Radix.Root>
   );
+}
+
+/**
+ * A right click in an open menu, or the browser's own `contextmenu` that follows a Menu key's
+ * release onto the focused item: no browser menu over Jerry's (dev builds keep WebView2's).
+ */
+function noBrowserMenu(event: ReactMouseEvent): void {
+  event.preventDefault();
 }
 
 /**
@@ -208,7 +223,7 @@ export function MenuRadio({
 export function MenuSub({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Radix.Sub>
-      <Radix.SubTrigger className={`${ITEM} data-[state=open]:bg-hover`}>
+      <Radix.SubTrigger className={`${ITEM} data-[state=open]:bg-subtle-hover`}>
         <span className="size-4 shrink-0" />
         {label}
         <span className="ml-auto pl-6 text-fg-2">
@@ -216,7 +231,12 @@ export function MenuSub({ label, children }: { label: string; children: ReactNod
         </span>
       </Radix.SubTrigger>
       <Radix.Portal>
-        <Radix.SubContent sideOffset={2} alignOffset={-5} className={CONTENT}>
+        <Radix.SubContent
+          sideOffset={2}
+          alignOffset={-5}
+          onContextMenu={noBrowserMenu}
+          className={CONTENT}
+        >
           {children}
         </Radix.SubContent>
       </Radix.Portal>
