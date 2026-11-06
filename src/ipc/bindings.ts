@@ -93,6 +93,21 @@ export const commands = {
 	 *  confirmed deleting system folders; without it they stay (`AccessDenied`).
 	 */
 	deletePermanently: (listing: number, entries: number[], system: boolean) => typedError<DeleteOutcome, JerryError>(__TAURI_INVOKE("delete_permanently", { listing, entries, system })),
+	/**
+	 *  Makes a folder named `name` in the folder of listing `listing`, or `name (2)`, `name (3)`…
+	 *  when that name is taken, as Explorer does. Returns the name it got, so the UI can find the
+	 *  new entry and open its name for editing. Fails with `InvalidName` for a name Windows doesn't
+	 *  allow, with `NotFound` for a closed listing, and with the folder's path when Windows refuses
+	 *  (`AccessDenied`, `NotFound` for a folder that is gone).
+	 */
+	createFolder: (listing: number, name: string) => typedError<string, JerryError>(__TAURI_INVOKE("create_folder", { listing, name })),
+	/**
+	 *  Renames entry `entry` of listing `listing` to `name`, in the same folder. A change of case
+	 *  only works too. Fails with `InvalidName` for a name Windows doesn't allow (no path) or another
+	 *  item there has (its path), never replacing it; with `InUse` or `AccessDenied` when Windows
+	 *  refuses; with `NotFound` when the entry is gone.
+	 */
+	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
 	/**  All settings, defaults filled in. */
 	settingsGet: () => typedError<Settings, JerryError>(__TAURI_INVOKE("settings_get")),
 	/**

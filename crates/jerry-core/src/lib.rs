@@ -4,11 +4,14 @@
 //! folders. Shell capabilities come in through traits that `jerry-win` implements.
 
 pub mod address;
+pub mod create;
 pub mod delete;
 pub mod error;
 pub mod job;
 pub mod listing;
+pub mod name;
 pub mod path;
+pub mod rename;
 pub mod settings;
 pub mod sort;
 pub mod storage;

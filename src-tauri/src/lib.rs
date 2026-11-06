@@ -10,6 +10,7 @@ pub mod jobs;
 pub mod listing;
 pub mod logging;
 pub mod navigation;
+pub mod rename;
 pub mod shell;
 pub mod storage;
 pub mod title_bar;
@@ -86,6 +87,8 @@ macro_rules! commands {
             delete::delete_measure_cancel,
             delete::delete_recycle,
             delete::delete_permanently,
+            rename::create_folder,
+            rename::rename,
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,

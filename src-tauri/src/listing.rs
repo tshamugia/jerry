@@ -716,6 +716,13 @@ impl Listings {
         }
     }
 
+    /// The folder the open listing `listing` shows, exactly: where a new folder goes (#36).
+    pub fn folder(&self, listing: u32) -> Option<PathBuf> {
+        self.open()
+            .get(&listing)
+            .map(|open| open.state.folder.clone())
+    }
+
     /// The exact path, attributes and last write time (FILETIME) of entry `entry` of the open
     /// listing `listing`: for the `icon://` protocol, which asks for an entry's own icon by id.
     pub fn entry(&self, listing: u32, entry: u32) -> Option<(PathBuf, u32, u64)> {
