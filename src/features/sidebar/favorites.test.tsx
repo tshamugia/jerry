@@ -1,6 +1,6 @@
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { commandById, runCommand } from "../../commands/registry";
 import type { Favorite, FavoriteGroup, FavoriteList, JerryError, RecentFolder } from "../../ipc";
@@ -52,9 +52,16 @@ function show(more: Partial<ReturnType<typeof useFavorites.getState>> = {}) {
 const nav = () => screen.getByRole("navigation", { name: "Navigation" });
 const keys = (rows: FavoriteRow[]) => rows.map((row) => row.key);
 
-/** The sidebar, once dragging (loaded lazily) has taken over its favorites. */
+/**
+ * The sidebar, once dragging (loaded lazily) has taken over its favorites. Rendered in an
+ * async `act` that awaits that module, so React retries the suspended part before `act` ends;
+ * polling for it alone sometimes waited past the test's timeout when the whole suite ran.
+ */
 async function renderSidebar() {
-  render(<Sidebar />);
+  await act(async () => {
+    render(<Sidebar />);
+    await import("./SortableFavorites");
+  });
   if (useFavorites.getState().favorites.length > 0) {
     await waitFor(() =>
       expect(within(nav()).getAllByRole("button", { name: "Inbox" })[0]).toHaveAttribute(
