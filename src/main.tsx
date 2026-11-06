@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
+import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
@@ -28,6 +29,7 @@ const unsubscribe = useSettings.subscribe(({ settings }) => {
   }
 });
 syncAppearance();
+syncClipboard();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

@@ -1,6 +1,7 @@
 /** Every user-visible string lives here. English only, no i18n library (PRD). */
 
 import type { SortColumn } from "../ipc";
+import { clipboardStrings } from "./clipboard";
 import { deleteStrings } from "./delete";
 import { renameStrings } from "./rename";
 
@@ -217,6 +218,8 @@ export const strings = {
   deleting: deleteStrings,
   /** New folder (Ctrl+Shift+N) and inline rename (F2). */
   rename: renameStrings,
+  /** Copy, Cut, Paste, Copy path, Copy name. */
+  clipboard: clipboardStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",

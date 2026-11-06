@@ -67,6 +67,32 @@ export const commands = {
 	 */
 	folderCopyPath: (folder: number) => typedError<null, JerryError>(__TAURI_INVOKE("folder_copy_path", { folder })),
 	/**
+	 *  Copy (Ctrl+C), or Cut (`cut`, Ctrl+X): puts entries `entries` of listing `listing` on the
+	 *  clipboard as Explorer does. `NotFound` for an entry or listing that is gone.
+	 */
+	clipboardCopy: (listing: number, entries: number[], cut: boolean) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_copy", { listing, entries, cut })),
+	/**
+	 *  Paste (Ctrl+V): copies the files on the clipboard, or moves them after a Cut, whoever put them
+	 *  there, into the folder of listing `listing`, or into its subfolder `into` (an entry that is a
+	 *  file pastes into the listing's folder). Windows shows the progress and its own messages over
+	 *  this window; a name that is taken gets a new one, never replaced (`jerry_win::paste`). After a
+	 *  cut, the clipboard is emptied as Explorer does. Nothing on the clipboard but text or an image:
+	 *  nothing happens. A cut that would move a system folder fails with `AccessDenied` (data safety
+	 *  rule 6).
+	 */
+	clipboardPaste: (listing: number, into: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_paste", { listing, into })),
+	/**
+	 *  Copy path (Ctrl+Shift+C) or Copy name (Ctrl+Alt+C): puts the full paths, or the names, of
+	 *  entries `entries` of listing `listing` on the clipboard as text, one per line, exactly (paths
+	 *  without the `\\?\` prefix). `NotFound` for an entry or listing that is gone.
+	 */
+	clipboardCopyText: (listing: number, entries: number[], text: CopyText) => typedError<null, JerryError>(__TAURI_INVOKE("clipboard_copy_text", { listing, entries, text })),
+	/**
+	 *  The entries of listing `listing` that Jerry cut, while the clipboard still holds that cut:
+	 *  they show dimmed. Asked again on every `clipboard:changed` and when a listing is in.
+	 */
+	clipboardCutEntries: (listing: number) => typedError<number[], JerryError>(__TAURI_INVOKE("clipboard_cut_entries", { listing })),
+	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.
 	 */
@@ -167,6 +193,7 @@ export const commands = {
 /** Events */
 export const events = {
 	appearanceChanged: makeEvent<AppearanceChanged, AppearanceChanged>("appearance:changed"),
+	clipboardChanged: makeEvent<ClipboardChanged, ClipboardChanged>("clipboard:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
 };
 
@@ -205,6 +232,19 @@ export type CaptionButtonRect = {
 
 /**  Clicks that open an item. */
 export type ClickToOpen = "single" | "double";
+
+/**  Sent to every window on every clipboard change, Jerry's own included. */
+export type ClipboardChanged = {
+	/**  Jerry's cut is on the clipboard: its rows show dimmed (`clipboard_cut_entries`). */
+	cut: boolean,
+};
+
+/**  What Copy path and Copy name put on the clipboard. */
+export type CopyText = 
+/**  The full path (Ctrl+Shift+C). */
+"path" | 
+/**  The name, with its extension (Ctrl+Alt+C). */
+"name";
 
 /**  A folder as the address bar shows it: its name and its token. */
 export type Crumb = {
