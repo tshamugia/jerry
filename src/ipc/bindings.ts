@@ -140,6 +140,13 @@ export const commands = {
 	 */
 	drivesList: () => typedError<DriveList, JerryError>(__TAURI_INVOKE("drives_list")),
 	/**
+	 *  The size and free space of the volume listing `listing`'s folder is on, for the status bar
+	 *  where the drive list has none: a network drive or share (#41). None if the volume doesn't
+	 *  answer within [`SPACE_WAIT`] (the read goes on alone, and asking again waits for it), can't be
+	 *  read, or the listing isn't open.
+	 */
+	folderSpace: (listing: number) => typedError<Space | null, JerryError>(__TAURI_INVOKE("folder_space", { listing })),
+	/**
 	 *  Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
 	 *  something holds the drive; the list follows with `drives:changed`.
 	 */
