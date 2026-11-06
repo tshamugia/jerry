@@ -538,6 +538,13 @@ mod tests {
         let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     }
 
+    /// The temp folder with its long names, without the `\\?\` prefix. `%TEMP%` can be an 8.3
+    /// path (`C:\Users\RUNNER~1\…` on CI), and the Shell's data object gives back the long names
+    /// it parsed (`C:\Users\runneradmin\…`), not the form the paths came in.
+    fn real(dir: &tempfile::TempDir) -> PathBuf {
+        plain_path(&fs::canonicalize(dir.path()).unwrap())
+    }
+
     fn files(dir: &Path, names: &[&str]) -> Vec<PathBuf> {
         names
             .iter()
@@ -599,7 +606,10 @@ mod tests {
     fn copy_and_cut_carry_explorers_formats_and_the_effect() {
         sta();
         let dir = tempfile::tempdir().unwrap();
-        let paths = files(dir.path(), &["ნახაზი — სართული 1.dwg", "ხარჯთაღრიცხვა.pdf"]);
+        let paths = files(
+            &real(&dir),
+            &["ნახაზი — სართული 1.dwg", "ხარჯთაღრიცხვა.pdf"],
+        );
         let long: Vec<PathBuf> = paths
             .iter()
             .map(|path| jerry_core::path::long_path(path).unwrap())
@@ -632,8 +642,8 @@ mod tests {
     fn long_paths_get_the_shell_object() {
         sta();
         let dir = tempfile::tempdir().unwrap();
-        let long = long_file(dir.path());
-        let short = files(dir.path(), &["მოკლე.txt"]).remove(0);
+        let long = long_file(&real(&dir));
+        let short = files(&real(&dir), &["მოკლე.txt"]).remove(0);
         let verbatim = PathBuf::from(format!(r"\\?\{}", long.display()));
 
         assert!(shell_data_object(std::slice::from_ref(&verbatim)).is_err());
