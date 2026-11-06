@@ -26,6 +26,7 @@ export const defaultSettings: Settings = {
   globalHotkey: "Ctrl+Alt+J",
   openInJerry: false,
   checkUpdates: true,
+  showSidebar: true,
   sidebarWidth: 232,
   previewWidth: 288,
   paneSplit: 0.5,

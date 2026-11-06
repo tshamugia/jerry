@@ -50,21 +50,43 @@ pub fn open_files(
 }
 
 fn open_all(owner: Option<isize>, files: &[PathBuf]) -> Result<(), JerryError> {
-    // SAFETY: no reserved pointer; this thread's apartment, ended below. Handlers that COM
-    // activates need it (ShellExecuteEx's documentation).
-    let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
-    let mut outcome = Ok(());
-    for file in files {
-        if let Err(error) = open_file(owner, file, 0) {
-            tracing::info!(code = ?error.code, "couldn't open a file");
-            outcome = outcome.and(Err(error));
+    in_sta(|| {
+        let mut outcome = Ok(());
+        for file in files {
+            if let Err(error) = open_file(owner, file, 0) {
+                tracing::info!(code = ?error.code, "couldn't open a file");
+                outcome = outcome.and(Err(error));
+            }
         }
-    }
+        outcome
+    })
+}
+
+/// Runs `job` with this thread in an STA of its own, for the length of the job: handlers that
+/// COM activates need it (ShellExecuteEx's documentation).
+pub(crate) fn in_sta<T>(job: impl FnOnce() -> T) -> T {
+    // SAFETY: no reserved pointer; this thread's apartment, ended below.
+    let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+    let result = job();
     if com.is_ok() {
         // SAFETY: matches the successful CoInitializeEx above, on the same thread.
         unsafe { CoUninitialize() };
     }
-    outcome
+    result
+}
+
+/// Opens a Shell name (`shell:RecycleBinFolder`) with its default verb, in Explorer for a folder.
+pub(crate) fn open_shell_name(owner: Option<isize>, name: PCWSTR) -> Result<(), JerryError> {
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOASYNC,
+        hwnd: HWND(owner.unwrap_or(0) as *mut core::ffi::c_void),
+        lpFile: name,
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    // SAFETY: `info` is filled in as documented; `name` is NUL-terminated and outlives the call.
+    unsafe { ShellExecuteExW(&mut info) }.map_err(JerryError::from)
 }
 
 /// Opens `file` with its default verb, waiting until the program has it (`SEE_MASK_NOASYNC`, as

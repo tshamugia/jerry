@@ -1,6 +1,5 @@
 import {
   type CSSProperties,
-  memo,
   type ReactNode,
   useEffect,
   useRef,
@@ -8,6 +7,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useSinglePane } from "../features/navigation/panes";
+import { Sidebar } from "../features/sidebar/Sidebar";
 import type { Settings } from "../ipc";
 import { setSetting } from "../stores/settings";
 import { strings } from "../strings";
@@ -44,6 +44,7 @@ export function Frame({ settings, left, right, previewContent, transfers }: Prop
     width,
     { sidebar: sidebar.value, preview: preview.value, split: split.value },
     settings.dualPane,
+    settings.showSidebar,
   );
   const style = { "--frame-columns": frameColumns(zones) } as CSSProperties;
   useSinglePane(zones.dual);
@@ -105,11 +106,6 @@ export function Frame({ settings, left, right, previewContent, transfers }: Prop
     </div>
   );
 }
-
-/** The sidebar on Mica; its favorites, places and drives arrive with #34. */
-const Sidebar = memo(function Sidebar() {
-  return <nav aria-label={strings.frame.sidebar} className="min-w-0" />;
-});
 
 /** The preview panel; it shows the selected file from v0.3. */
 function Preview({ children, content }: { children: ReactNode; content: ReactNode }) {

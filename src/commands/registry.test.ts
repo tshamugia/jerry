@@ -150,6 +150,7 @@ describe("the shortcut table", () => {
         title: "View",
         rows: [
           { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
+          { id: "toggleSidebar", title: "Show or hide sidebar", keys: ["Ctrl+B"] },
           { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+D"] },
         ],
       },
@@ -292,6 +293,7 @@ describe("the shortcut table", () => {
         title: "View",
         rows: [
           { id: "toggleHidden", title: "Show or hide hidden files", keys: ["Ctrl+H"] },
+          { id: "toggleSidebar", title: "Show or hide sidebar", keys: ["Ctrl+B"] },
           { id: "toggleDensity", title: "Row density", keys: ["Ctrl+Alt+R"] },
         ],
       },

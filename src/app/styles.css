@@ -75,6 +75,8 @@
   --radius-kbd: var(--jerry-radius-kbd);
   --radius-tab: var(--jerry-radius-tab);
   --radius-flyout: var(--jerry-radius-flyout);
+  /* Thin bars: a drive's usage, the active-item pill. */
+  --radius-bar: 2px;
 
   --shadow-*: initial;
   --shadow-flyout: var(--jerry-shadow);
@@ -99,6 +101,10 @@
   --spacing-palette: var(--jerry-palette-w);
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
+  --spacing-drive-pad: var(--jerry-drive-pad);
+  /* The sidebar's top row (collapse, settings) and its section captions. */
+  --spacing-sidebar-header: 40px;
+  --spacing-section: 24px;
   --spacing-active-pane-bar: var(--jerry-active-pane-bar);
   /* Menus that list folders (an address bar segment's subfolders): taller ones scroll. */
   --spacing-menu: 420px;

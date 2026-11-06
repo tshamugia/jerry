@@ -7,8 +7,10 @@
 //! "Safely remove") or locks it (`GUID_IO_VOLUME_LOCK`: Explorer's Eject, chkdsk), and goes ahead
 //! only if nothing on it is open once the window procedure returns. Then it says how that went.
 //!
-//! Drive arrival and removal (#34) come through the same window procedure: a device-interface
-//! registration for volumes on the same thread, and another arm in [`on_device_change`].
+//! Drive arrival and removal (#34) come through the same window procedure: one device-interface
+//! registration for every volume (`GUID_DEVINTERFACE_VOLUME`), made when the thread starts, tells
+//! [`on_drives_change`]'s callback that a volume came or went. A message-only window gets no
+//! broadcasts, so a mapped network drive brings no notice: the drive monitor scans for those.
 //!
 //! Registering and unregistering run on a thread of their own ([`start`]), never on the main
 //! thread and never waited for by it: Windows delivers a notification from a thread of its own
@@ -28,9 +30,11 @@ use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE,
     FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
+use windows::Win32::System::Ioctl::GUID_DEVINTERFACE_VOLUME;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DBT_CUSTOMEVENT, DBT_DEVICEQUERYREMOVE, DBT_DEVICEQUERYREMOVEFAILED, DBT_DEVICEREMOVECOMPLETE,
-    DBT_DEVICEREMOVEPENDING, DBT_DEVTYP_HANDLE, DEV_BROADCAST_HANDLE, DEV_BROADCAST_HDR,
+    DBT_CUSTOMEVENT, DBT_DEVICEARRIVAL, DBT_DEVICEQUERYREMOVE, DBT_DEVICEQUERYREMOVEFAILED,
+    DBT_DEVICEREMOVECOMPLETE, DBT_DEVICEREMOVEPENDING, DBT_DEVTYP_DEVICEINTERFACE,
+    DBT_DEVTYP_HANDLE, DEV_BROADCAST_DEVICEINTERFACE_W, DEV_BROADCAST_HANDLE, DEV_BROADCAST_HDR,
     DEVICE_NOTIFY_WINDOW_HANDLE, GUID_IO_VOLUME_LOCK, GUID_IO_VOLUME_LOCK_FAILED,
     GUID_IO_VOLUME_UNLOCK, HDEVNOTIFY, RegisterDeviceNotificationW, UnregisterDeviceNotification,
 };
@@ -95,6 +99,17 @@ impl Drop for VolumeNotices {
     }
 }
 
+/// Has Windows tell `on_change` whenever a volume arrives or goes (a USB drive plugged in or
+/// pulled out), on the main thread, inside the window procedure: it must return at once. One
+/// callback for the process; a second call replaces the first.
+pub fn on_drives_change(on_change: impl Fn() + Send + Sync + 'static) {
+    *DRIVES_CHANGED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(on_change));
+}
+
+static DRIVES_CHANGED: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
 type OnEvent = Arc<dyn Fn(VolumeEvent) + Send + Sync>;
 
 struct Registration {
@@ -131,6 +146,14 @@ pub(crate) fn start(window: isize) {
     let spawned = std::thread::Builder::new()
         .name("device-notices".into())
         .spawn(move || {
+            // Kept for the life of the process.
+            let _ = run_job("volume arrival notices", || {
+                register_volumes(window)
+                    .inspect_err(|error| {
+                        tracing::warn!(code = ?error.code, "no notices of drives plugged in")
+                    })
+                    .map(|_| ())
+            });
             loop {
                 let work = {
                     let mut state = state();
@@ -220,6 +243,26 @@ fn register(window: isize, root: &Path) -> Result<isize, JerryError> {
     Ok(notify?.0 as isize)
 }
 
+/// Registers `window` for the arrival and removal of every volume.
+fn register_volumes(window: isize) -> Result<isize, JerryError> {
+    let filter = DEV_BROADCAST_DEVICEINTERFACE_W {
+        dbcc_size: size_of::<DEV_BROADCAST_DEVICEINTERFACE_W>() as u32,
+        dbcc_devicetype: DBT_DEVTYP_DEVICEINTERFACE.0,
+        dbcc_classguid: GUID_DEVINTERFACE_VOLUME,
+        ..Default::default()
+    };
+    // SAFETY: `filter` is a valid DEV_BROADCAST_DEVICEINTERFACE_W for the call; `window` is
+    // Jerry's own window, which lives as long as the process.
+    let notify = unsafe {
+        RegisterDeviceNotificationW(
+            HANDLE(window as *mut core::ffi::c_void),
+            (&raw const filter).cast(),
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        )
+    }?;
+    Ok(notify.0 as isize)
+}
+
 fn unregister(notify: isize) {
     // SAFETY: a registration from RegisterDeviceNotificationW, unregistered only once.
     let result = unsafe { UnregisterDeviceNotification(HDEVNOTIFY(notify as *mut _)) };
@@ -231,6 +274,20 @@ fn unregister(notify: isize) {
 /// `WM_DEVICECHANGE` on Jerry's window: hands a volume's notice to its [`watch_volume`] callback
 /// and returns `TRUE`. Jerry never refuses a removal: it lets go of the volume instead.
 pub(crate) fn on_device_change(wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // SAFETY: as below.
+    if unsafe { is_volume_arrival_or_removal(wparam, lparam) } {
+        let on_change = DRIVES_CHANGED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(on_change) = on_change {
+            let _ = run_job("drives changed", || {
+                on_change();
+                Ok(())
+            });
+        }
+        return LRESULT(1);
+    }
     // SAFETY: Windows sends WM_DEVICECHANGE with an LPARAM that is null or points to a
     // DEV_BROADCAST_HDR, alive for the call.
     if let Some((notify, event)) = unsafe { volume_event(wparam, lparam) } {
@@ -251,6 +308,28 @@ pub(crate) fn on_device_change(wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         }
     }
     LRESULT(1)
+}
+
+/// Whether a `WM_DEVICECHANGE` says that a volume arrived or went ([`register_volumes`]).
+///
+/// # Safety
+/// As for [`volume_event`].
+unsafe fn is_volume_arrival_or_removal(wparam: WPARAM, lparam: LPARAM) -> bool {
+    let header = lparam.0 as *const DEV_BROADCAST_HDR;
+    let event = wparam.0 as u32;
+    if header.is_null() || (event != DBT_DEVICEARRIVAL && event != DBT_DEVICEREMOVECOMPLETE) {
+        return false;
+    }
+    // SAFETY: not null, so a DEV_BROADCAST_HDR (the caller's promise).
+    let (size, kind) = unsafe { ((*header).dbch_size as usize, (*header).dbch_devicetype) };
+    if kind != DBT_DEVTYP_DEVICEINTERFACE
+        || size < offset_of!(DEV_BROADCAST_DEVICEINTERFACE_W, dbcc_name)
+    {
+        return false;
+    }
+    // SAFETY: a device-interface notice at least up to its name, so its class is in it.
+    let class = unsafe { (*header.cast::<DEV_BROADCAST_DEVICEINTERFACE_W>()).dbcc_classguid };
+    class == GUID_DEVINTERFACE_VOLUME
 }
 
 /// The volume notice in a `WM_DEVICECHANGE`: the registration it is for, and what it says.
@@ -373,6 +452,41 @@ mod tests {
                 .values()
                 .any(|r| r.notify == Some(fake))
         );
+    }
+
+    #[test]
+    fn volumes_coming_and_going_reach_the_drives_callback() {
+        let (sender, told) = mpsc::channel();
+        let sender = Mutex::new(sender);
+        on_drives_change(move || {
+            let _ = sender.lock().map(|sender| sender.send(()));
+        });
+        let notice = |class: GUID| DEV_BROADCAST_DEVICEINTERFACE_W {
+            dbcc_size: size_of::<DEV_BROADCAST_DEVICEINTERFACE_W>() as u32,
+            dbcc_devicetype: DBT_DEVTYP_DEVICEINTERFACE.0,
+            dbcc_classguid: class,
+            ..Default::default()
+        };
+        let send = |event: u32, notice: &DEV_BROADCAST_DEVICEINTERFACE_W| {
+            on_device_change(
+                WPARAM(event as usize),
+                LPARAM(std::ptr::from_ref(notice) as isize),
+            )
+        };
+        let volume = notice(GUID_DEVINTERFACE_VOLUME);
+        assert_eq!(send(DBT_DEVICEARRIVAL, &volume).0, 1);
+        send(DBT_DEVICEREMOVECOMPLETE, &volume);
+        // Another device class, or a volume event that isn't an arrival or removal.
+        send(DBT_DEVICEARRIVAL, &notice(GUID::from_u128(7)));
+        send(DBT_DEVICEQUERYREMOVE, &volume);
+        assert_eq!(told.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn the_volume_class_registers() {
+        let window = crate::main_thread::create_window().expect("a message-only window");
+        let notify = register_volumes(window.0 as isize).expect("Windows registers volumes");
+        unregister(notify);
     }
 
     #[test]

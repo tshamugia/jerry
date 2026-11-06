@@ -213,9 +213,12 @@ jerry/
 
 ### დისკები
 
-- სია და ადგილი: `GetLogicalDrives`, `GetDriveTypeW`, `GetDiskFreeSpaceExW`; ქსელური დისკები `WNetGetConnectionW`-ით.
-- USB-ის ჩართვა და გამოღება: `WM_DEVICECHANGE`.
-- Eject: Shell-ის "Eject" ბრძანება დისკის ელემენტზე; აქტიური ტრანსფერისას ჯერ გაფრთხილება.
+- სია და ადგილი: `jerry_core::drives::DriveMonitor` დისკების სიას საკუთარ thread-ზე ინახავს და ყოველ ცვლილებას `drives:changed`-ით ყველა ფანჯარას უგზავნის, ნომრით (`generation`): ფანჯარა უახლესს იტოვებს (#34).
+- სკანი მხოლოდ ლოკალურ ცხრილებს კითხულობს: `GetLogicalDrives`, `GetDriveTypeW` და ქსელურ დისკზე `WNetGetConnectionW` (share და დაკავშირებულია თუ არა). დისკსა და სერვერს არ ეხება. ეშვება ყოველ 2 წმ-ში, მოწყობილობის შეტყობინების შემდეგ კი რამდენჯერმე ზედიზედ, რადგან USB დისკი ასოს ტომის გამოჩენიდან ცოტა ხანში იღებს.
+- ლოკალური დისკის წაკითხვა (label `GetVolumeInformationW`-ით, ადგილი `GetDiskFreeSpaceExW`-ით) საკუთარ thread-ზე ხდება, ყოველ 10 წმ-ში, თითო დისკზე ერთდროულად მაქსიმუმ ერთი: ნელი ოპტიკური ან ვირტუალური დისკი სხვებს არ აჩერებს. ქსელური დისკი არასოდეს იკითხება: sidebar მის share-სა და სერვერს აჩვენებს, ამიტომ ნელი სერვერი ვერაფერს ყინავს. ცარიელი card reader (მოსახსნელი, მედიის გარეშე) Explorer-ივით არ ჩანს; Windows-ის "There is no disk in the drive" ფანჯარა `SetThreadErrorMode`-ით გამორთულია.
+- USB-ის ჩართვა და გამოღება: Jerry-ის message-only ფანჯარა `GUID_DEVINTERFACE_VOLUME`-ზე რეგისტრირდება (`WM_DEVICECHANGE`, `DBT_DEVICEARRIVAL` და `DBT_DEVICEREMOVECOMPLETE`) და monitor-ს მაშინვე ასკანინებს. message-only ფანჯარა broadcast-ს არ იღებს, ამიტომ mapped ქსელურ დისკს სკანი პოულობს.
+- Eject: Shell-ის "eject" verb (`ShellExecuteExW`, `SEE_MASK_INVOKEIDLIST`) საკუთარ Shell pool-ზე, 60 წმ timeout-ით; დაკავებულ დისკზე Windows საკუთარ შეტყობინებას აჩვენებს. Eject ღილაკი აქვს მოსახსნელ მედიას, ოპტიკურ დისკს და ლოკალურ დისკს USB, 1394, SD ან MMC bus-ზე (`IOCTL_STORAGE_QUERY_PROPERTY`). Hot-plug ნიშნები ვირტუალურ დისკსაც აქვს (Google Drive), რომელსაც Explorer-ში Eject არ აქვს, ამიტომ ისინი არ გამოდგება. აქტიური ტრანსფერისას გაფრთხილება v0.2-ში ემატება.
+- სტანდარტული ადგილები Known Folders-იდან მოდის (`jerry_win::drives::places`), OneDrive თავისი საქაღალდის სახელით (`OneDrive - Insta LLC`). ხელით დამატებული ქსელური მისამართები `network_places` ცხრილშია და სერვერთან დაკავშირების გარეშე ემატება; ცვლილებას `network-places:changed` ატყობინებს. Recycle Bin v1.0-მდე Explorer-ში იხსნება (`shell:RecycleBinFolder`).
 
 ## Windows ინტეგრაცია (jerry-win)
 
@@ -418,7 +421,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | ბრძანება (`invoke`) | მოთხოვნა → პასუხი | `rename`, `create_folder`, `delete`, `open`, `settings_set` |
 | ნაკადი (Tauri `Channel`) | ეტაპობრივი შედეგი ერთი მომხმარებლისთვის | listing-ის batch-ები და diff-ები, ძებნის შედეგები |
-| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
+| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
 | Custom protocol | ბინარული მონაცემი `<img>` და `<video>`-სთვის | `icon://`, `thumb://`, asset protocol preview-სთვის |
 
 ### ბრძანებები
@@ -434,7 +437,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | Clipboard და DnD | `clipboard_copy`, `clipboard_paste`, `clipboard_copy_text`, `clipboard_cut_entries`, `paste_as_file`, `drag_start`, `drop_target_update` |
 | Shell | `open_entries`, `folder_copy_path`, `open_with_list`, `open_with`, `show_native_menu`, `show_in_explorer`, `open_terminal`, `properties` |
 | ძებნა | `search_start`, `search_cancel` |
-| სისტემა | `drives_list`, `eject`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
+| სისტემა | `drives_list`, `eject`, `sidebar_places`, `network_places_list`, `network_place_add`, `network_place_remove`, `recycle_bin_open`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
 | მონაცემები | `settings_get`, `settings_set`, `keybindings_get` (შეცვლილი shortcut-ები), `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_save`, `export_settings`, `import_settings` |
 | ფანჯარა | `title_bar_attach` (caption ღილაკების მდგომარეობა, `Channel`), `title_bar_set_buttons`, `title_bar_press` (Narrator და კლავიატურა) |
 
@@ -457,6 +460,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | `settings` | გასაღები → JSON მნიშვნელობა | — |
 | `favorites`, `favorite_groups` | გზა, სახელი, ჯგუფი, რიგი | — |
+| `network_places` | sidebar-ში ხელით დამატებული ქსელური მისამართები (`\\server\share`): გზა და რიგი (#34) | — |
 | `recent_folders` | გზა, ბოლო გახსნა, გახსნების რაოდენობა. წერს listing (#31), როცა საქაღალდე, რომელშიც მომხმარებელი გადავიდა, ბოლომდე იკითხება (არა Refresh ან ტაბის საწყისი საქაღალდე); გზა ზუსტია, \\?\ ფორმით | 500 |
 | `folder_views` | გზა, ხედი, დალაგება, სვეტები | 5 000, ყველაზე ძველი იშლება |
 | `session` | ფანჯრები, ტაბები, პანელები, ტაბების ისტორია (JSON) | ერთი ჩანაწერი |

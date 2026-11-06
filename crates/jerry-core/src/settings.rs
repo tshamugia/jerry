@@ -63,6 +63,8 @@ pub struct Settings {
     pub open_in_jerry: bool,
     /// Check for new versions.
     pub check_updates: bool,
+    /// Show the sidebar (Ctrl+B).
+    pub show_sidebar: bool,
     /// Sidebar width, in CSS pixels (drag its edge).
     pub sidebar_width: u16,
     /// Preview panel width, in CSS pixels (drag its edge).
@@ -98,6 +100,7 @@ impl Default for Settings {
             global_hotkey: "Ctrl+Alt+J".into(),
             open_in_jerry: false,
             check_updates: true,
+            show_sidebar: true,
             sidebar_width: 232,
             preview_width: 288,
             pane_split: 0.5,
@@ -259,6 +262,7 @@ mod tests {
                 "globalHotkey": "Ctrl+Alt+J",
                 "openInJerry": false,
                 "checkUpdates": true,
+                "showSidebar": true,
                 "sidebarWidth": 232,
                 "previewWidth": 288,
                 "paneSplit": 0.5,
