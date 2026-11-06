@@ -209,6 +209,7 @@ export const strings = {
     palette: "Command palette",
     settings: "Settings",
     shortcuts: "Keyboard shortcuts",
+    exitJerry: "Exit Jerry",
   },
   /** Command groups, in the order the shortcut table shows them. */
   commandGroups: {
@@ -274,8 +275,15 @@ export const strings = {
     /** Session restore (#42) until the Settings window (#82). */
     toggleStartFolder: "Start here / previous session",
     toggleFolderViews: "Toggle folder views",
-    sessionSettings: (startFolder: string | undefined, folderViews: boolean) =>
-      `Start: ${startFolder ?? "previous session"}. Views ${folderViews ? "per folder" : "per tab"}.`,
+    /** "Keep Jerry running in the background" (#43) until the Settings window (#82). */
+    toggleKeepRunning: "Toggle keep running",
+    sessionSettings: (
+      startFolder: string | undefined,
+      folderViews: boolean,
+      keepRunning: boolean,
+    ) =>
+      `Start: ${startFolder ?? "previous session"}. Views ${folderViews ? "per folder" : "per tab"}. ` +
+      `Closing the last window ${keepRunning ? "hides Jerry" : "exits"}.`,
     settingsLoading: "Settings: loading…",
     settings: (settings: {
       showHidden: boolean;

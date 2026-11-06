@@ -37,49 +37,55 @@ export function fakeListings({
   path = String.raw`C:\Work`,
   opened = () => ({}),
   other = () => null,
+  events = false,
 }: {
   messages?: (target: ListingTarget) => ArrayBuffer[];
   sorted?: (sort: Sort) => ArrayBuffer | undefined;
   path?: string;
   opened?: (target: ListingTarget, id: number) => Partial<ListingOpened>;
   other?: (cmd: string, args: Record<string, unknown>) => unknown;
+  /** Events too: `emit` from `@tauri-apps/api/event` reaches the page's listeners. */
+  events?: boolean;
 } = {}): FakeListings {
   const calls: Call[] = [];
   // Each listing's stream, by id - 1.
   const streams: Channel<ArrayBuffer>[] = [];
-  mockIPC((cmd, args) => {
-    const payload = (args ?? {}) as Record<string, unknown>;
-    calls.push({ cmd, args: payload });
-    if (cmd === "listing_open") {
-      const stream = payload.onMessage as Channel<ArrayBuffer>;
-      streams.push(stream);
-      const queued = messages(payload.target as ListingTarget);
-      setTimeout(() => {
-        for (const message of queued) stream.onmessage(message);
-      }, 0);
-      const id = streams.length;
-      const name = path.split("\\").filter(Boolean).at(-1) ?? path;
-      const answer: ListingOpened = {
-        id,
-        path,
-        name,
-        folder: 100 + id,
-        parent: null,
-        crumbs: [{ name, folder: 100 + id }],
-        look: { kind: "tab" },
-      };
-      return { ...answer, ...opened(payload.target as ListingTarget, id) };
-    }
-    if (cmd === "listing_sort") {
-      const order = sorted(payload.sort as Sort);
-      const stream = streams[(payload.id as number) - 1];
-      if (order && stream) {
-        setTimeout(() => stream.onmessage(order), 0);
+  mockIPC(
+    (cmd, args) => {
+      const payload = (args ?? {}) as Record<string, unknown>;
+      calls.push({ cmd, args: payload });
+      if (cmd === "listing_open") {
+        const stream = payload.onMessage as Channel<ArrayBuffer>;
+        streams.push(stream);
+        const queued = messages(payload.target as ListingTarget);
+        setTimeout(() => {
+          for (const message of queued) stream.onmessage(message);
+        }, 0);
+        const id = streams.length;
+        const name = path.split("\\").filter(Boolean).at(-1) ?? path;
+        const answer: ListingOpened = {
+          id,
+          path,
+          name,
+          folder: 100 + id,
+          parent: null,
+          crumbs: [{ name, folder: 100 + id }],
+          look: { kind: "tab" },
+        };
+        return { ...answer, ...opened(payload.target as ListingTarget, id) };
       }
-      return null;
-    }
-    return other(cmd, payload);
-  });
+      if (cmd === "listing_sort") {
+        const order = sorted(payload.sort as Sort);
+        const stream = streams[(payload.id as number) - 1];
+        if (order && stream) {
+          setTimeout(() => stream.onmessage(order), 0);
+        }
+        return null;
+      }
+      return other(cmd, payload);
+    },
+    { shouldMockEvents: events },
+  );
   return {
     calls,
     send: (message, id = streams.length) => streams[id - 1]?.onmessage(message),

@@ -4,6 +4,7 @@ import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
 import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
+import { followLaunches } from "./features/session/instance";
 import { restoreSession } from "./features/session/restore";
 import { saveSession } from "./features/session/save";
 import { syncFavorites } from "./features/sidebar/favorites";
@@ -25,7 +26,10 @@ followAppearance();
 syncSettings();
 // The tabs come back before the first render (the app waits for them): the core read the
 // session before the window existed, and the shown folders' listings are running already.
-void restoreSession().then(() => saveSession());
+const restored = restoreSession();
+void restored.then(() => saveSession());
+// `jerry.exe <path>`: new tabs after the restored ones (#43).
+followLaunches(restored);
 syncAppearance();
 syncClipboard();
 syncSidebar();

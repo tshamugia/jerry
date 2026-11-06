@@ -8,6 +8,7 @@ mod dev;
 pub mod drives;
 pub mod favorites;
 pub mod icons;
+pub mod instance;
 pub mod ipc;
 pub mod jobs;
 pub mod listing;
@@ -24,7 +25,7 @@ pub mod window;
 use std::time::{Duration, Instant};
 
 use specta_typescript::{Typescript, semantic};
-use tauri::{AppHandle, Manager, RunEvent, WebviewWindow};
+use tauri::{AppHandle, Manager, RunEvent, State, WebviewWindow, WindowEvent};
 use tauri_specta::{Builder, collect_commands, collect_events};
 
 /// Where `pnpm bindings` writes the generated TypeScript.
@@ -58,12 +59,15 @@ fn app_version(app: AppHandle) -> String {
 }
 
 /// Called by the UI once its first frame is painted. The window is created hidden and shown
-/// only now, so it never flashes white.
+/// only now, so it never flashes white; a `--background` start keeps it hidden until the next
+/// start (#43).
 #[tauri::command]
 #[specta::specta]
-fn app_ready(app: AppHandle, window: WebviewWindow) {
+fn app_ready(app: AppHandle, window: WebviewWindow, instance: State<'_, instance::Instance>) {
     window::before_show(&app);
-    show(&window);
+    if instance.page_ready(window.label()) {
+        show(&window);
+    }
 }
 
 fn show(window: &WebviewWindow) {
@@ -79,6 +83,8 @@ macro_rules! commands {
         collect_commands![
             app_version,
             app_ready,
+            instance::app_exit,
+            instance::launch_take,
             listing::listing_open,
             listing::listing_sort,
             listing::listing_close,
@@ -156,7 +162,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             drives::DrivesChanged,
             drives::NetworkPlacesChanged,
             favorites::FavoritesChanged,
-            favorites::RecentFoldersChanged
+            favorites::RecentFoldersChanged,
+            instance::LaunchOpened
         ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
@@ -171,61 +178,99 @@ pub fn export_bindings() -> Result<(), specta_typescript::Error> {
     specta_builder().export(Typescript::default(), BINDINGS_PATH)
 }
 
-/// Builds and runs the app until it exits.
+/// What starts before Tauri, in parallel with it and WebView2: the database opens on its own
+/// thread (commands wait for it), and the session is read once it is open, with the listings of
+/// the folders it shows started (#42).
+struct Core {
+    db: storage::Db,
+    recent: favorites::Recent,
+    listings: listing::Listings,
+    sessions: session::Sessions,
+}
+
+impl Core {
+    fn start() -> Self {
+        let db = storage::Db::open(storage::db_path());
+        let recent = favorites::Recent::new(db.clone());
+        let listings = listing::Listings::new({
+            let recent = recent.clone();
+            move |folder| recent.visit(folder)
+        });
+        let sessions = session::Sessions::start(db.clone(), listings.clone());
+        Self {
+            db,
+            recent,
+            listings,
+            sessions,
+        }
+    }
+}
+
+/// Builds and runs the app until it exits. If Jerry runs already, hands this start's arguments
+/// to it and exits instead (#43).
 pub fn run() -> tauri::Result<()> {
     logging::init();
-    // Before the Shell pool starts below: this thread must be the process's main STA, not a pool
-    // worker (`enter_sta` says why).
+    let launch = instance::Launch::from_env();
+    #[cfg_attr(not(debug_assertions), expect(unused_mut))]
+    let mut context = tauri::generate_context!();
+    #[cfg(debug_assertions)]
+    instance::scope_to_build(&mut context);
+    // Another Jerry runs: this start only hands its arguments over, so none of Jerry's own work
+    // starts early. Should that Jerry exit meanwhile, `setup` starts it late.
+    let handing_off = instance::another_running(&context.config().identifier);
+    if handing_off {
+        tracing::info!("Jerry runs already; handing this start over");
+    }
+    // Before the Shell pool starts: this thread must be the process's main STA, not a pool worker
+    // (`enter_sta` says why).
     if let Err(error) = jerry_win::main_thread::enter_sta() {
         tracing::error!(%error, "the main thread couldn't enter its STA");
     }
-    // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
-    let db = storage::Db::open(storage::db_path());
-    let recent = favorites::Recent::new(db.clone());
-    let listings = listing::Listings::new({
-        let recent = recent.clone();
-        move |folder| recent.visit(folder)
-    });
-    // Reads the session once the database is open and starts listing the folders it shows, still
-    // in parallel with Tauri and WebView2 (#42).
-    let sessions = session::Sessions::start(db.clone(), listings.clone());
+    let early = (!handing_off).then(Core::start);
     let builder = specta_builder();
 
-    // Keep the bindings fresh while developing; CI checks the committed file.
+    // Keep the bindings fresh while developing; CI checks the committed file. Not from a start
+    // that hands over: the dev server would reload the running Jerry's page.
     #[cfg(debug_assertions)]
-    if let Err(error) = export_bindings() {
+    if !handing_off && let Err(error) = export_bindings() {
         tracing::error!(%error, "failed to export IPC bindings");
     }
 
     let app = tauri::Builder::default()
-        .manage(db.clone())
-        .manage(listings)
-        .manage(sessions.clone())
+        // First: a second start hands its arguments over and exits right here, in `build`.
+        .plugin(instance::plugin())
+        .manage(instance::Instance::new(&launch))
         .manage(delete::Deleting::default())
-        .manage(jerry_win::icons::Icons::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
-        .on_window_event({
-            let sessions = sessions.clone();
-            move |window, event| {
-                let moved = matches!(
-                    event,
-                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
-                );
-                if moved && window.label() == window::MAIN {
+        .on_window_event(|window, event| match event {
+            WindowEvent::Moved(_) | WindowEvent::Resized(_) if window.label() == window::MAIN => {
+                if let Some(sessions) = window.try_state::<session::Sessions>() {
                     sessions.placed(window);
                 }
             }
+            WindowEvent::CloseRequested { api, .. } => instance::close_requested(window, api),
+            WindowEvent::Focused(true) => instance::focused(window),
+            WindowEvent::Destroyed => instance::destroyed(window),
+            _ => {}
         })
-        .setup({
-            let sessions = sessions.clone();
-            move |app| {
+        .setup(move |app| {
             builder.mount_events(app);
             tracing::info!(
                 version = %app.package_info().version,
                 os_build = jerry_win::os_build(),
                 "Jerry starting"
             );
+            let Core {
+                db,
+                recent,
+                listings,
+                sessions,
+            } = early.unwrap_or_else(Core::start);
+            app.manage(db.clone());
+            app.manage(listings);
+            app.manage(sessions.clone());
+            app.manage(jerry_win::icons::Icons::new());
             if let Err(error) = jerry_win::main_thread::init() {
                 tracing::error!(%error, "main thread setup failed: OLE and run_on_main won't work");
             }
@@ -248,25 +293,29 @@ pub fn run() -> tauri::Result<()> {
             if let Some(placement) = placement {
                 session::place(&window, &placement);
             }
+            instance::first_start(app.handle(), launch);
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
             std::thread::spawn(move || {
                 std::thread::sleep(SHOW_FALLBACK);
-                if !window.is_visible().unwrap_or(true) {
+                let instance = window.state::<instance::Instance>();
+                if instance.shows_unready(window.label()) {
                     tracing::warn!("UI did not report ready; showing the window anyway");
                     show(&window);
                 }
             });
             Ok(())
-        }})
-        .build(tauri::generate_context!())?;
+        })
+        .build(context)?;
 
-    app.run(move |_, event| {
+    app.run(|app, event| {
         if let RunEvent::Exit = event {
             tracing::info!("Jerry exiting");
             // The last second's changes to the tabs.
-            sessions.flush();
+            if let Some(sessions) = app.try_state::<session::Sessions>() {
+                sessions.flush();
+            }
             // On the main thread, which put Jerry's files on the clipboard.
             clipboard::flush_on_exit();
             logging::flush();

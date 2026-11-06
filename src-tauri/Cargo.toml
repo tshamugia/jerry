@@ -23,13 +23,15 @@ serde_json = { workspace = true }
 specta = { workspace = true }
 specta-typescript = { workspace = true }
 tauri = { workspace = true }
+tauri-plugin-single-instance = { workspace = true }
 tauri-specta = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 webview2-com = { workspace = true }
-windows = { workspace = true }
+# FindWindowW: is another Jerry running (#43)?
+windows = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

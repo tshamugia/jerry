@@ -313,6 +313,8 @@ Jerry იყენებს მხოლოდ Windows OLE drag & drop-ს, შ�
 
 - გლობალური hotkey: `tauri-plugin-global-shortcut` (`RegisterHotKey`), ნაგულისხმევად Ctrl+Alt+J.
 - ერთი ეგზემპლარი: `tauri-plugin-single-instance`; მეორე გაშვების გზა იხსნება ახალ ტაბში ბოლო აქტიურ ფანჯარაში.
+
+  #43 (`src-tauri/src/instance.rs`, `src/features/session/instance.ts`): `jerry.exe [--background] [path…]`. გზა მისამართის ზოლივით იკითხება (`address::resolve`), გაშვების საქაღალდის მიმართ; ფაილი თავის საქაღალდეს ხსნის მონიშნული, არასწორი გზა toast-ს აჩენს. `"D:\"` Windows-ის ბრძანებაში `D:"`-ად მოდის და ბოლო ბრჭყალი `\`-ად ბრუნდება. მეორე გაშვება plugin-ის ფანჯარას `FindWindowW`-ით ამოწმებს და, თუ Jerry უკვე მუშაობს, ბაზას, სესიას და Shell pool-ს არ ხსნის, მხოლოდ არგუმენტებს გადასცემს (მისი პროცესი ~55–75 ms-ში სრულდება); თუ ის Jerry მანამდე გაითიშა, `setup` ამ ყველაფერს გვიან რთავს. გასახსნელი ბირთვში რჩება, სანამ ფანჯრის გვერდი არ აიღებს (`launch_take`: სესიის აღდგენის შემდეგ და ყოველ `launch:opened`-ზე), ამიტომ გვერდის ჩატვირთვისას არაფერი იკარგება; ახალი ტაბები აღდგენილი ტაბების შემდეგ იხსნება, აქტიურ პანელში. ბოლო ჩანას ფანჯრის დახურვა (`CloseRequested`) მას მალავს, თუ `keepRunning` ჩართულია; სხვა ფანჯარა იხურება. „Exit Jerry“ (Ctrl+Q, `app_exit`) `app.exit(0)`-ით თიშავს და სესია გასვლისას იწერება. `--background`: მთავარი ფანჯარა დამალული რჩება შემდეგ გაშვებამდე (5 წმ-ის fallback-იც არ აჩენს). Debug build-ის identifier-ს build-ის საქაღალდის hash ემატება (`.dev<hash>`): პარალელური worktree-ების dev აპები და დაყენებული Jerry ერთმანეთს გაშვებას არ გადასცემენ, თითოეულს საკუთარი WebView2 profile აქვს. გაზომვა (07.11.2026, release, 8 გაშვება): დახურვის შემდეგ `jerry.exe`-ის გაშვებიდან ფანჯარა ჩანს 29–44 ms-ში, წინაა 31–56 ms-ში, 60 ms-ზე უკვე სრულად დახატულია.
 - Autostart: `tauri-plugin-autostart` (HKCU Run) `--background` არგუმენტით. ფანჯარა დამალული იქმნება და hotkey-ზე მყისიერად ჩნდება.
 - "Open in Jerry": ჩანაწერები `HKCU\Software\Classes`-ში (`Directory\shell`, `Directory\Background\shell`, `Drive\shell`), admin-ის გარეშე. Windows 11-ის ახალ მენიუში გამოსაჩენად v1.0-ში ემატება sparse package (package identity), იმავე code signing სერტიფიკატით; მანამდე ჩანაწერი "Show more options"-ში ჩანს.
 - შეტყობინებები: WinRT `ToastNotification` (`windows` crate); დაჭერა (`Activated`) ხსნის დანიშნულების საქაღალდეს. AUMID რეგისტრირდება ინსტალერის shortcut-ით.
@@ -431,7 +433,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | ბრძანება (`invoke`) | მოთხოვნა → პასუხი | `rename`, `create_folder`, `delete`, `open`, `settings_set` |
 | ნაკადი (Tauri `Channel`) | ეტაპობრივი შედეგი ერთი მომხმარებლისთვის | listing-ის batch-ები და diff-ები, ძებნის შედეგები |
-| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `favorites:changed`, `recent-folders:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
+| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `favorites:changed`, `recent-folders:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `launch:opened`, `history:changed`, `dnd:*` |
 | Custom protocol | ბინარული მონაცემი `<img>` და `<video>`-სთვის | `icon://`, `thumb://`, asset protocol preview-სთვის |
 
 ### ბრძანებები
@@ -449,7 +451,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | ძებნა | `search_start`, `search_cancel` |
 | სისტემა | `drives_list`, `eject`, `sidebar_places`, `network_places_list`, `network_place_add`, `network_place_remove`, `recycle_bin_open`, `onedrive_pin`, `recycle_bin_list`, `recycle_bin_restore` |
 | მონაცემები | `settings_get`, `settings_set`, `keybindings_get` (შეცვლილი shortcut-ები), `appearance_get` (Mica და Windows-ის accent), `favorites_*`, `session_restore`, `session_save`, `folder_view_save`, `export_settings`, `import_settings` |
-| ფანჯარა | `title_bar_attach` (caption ღილაკების მდგომარეობა, `Channel`), `title_bar_set_buttons`, `title_bar_press` (Narrator და კლავიატურა) |
+| ფანჯარა | `title_bar_attach` (caption ღილაკების მდგომარეობა, `Channel`), `title_bar_set_buttons`, `title_bar_press` (Narrator და კლავიატურა), `app_ready`, `launch_take` (გაშვების გზები, #43), `app_exit` (Exit Jerry) |
 
 ### ფორმატი და შეცდომები
 
