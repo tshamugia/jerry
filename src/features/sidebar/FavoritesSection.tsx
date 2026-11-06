@@ -110,12 +110,14 @@ export function FavoritesSection({ current }: { current: string | undefined }) {
   const shortcut = useShortcut("addFavorite");
   const [lifted, setLifted] = useState<number>();
   const rows = favoriteRows(groups, favorites, foldedGroups, lifted);
+  const twins = sameNames(favorites.map((favorite) => favorite.name));
 
   const render: RenderRow = (row, index, drag) =>
     row.kind === "favorite" ? (
       <FavoriteItem
         key={row.key}
         favorite={row.favorite}
+        detail={twins.has(row.favorite.name) ? parentName(row.favorite.path) : undefined}
         selected={current !== undefined && folderKey(row.favorite.path) === current}
         problem={problems.get(row.favorite.id)}
         naming={naming?.kind === "favorite" && naming.id === row.favorite.id}
@@ -139,7 +141,9 @@ export function FavoritesSection({ current }: { current: string | undefined }) {
         menu={
           <>
             <AddCurrentFolder />
-            <MenuItem onSelect={() => startNaming({ kind: "newGroup" })}>{t.newGroup}</MenuItem>
+            <MenuItem afterClose onSelect={() => startNaming({ kind: "newGroup" })}>
+              {t.newGroup}
+            </MenuItem>
           </>
         }
       >
@@ -192,12 +196,15 @@ function AddCurrentFolder() {
 /** A favorite: its name (the user's or its folder's), grey when its folder isn't there. */
 function FavoriteItem({
   favorite,
+  detail,
   selected,
   problem,
   naming,
   drag,
 }: {
   favorite: Favorite;
+  /** The folder it is in, when another favorite has its name. */
+  detail: string | undefined;
   selected: boolean;
   problem: JerryError | undefined;
   naming: boolean;
@@ -213,7 +220,9 @@ function FavoriteItem({
       menu={
         <>
           <MenuItem onSelect={() => openFavorite(favorite.id, true)}>{t.openInNewTab}</MenuItem>
-          <MenuItem onSelect={() => startNaming(own)}>{t.rename}</MenuItem>
+          <MenuItem afterClose onSelect={() => startNaming(own)}>
+            {t.rename}
+          </MenuItem>
           <MenuSeparator />
           <MenuItem onSelect={() => removeFavorite(favorite.id)}>{t.removeFavorite}</MenuItem>
         </>
@@ -224,6 +233,7 @@ function FavoriteItem({
         path={favorite.path}
         icon={<FolderIcon />}
         label={favorite.name}
+        detail={detail}
         title={problem ? t.unavailable(favorite.path) : favorite.path}
         selected={selected}
         indent
@@ -258,8 +268,12 @@ function GroupCaption({
       label={t.groupMenu}
       menu={
         <>
-          <MenuItem onSelect={() => startNaming(own)}>{t.renameGroup}</MenuItem>
-          <MenuItem onSelect={() => startNaming({ kind: "newGroup" })}>{t.newGroup}</MenuItem>
+          <MenuItem afterClose onSelect={() => startNaming(own)}>
+            {t.renameGroup}
+          </MenuItem>
+          <MenuItem afterClose onSelect={() => startNaming({ kind: "newGroup" })}>
+            {t.newGroup}
+          </MenuItem>
           <MenuSeparator />
           <MenuItem onSelect={() => removeGroup(group.id)}>{t.removeGroup}</MenuItem>
         </>
@@ -430,6 +444,16 @@ export function folderName(path: string): string {
   return share ? trimmed : (parts.at(-1) ?? trimmed);
 }
 
+/** The names that occur more than once: those items also show the folder they are in. */
+function sameNames(names: readonly string[]): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const twice = new Set<string>();
+  for (const name of names) {
+    (seen.has(name) ? twice : seen).add(name);
+  }
+  return twice;
+}
+
 /**
  * Recent, as the design draws it: one line with a clock that unfolds the 10 folders opened last.
  * Two of the same name show the folder they are in.
@@ -437,10 +461,7 @@ export function folderName(path: string): string {
 export function RecentSection() {
   const recent = useFavorites((state) => state.recent);
   const folded = useSidebar((state) => state.folded.has("recent"));
-  const names = new Map<string, number>();
-  for (const folder of recent) {
-    names.set(folder.name, (names.get(folder.name) ?? 0) + 1);
-  }
+  const twins = sameNames(recent.map((folder) => folder.name));
   return (
     <>
       <button
@@ -469,7 +490,7 @@ export function RecentSection() {
             path={folder.path}
             icon={<FolderIcon />}
             label={folder.name}
-            detail={(names.get(folder.name) ?? 0) > 1 ? parentName(folder.path) : undefined}
+            detail={twins.has(folder.name) ? parentName(folder.path) : undefined}
             selected={false}
             indent
             onOpen={(newTab) => openPlace(folder.path, newTab)}
