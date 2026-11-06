@@ -24,7 +24,6 @@ import {
   reopenClosedTab,
   resetTabs,
   showTabNumber,
-  startTabs,
   stepTab,
   type Tab,
   tabById,
@@ -304,21 +303,4 @@ test("Ctrl+Tab goes round the strip; Ctrl+1…8 go to that tab and Ctrl+9 to the
   expect(useTabs.getState().left.active).toBe(b.id);
   showTabNumber("left", 9);
   expect(useTabs.getState().left.active).toBe(c.id);
-});
-
-test("each pane starts with one tab on the startup folder, or the user's own folder", () => {
-  const core = fakeListings();
-  startTabs({ kind: "previousSession" });
-  startTabs({ kind: "previousSession" });
-  expect(useTabs.getState().left.tabs).toHaveLength(1);
-  expect(useTabs.getState().right.tabs).toHaveLength(1);
-  const targets = core.calls.filter((call) => call.cmd === "listing_open");
-  expect(targets.map((call) => call.args.target)).toEqual([{ kind: "home" }, { kind: "home" }]);
-
-  resetTabs();
-  startTabs({ kind: "folder", path: String.raw`D:\Projects` });
-  expect(core.calls.at(-1)?.args.target).toEqual({
-    kind: "path",
-    path: String.raw`D:\Projects`,
-  });
 });

@@ -47,6 +47,7 @@ use std::time::{Duration, Instant};
 use jerry_core::error::display_path;
 use jerry_core::listing::{Diff, Entries, Listing, filetime_to_unix_ms, list};
 use jerry_core::path::long_path;
+use jerry_core::session::nearest_folder;
 use jerry_core::sort::{PlainTypeNames, Sort, SortColumn, SortIndex};
 use jerry_core::volume;
 use jerry_core::watcher::{Changes, Event, Subscription, Watchers, refresh};
@@ -60,6 +61,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::ipc::{Bytes, message_buffer};
 use crate::jobs;
+use crate::storage::Db;
+use crate::views::{self, Look};
 
 const BATCH: u32 = 1;
 const ORDER: u32 = 2;
@@ -87,11 +90,14 @@ pub enum ListingTarget {
     /// A folder a listing named before (`ListingOpened::folder` or `parent`), by its exact path:
     /// Back, Forward, Up, a new or reopened tab. The folder needn't be open any more.
     Folder { folder: u32 },
+    /// The nearest folder that still exists, folder token `folder` itself or the closest folder
+    /// it is in: a restored tab whose folder went away (#42).
+    Nearest { folder: u32 },
     /// The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set.
     Home,
 }
 
-/// An opened listing: its id, and its folder.
+/// An opened listing: its id, its folder, and how the tab shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
 pub struct ListingOpened {
     pub id: u32,
@@ -105,6 +111,24 @@ pub struct ListingOpened {
     /// The folder it is in, as such a token; none at a root.
     pub parent: Option<u32>,
     /// The address bar's segments, from the root (`C:`, `\\server\share`) to the folder.
+    pub crumbs: Vec<Crumb>,
+    /// The view, sort and columns the tab shows the folder with (#42). The listing is sorted by
+    /// this look's sort, not the one asked for, unless the tab keeps its own.
+    pub look: Look,
+}
+
+/// A folder as a tab's history keeps it: display text and tokens, as `ListingOpened` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FolderEntry {
+    /// The folder as display text.
+    pub path: String,
+    /// The folder's name for a tab.
+    pub name: String,
+    /// The folder, as a token for `ListingTarget::Folder`.
+    pub folder: u32,
+    /// The folder it is in, as such a token; none at a root.
+    pub parent: Option<u32>,
+    /// The address bar's segments, from the root to the folder.
     pub crumbs: Vec<Crumb>,
 }
 
@@ -476,7 +500,12 @@ impl Listings {
             ListingTarget::Folder { folder } => self
                 .folder_path(folder)
                 .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
-            // Blocking: `listing_open` resolves it on a background job.
+            // Blocking, as is Home: `listing_open` resolves targets on a background job.
+            ListingTarget::Nearest { folder } => nearest_folder(
+                &self
+                    .folder_path(folder)
+                    .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?,
+            ),
             ListingTarget::Home => long_path(&jerry_win::folders::profile()?),
         }
     }
@@ -499,8 +528,8 @@ impl Listings {
         }
     }
 
-    /// What `listing_open` answers for listing `id` of `folder`: display text and tokens.
-    fn opened(&self, id: u32, folder: &Path) -> ListingOpened {
+    /// `folder` (an exact long path) as a tab's history keeps it: display text and tokens.
+    pub fn entry_for(&self, folder: &Path) -> FolderEntry {
         let name = folder.file_name().map_or_else(
             || display_path(folder),
             |name| name.to_string_lossy().into_owned(),
@@ -514,13 +543,32 @@ impl Listings {
             })
             .collect();
         crumbs.reverse();
-        ListingOpened {
-            id,
+        FolderEntry {
             path: display_path(folder),
             name,
             folder: tokens.token(folder),
             parent: folder.parent().map(|parent| tokens.token(parent)),
             crumbs,
+        }
+    }
+
+    /// What `listing_open` answers for listing `id` of `folder`, shown with `look`.
+    fn opened(&self, id: u32, folder: &Path, look: Look) -> ListingOpened {
+        let FolderEntry {
+            path,
+            name,
+            folder,
+            parent,
+            crumbs,
+        } = self.entry_for(folder);
+        ListingOpened {
+            id,
+            path,
+            name,
+            folder,
+            parent,
+            crumbs,
+            look,
         }
     }
 
@@ -544,6 +592,7 @@ impl Listings {
         match prestarted {
             Some((id, outbox)) => {
                 outbox.attach(channel);
+                tracing::debug!(id, tab, "the page took a listing started at process start");
                 id
             }
             None => self.start(tab, folder, sort, Some(channel), visit),
@@ -732,6 +781,19 @@ impl Listings {
         let entries = listing.entries();
         let (attributes, modified) = (*entries.attributes().get(id)?, *entries.modified().get(id)?);
         Some((listing.path(id)?, attributes, modified))
+    }
+
+    /// Tests only: the tabs whose listings wait for the page (`prestart`), in order.
+    #[cfg(test)]
+    pub fn prestarted_tabs(&self) -> Vec<u32> {
+        let mut tabs: Vec<u32> = self
+            .open()
+            .values()
+            .filter(|open| !open.state.outbox.is_attached())
+            .map(|open| open.tab)
+            .collect();
+        tabs.sort_unstable();
+        tabs
     }
 
     /// The entries of the open listing `listing` the folder has now whose names (exact UTF-16) are
@@ -1041,32 +1103,45 @@ fn deliver(channel: &Channel<Bytes>, message: Bytes) {
 }
 
 /// Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
-/// their order by `sort` and a done message, then a diff and an order for every change while the
-/// listing is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once,
-/// before the folder is read: errors reading it, such as `AccessDenied`, `NotFound` or
-/// `DeviceGone`, come as the stream's error message, and so does the folder going away. Opening
-/// a folder for a tab closes the tab's previous listing.
+/// their order and a done message, then a diff and an order for every change while the listing
+/// is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
+/// folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come as
+/// the stream's error message, and so does the folder going away. Opening a folder for a tab
+/// closes the tab's previous listing.
+///
+/// The listing is sorted by the answer's `look`: the folder's remembered view or the defaults
+/// while views are remembered per folder (#42), or else `sort`, the tab's own. A folder opened
+/// again (`ListingTarget::Listing`) keeps the tab's.
 #[tauri::command]
 #[specta::specta]
 pub async fn listing_open(
     listings: State<'_, Listings>,
+    db: State<'_, Db>,
     tab: u32,
     target: ListingTarget,
     sort: Sort,
     on_message: Channel<Bytes>,
 ) -> Result<ListingOpened, JerryError> {
     // Only a folder the user went to is a visit: not a refresh or a retry, nor the folder a tab
-    // starts on.
-    let visit = !matches!(target, ListingTarget::Listing { .. } | ListingTarget::Home);
-    let folder = match target {
-        ListingTarget::Home => {
-            let listings = listings.inner().clone();
-            jobs::background("home folder", move || listings.resolve(ListingTarget::Home)).await?
-        }
-        target => listings.resolve(target)?,
-    };
-    let id = listings.open_folder(tab, folder.clone(), sort, on_message, visit);
-    Ok(listings.opened(id, &folder))
+    // starts on, nor a restored tab's way around a folder that went away.
+    let visit = !matches!(
+        target,
+        ListingTarget::Listing { .. } | ListingTarget::Home | ListingTarget::Nearest { .. }
+    );
+    let again = matches!(target, ListingTarget::Listing { .. });
+    let (resolver, db) = (listings.inner().clone(), Db::clone(&db));
+    let (folder, look) = jobs::background("open folder", move || {
+        let folder = resolver.resolve(target)?;
+        let look = if again {
+            Look::Tab
+        } else {
+            views::look(&db, &folder, sort.folders_first)
+        };
+        Ok((folder, look))
+    })
+    .await?;
+    let id = listings.open_folder(tab, folder.clone(), look.sort(sort), on_message, visit);
+    Ok(listings.opened(id, &folder, look))
 }
 
 /// Sorts listing `id` by `sort` from now on. The new order (only entry ids) comes through the
@@ -1437,6 +1512,26 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_that_went_away_resolves_to_its_nearest_parent() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let kept = dir.path().join("პროექტი");
+        std::fs::create_dir(&kept).expect("mkdir");
+        let listings = Listings::default();
+        let gone = listings.folder_token(&long_path(&kept.join("ნახაზები")).expect("long path"));
+        assert_eq!(
+            listings.resolve(ListingTarget::Nearest { folder: gone }),
+            Ok(long_path(&kept).expect("long path"))
+        );
+        assert_eq!(
+            listings
+                .resolve(ListingTarget::Nearest { folder: 999_999 })
+                .map_err(|error| error.code),
+            Err(ErrorCode::NotFound),
+            "a token the core never gave"
+        );
+    }
+
+    #[test]
     fn opened_folders_get_names_and_tokens_that_open_them_again() {
         let dir = tempfile::tempdir().expect("temp folder");
         let sub = dir.path().join("ნახაზები");
@@ -1444,12 +1539,12 @@ mod tests {
         let listings = Listings::default();
         let folder = long_path(&sub).expect("long path");
 
-        let opened = listings.opened(7, &folder);
+        let opened = listings.opened(7, &folder, Look::Tab);
         assert_eq!(opened.id, 7);
         assert_eq!(opened.name, "ნახაზები");
         assert_eq!(opened.path, display_path(&folder));
         // The same folder, the same token; it resolves to the exact path even with nothing open.
-        assert_eq!(listings.opened(8, &folder).folder, opened.folder);
+        assert_eq!(listings.opened(8, &folder, Look::Tab).folder, opened.folder);
         let again = listings.resolve(ListingTarget::Folder {
             folder: opened.folder,
         });
@@ -1471,12 +1566,12 @@ mod tests {
     #[test]
     fn roots_are_named_by_themselves_and_have_no_parent() {
         let listings = Listings::default();
-        let drive = listings.opened(1, Path::new(r"\\?\C:\"));
+        let drive = listings.opened(1, Path::new(r"\\?\C:\"), Look::Tab);
         assert_eq!((drive.name.as_str(), drive.parent), (r"C:\", None));
-        let share = listings.opened(2, Path::new(r"\\?\UNC\server\share\"));
+        let share = listings.opened(2, Path::new(r"\\?\UNC\server\share\"), Look::Tab);
         assert_eq!(share.name, r"\\server\share\");
         assert_eq!(share.parent, None);
-        let folder = listings.opened(3, Path::new(r"\\?\UNC\server\share\Projects"));
+        let folder = listings.opened(3, Path::new(r"\\?\UNC\server\share\Projects"), Look::Tab);
         assert_eq!(folder.name, "Projects");
         assert_eq!(folder.parent, Some(share.folder));
     }
@@ -1486,7 +1581,7 @@ mod tests {
         let listings = Listings::default();
         let crumbs = |path: &str| -> Vec<(String, PathBuf)> {
             listings
-                .opened(1, Path::new(path))
+                .opened(1, Path::new(path), Look::Tab)
                 .crumbs
                 .into_iter()
                 .map(|crumb| {

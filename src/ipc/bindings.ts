@@ -14,11 +14,15 @@ export const commands = {
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
 	/**
 	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
-	 *  their order by `sort` and a done message, then a diff and an order for every change while the
-	 *  listing is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once,
-	 *  before the folder is read: errors reading it, such as `AccessDenied`, `NotFound` or
-	 *  `DeviceGone`, come as the stream's error message, and so does the folder going away. Opening
-	 *  a folder for a tab closes the tab's previous listing.
+	 *  their order and a done message, then a diff and an order for every change while the listing
+	 *  is open, or an error message (decoded by `src/ipc/listing.ts`). Returns at once, before the
+	 *  folder is read: errors reading it, such as `AccessDenied`, `NotFound` or `DeviceGone`, come as
+	 *  the stream's error message, and so does the folder going away. Opening a folder for a tab
+	 *  closes the tab's previous listing.
+	 * 
+	 *  The listing is sorted by the answer's `look`: the folder's remembered view or the defaults
+	 *  while views are remembered per folder (#42), or else `sort`, the tab's own. A folder opened
+	 *  again (`ListingTarget::Listing`) keeps the tab's.
 	 */
 	listingOpen: (tab: number, target: ListingTarget, sort: Sort, onMessage: Channel<ArrayBuffer>) => typedError<ListingOpened, JerryError>(__TAURI_INVOKE("listing_open", { tab, target, sort, onMessage })),
 	/**
@@ -229,6 +233,24 @@ export const commands = {
 	settingsSet: (key: string, value: unknown) => typedError<null, JerryError>(__TAURI_INVOKE("settings_set", { key, value })),
 	/**  The shortcuts the user changed (`keybindings`); every other command keeps its default. */
 	keybindingsGet: () => typedError<Keybinding[], JerryError>(__TAURI_INVOKE("keybindings_get")),
+	/**
+	 *  What this window opens: for the main window, the session (the tabs of the previous start, or
+	 *  the start folder from the settings); for another, the user's own folder. The main window's
+	 *  first call gets the tabs whose listings started at process start.
+	 */
+	sessionRestore: () => typedError<SessionRestore, JerryError>(__TAURI_INVOKE("session_restore")),
+	/**
+	 *  Keeps this window's panes, tabs and their histories for the next start: written a second
+	 *  after the last change, and at exit. Only the main window's are kept until windows have
+	 *  sessions of their own (#89).
+	 */
+	sessionSave: (session: SessionSave) => __TAURI_INVOKE<void>("session_save", { session }),
+	/**
+	 *  Remembers `view` for folder token `folder` (`ListingOpened::folder`): the user sorted it or
+	 *  changed its columns. Does nothing while views aren't remembered per folder. Past 5 000
+	 *  folders, the ones used longest ago are forgotten.
+	 */
+	folderViewSave: (folder: number, view: FolderView) => typedError<null, JerryError>(__TAURI_INVOKE("folder_view_save", { folder, view })),
 	/**  Starts streaming the window's [`FrameState`] to the page; the current state comes first. */
 	titleBarAttach: (updates: Channel<FrameState>) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_attach", { updates })),
 	/**  Tells the native hit-test where the page drew the caption buttons. */
@@ -327,6 +349,19 @@ export type ClickToOpen = "single" | "double";
 export type ClipboardChanged = {
 	/**  Jerry's cut is on the clipboard: its rows show dimmed (`clipboard_cut_entries`). */
 	cut: boolean,
+};
+
+/**
+ *  The Details view's columns, as the UI's `ColumnLayout` (`src/stores/columns.ts`): their order,
+ *  the ones that don't show and the widths the user dragged.
+ */
+export type ColumnLayout = {
+	/**  Every column once, in display order. */
+	order: SortColumn[],
+	/**  The columns that don't show; never Name. */
+	hidden: SortColumn[],
+	/**  Widths the user dragged, in CSS px. */
+	widths: Partial<{ [key in SortColumn]: number }>,
 };
 
 /**  What Copy path and Copy name put on the clipboard. */
@@ -493,6 +528,22 @@ export type FavoriteList = {
  */
 export type FavoritesChanged = FavoriteList;
 
+/**  A folder in a tab's history. */
+export type FolderSave = {
+	/**  The folder's token (`ListingOpened::folder`). */
+	folder: number,
+	/**  The entry that had the focus when the tab left the folder, by name. */
+	focus: string | null,
+};
+
+/**  The view, sort and columns a folder shows with. */
+export type FolderView = {
+	/**  Details, List or Grid. v0.1 has only Details (List and Grid come in v0.3). */
+	view: View,
+	sort: Sort,
+	columns: ColumnLayout,
+};
+
 /**
  *  What the page needs to draw the caption buttons like native ones: which one the mouse is over
  *  or holds down (only the native hit-test sees that), whether the window is maximized (the
@@ -503,6 +554,22 @@ export type FrameState = {
 	pressed: CaptionButton | null,
 	maximized: boolean,
 	active: boolean,
+};
+
+/**  A folder in a restored tab's history: as `ListingOpened` names it, and its focused entry. */
+export type HistoryFolder = {
+	/**  The folder as display text. */
+	path: string,
+	/**  The folder's name for a tab. */
+	name: string,
+	/**  The folder, as a token for `ListingTarget::Folder`. */
+	folder: number,
+	/**  The folder it is in, as such a token; none at a root. */
+	parent: number | null,
+	/**  The address bar's segments, from the root to the folder. */
+	crumbs: Crumb[],
+	/**  The entry that had the focus when the tab left the folder, by name. */
+	focus: string | null,
 };
 
 /**  Icon counters since start: whether rows are served from memory or need the Shell. */
@@ -533,7 +600,7 @@ export type Keybinding = {
 	shortcut: string | null,
 };
 
-/**  An opened listing: its id, and its folder. */
+/**  An opened listing: its id, its folder, and how the tab shows it. */
 export type ListingOpened = {
 	id: number,
 	/**  The folder as display text. */
@@ -549,6 +616,11 @@ export type ListingOpened = {
 	parent: number | null,
 	/**  The address bar's segments, from the root (`C:`, `\\server\share`) to the folder. */
 	crumbs: Crumb[],
+	/**
+	 *  The view, sort and columns the tab shows the folder with (#42). The listing is sorted by
+	 *  this look's sort, not the one asked for, unless the tab keeps its own.
+	 */
+	look: Look,
 };
 
 /**  The folder to list. */
@@ -570,8 +642,28 @@ export type ListingTarget =
  *  Back, Forward, Up, a new or reopened tab. The folder needn't be open any more.
  */
 { kind: "folder"; folder: number } | 
+/**
+ *  The nearest folder that still exists, folder token `folder` itself or the closest folder
+ *  it is in: a restored tab whose folder went away (#42).
+ */
+{ kind: "nearest"; folder: number } | 
 /**  The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set. */
 { kind: "home" };
+
+/**  How a tab shows a folder it opens. */
+export type Look = 
+/**
+ *  The tab keeps its own view, sort and columns: views aren't remembered per folder, or the
+ *  tab opened the same folder again (Refresh, Retry).
+ */
+{ kind: "tab" } | 
+/**
+ *  The folder has no remembered view: the default view (a setting), the default sort and the
+ *  default columns.
+ */
+{ kind: "default"; view: View; sort: Sort } | 
+/**  A remembered view: the folder's, or a restored tab's own. */
+{ kind: "saved"; view: FolderView };
 
 /**
  *  A network location the user added: its path as display text (`\\server\share`), the name
@@ -585,6 +677,23 @@ export type NetworkPlace = {
 
 /**  Sent to every window when a network location is added to the sidebar or removed. */
 export type NetworkPlacesChanged = NetworkPlace[];
+
+/**  A pane's tabs, pinned ones first; at least one. */
+export type PaneRestore = {
+	tabs: TabRestore[],
+	/**  The tab the pane shows: its place in `tabs`. */
+	active: number,
+};
+
+/**  A pane's tabs, pinned ones first. */
+export type PaneSave = {
+	tabs: TabSave[],
+	/**  The tab the pane shows: its place in `tabs`. */
+	active: number,
+};
+
+/**  One of a window's two panes. */
+export type PaneSide = "left" | "right";
 
 /**  The standard places, as `icon://` names them. */
 export type PlaceName = "desktop" | "downloads" | "documents" | "pictures" | "onedrive";
@@ -604,6 +713,21 @@ export type ResolvedPath = {
 	folder: number,
 	/**  A file in it to select (the text named a file), by its display name. */
 	select: string | null,
+};
+
+/**  What a window opens: its panes and their tabs. */
+export type SessionRestore = {
+	/**  The pane the keyboard acts on. */
+	activePane: PaneSide,
+	left: PaneRestore,
+	right: PaneRestore,
+};
+
+/**  A window's panes and tabs, as the page sends them. */
+export type SessionSave = {
+	activePane: PaneSide,
+	left: PaneSave,
+	right: PaneSave,
 };
 
 /**  Every setting, defaults filled in. */
@@ -691,7 +815,7 @@ export type Sort = {
 	foldersFirst: boolean,
 };
 
-/**  A column the list sorts by. */
+/**  A column the list sorts by. Ordered as declared, for maps keyed by column. */
 export type SortColumn = "name" | 
 /**  Date modified. */
 "modified" | 
@@ -725,6 +849,33 @@ export type Subfolders = {
 	folders: Crumb[],
 	/**  There are more than these. */
 	more: boolean,
+};
+
+/**  A tab to open again. */
+export type TabRestore = {
+	/**
+	 *  The tab's id. Each pane's shown tab may have its listing started already, for this id,
+	 *  its folder and its look's sort.
+	 */
+	id: number,
+	pinned: boolean,
+	/**  Oldest first; at least one folder. */
+	history: HistoryFolder[],
+	/**  The folder the tab shows: its place in `history`. */
+	index: number,
+	/**  How the tab shows its folder. The tab takes it before it opens the folder. */
+	look: Look,
+};
+
+/**  A tab: its history and its own view. */
+export type TabSave = {
+	pinned: boolean,
+	/**  Oldest first. */
+	history: FolderSave[],
+	/**  The folder the tab shows: its place in `history`. */
+	index: number,
+	/**  The view, sort and columns the tab shows its folder with. */
+	view: FolderView,
 };
 
 /**  What deleting some items would remove. */

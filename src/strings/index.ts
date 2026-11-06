@@ -4,6 +4,7 @@ import type { SortColumn } from "../ipc";
 import { clipboardStrings } from "./clipboard";
 import { deleteStrings } from "./delete";
 import { renameStrings } from "./rename";
+import { sessionStrings } from "./session";
 import { sidebarStrings } from "./sidebar";
 
 const integer = new Intl.NumberFormat("en-US");
@@ -233,6 +234,8 @@ export const strings = {
   deleting: deleteStrings,
   /** New folder (Ctrl+Shift+N) and inline rename (F2). */
   rename: renameStrings,
+  /** Session restore and its toasts. */
+  session: sessionStrings,
   /** Copy, Cut, Paste, Copy path, Copy name. */
   clipboard: clipboardStrings,
   /** The sidebar: places, drives, network locations, Recycle Bin. */
@@ -268,6 +271,11 @@ export const strings = {
     nextTheme: "Next theme",
     openWindow: "Open another window",
     toggleDualPane: "Toggle dual pane",
+    /** Session restore (#42) until the Settings window (#82). */
+    toggleStartFolder: "Start here / previous session",
+    toggleFolderViews: "Toggle folder views",
+    sessionSettings: (startFolder: string | undefined, folderViews: boolean) =>
+      `Start: ${startFolder ?? "previous session"}. Views ${folderViews ? "per folder" : "per tab"}.`,
     settingsLoading: "Settings: loading…",
     settings: (settings: {
       showHidden: boolean;

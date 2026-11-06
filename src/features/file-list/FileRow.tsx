@@ -124,8 +124,9 @@ function NameCell({
       {editing ? (
         <RenameField folder={folder} />
       ) : (
-        // `data-name`: a slow second click here renames.
-        <span data-item data-name className={`truncate ${dimmed}`}>
+        // `data-name`: a slow second click here renames. `elementtiming`: when rows were first
+        // painted, for the cold-start budget (Element Timing, Tech PRD «წარმადობა»).
+        <span data-item data-name elementtiming="row" className={`truncate ${dimmed}`}>
           {nameText(name, folder, showExtensions)}
         </span>
       )}

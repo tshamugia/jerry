@@ -14,9 +14,11 @@ pub mod listing;
 pub mod logging;
 pub mod navigation;
 pub mod rename;
+pub mod session;
 pub mod shell;
 pub mod storage;
 pub mod title_bar;
+pub mod views;
 pub mod window;
 
 use std::time::{Duration, Instant};
@@ -118,6 +120,9 @@ macro_rules! commands {
             storage::settings_get,
             storage::settings_set,
             storage::keybindings_get,
+            session::session_restore,
+            session::session_save,
+            views::folder_view_save,
             title_bar::title_bar_attach,
             title_bar::title_bar_set_buttons,
             title_bar::title_bar_press,
@@ -177,6 +182,13 @@ pub fn run() -> tauri::Result<()> {
     // Opens on its own thread while Tauri and WebView2 start; commands wait for it.
     let db = storage::Db::open(storage::db_path());
     let recent = favorites::Recent::new(db.clone());
+    let listings = listing::Listings::new({
+        let recent = recent.clone();
+        move |folder| recent.visit(folder)
+    });
+    // Reads the session once the database is open and starts listing the folders it shows, still
+    // in parallel with Tauri and WebView2 (#42).
+    let sessions = session::Sessions::start(db.clone(), listings.clone());
     let builder = specta_builder();
 
     // Keep the bindings fresh while developing; CI checks the committed file.
@@ -187,15 +199,27 @@ pub fn run() -> tauri::Result<()> {
 
     let app = tauri::Builder::default()
         .manage(db.clone())
-        .manage(listing::Listings::new({
-            let recent = recent.clone();
-            move |folder| recent.visit(folder)
-        }))
+        .manage(listings)
+        .manage(sessions.clone())
         .manage(delete::Deleting::default())
         .manage(jerry_win::icons::Icons::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
-        .setup(move |app| {
+        .on_window_event({
+            let sessions = sessions.clone();
+            move |window, event| {
+                let moved = matches!(
+                    event,
+                    tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
+                );
+                if moved && window.label() == window::MAIN {
+                    sessions.placed(window);
+                }
+            }
+        })
+        .setup({
+            let sessions = sessions.clone();
+            move |app| {
             builder.mount_events(app);
             tracing::info!(
                 version = %app.package_info().version,
@@ -209,15 +233,21 @@ pub fn run() -> tauri::Result<()> {
             app.manage(drives::Drives::start(app.handle()));
             recent.attach(app.handle());
 
-            // The window gets its theme and Mica at creation, so it needs the settings now.
+            // The window gets its theme and Mica at creation, so it needs the settings now, and
+            // its place from the session (read right after the database opens).
             let waited = Instant::now();
             let settings = db.settings_within(window::SETTINGS_WAIT);
+            let placement = sessions
+                .placement_within(window::SETTINGS_WAIT.saturating_sub(waited.elapsed()));
             tracing::info!(
                 ms = waited.elapsed().as_millis(),
-                "appearance settings for the main window"
+                "appearance settings and place for the main window"
             );
             app.manage(window::Look::start(app.handle()));
             let window = window::create_main(app, &settings.unwrap_or_default())?;
+            if let Some(placement) = placement {
+                session::place(&window, &placement);
+            }
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.
@@ -229,12 +259,14 @@ pub fn run() -> tauri::Result<()> {
                 }
             });
             Ok(())
-        })
+        }})
         .build(tauri::generate_context!())?;
 
-    app.run(|_, event| {
+    app.run(move |_, event| {
         if let RunEvent::Exit = event {
             tracing::info!("Jerry exiting");
+            // The last second's changes to the tabs.
+            sessions.flush();
             // On the main thread, which put Jerry's files on the clipboard.
             clipboard::flush_on_exit();
             logging::flush();

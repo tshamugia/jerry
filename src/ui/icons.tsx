@@ -164,6 +164,26 @@ export function SortIcon({ descending }: { descending: boolean }) {
   );
 }
 
+/** A toast's 20 px "i" in a circle: a note, not an error. */
+export function InfoIcon() {
+  return (
+    <svg
+      width={20}
+      height={20}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.2}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="8" cy="8" r="6.5" />
+      <path d="M8 7.2v4" />
+      <circle cx="8" cy="4.9" r="0.4" fill="currentColor" />
+    </svg>
+  );
+}
+
 /** A menu item's check mark. */
 export function CheckIcon() {
   return (

@@ -4,12 +4,13 @@ import { App } from "./app/App";
 import { followAppearance } from "./app/appearance";
 import { syncClipboard } from "./features/clipboard/clipboard";
 import { reportLongTasks } from "./features/dev/longTasks";
+import { restoreSession } from "./features/session/restore";
+import { saveSession } from "./features/session/save";
 import { syncFavorites } from "./features/sidebar/favorites";
 import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
-import { syncSettings, useSettings } from "./stores/settings";
-import { startTabs } from "./stores/tabs";
+import { syncSettings } from "./stores/settings";
 import "./app/styles.css";
 
 const root = document.getElementById("root");
@@ -22,14 +23,9 @@ if (import.meta.env.DEV) {
 }
 followAppearance();
 syncSettings();
-// Each pane's first tab starts opening once the settings say where, before the first render:
-// subscribed before React, so this runs first.
-const unsubscribe = useSettings.subscribe(({ settings }) => {
-  if (settings) {
-    unsubscribe();
-    startTabs(settings.startup);
-  }
-});
+// The tabs come back before the first render (the app waits for them): the core read the
+// session before the window existed, and the shown folders' listings are running already.
+void restoreSession().then(() => saveSession());
 syncAppearance();
 syncClipboard();
 syncSidebar();
