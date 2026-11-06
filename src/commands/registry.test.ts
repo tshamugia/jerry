@@ -172,6 +172,8 @@ describe("the shortcut table", () => {
           { id: "rename", title: "Rename", keys: ["F2"] },
           { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
           { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
+          { id: "copyPath", title: "Copy path", keys: ["Ctrl+Shift+C"] },
+          { id: "copyName", title: "Copy name", keys: ["Ctrl+Alt+C"] },
         ],
       },
       {
@@ -181,6 +183,15 @@ describe("the shortcut table", () => {
           { id: "renameSave", title: "Save name", keys: ["Enter"] },
           { id: "renameCancel", title: "Cancel rename", keys: ["Esc"] },
           { id: "renameNext", title: "Rename next file", keys: ["Tab"] },
+        ],
+      },
+      {
+        group: "clipboard",
+        title: "Clipboard",
+        rows: [
+          { id: "copy", title: "Copy", keys: ["Ctrl+C"] },
+          { id: "cut", title: "Cut", keys: ["Ctrl+X"] },
+          { id: "paste", title: "Paste", keys: ["Ctrl+V"] },
         ],
       },
       {
@@ -214,6 +225,7 @@ describe("the shortcut table", () => {
       "selection",
       "files",
       "rename",
+      "clipboard",
       "search",
       "other",
     ]);
@@ -222,6 +234,8 @@ describe("the shortcut table", () => {
       "rename",
       "recycle",
       "deletePermanently",
+      "copyPath",
+      "copyName",
       "newFile",
     ]);
   });
@@ -300,6 +314,8 @@ describe("the shortcut table", () => {
           { id: "rename", title: "Rename", keys: ["F2"] },
           { id: "recycle", title: "Move to Recycle Bin", keys: ["Del"] },
           { id: "deletePermanently", title: "Delete permanently", keys: ["Shift+Del"] },
+          { id: "copyPath", title: "Copy path", keys: ["Ctrl+Shift+C"] },
+          { id: "copyName", title: "Copy name", keys: ["Ctrl+Alt+C"] },
         ],
       },
       {
@@ -309,6 +325,15 @@ describe("the shortcut table", () => {
           { id: "renameSave", title: "Save name", keys: ["Enter"] },
           { id: "renameCancel", title: "Cancel rename", keys: ["Esc"] },
           { id: "renameNext", title: "Rename next file", keys: ["Tab"] },
+        ],
+      },
+      {
+        group: "clipboard",
+        title: "Clipboard",
+        rows: [
+          { id: "copy", title: "Copy", keys: ["Ctrl+C"] },
+          { id: "cut", title: "Cut", keys: ["Ctrl+X"] },
+          { id: "paste", title: "Paste", keys: ["Ctrl+V"] },
         ],
       },
       {

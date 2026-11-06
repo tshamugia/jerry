@@ -24,6 +24,7 @@ import { useSetting } from "../../stores/settings";
 import type { Tab } from "../../stores/tabs";
 import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
+import { useCutRows } from "../clipboard/clipboard";
 import { openItems } from "../navigation/open";
 import { nothingFocused } from "../navigation/panes";
 import { beginRename, cancelRename, useRename } from "../rename/rename";
@@ -81,6 +82,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   const layout = useFolder(folder, (state) => state.columns);
   const selected = useFolder(folder, (state) => state.selected);
   const focused = useFolder(folder, (state) => state.focused);
+  const cutRows = useCutRows(listing, status === "ready");
   const activePane = useWindow((state) => state.activePane === pane);
   const showExtensions = useSetting("showExtensions") ?? true;
   const foldersFirst = useSetting("foldersFirst") ?? true;
@@ -375,6 +377,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
                   focused={focused === id}
                   activePane={activePane}
                   editing={editing === id}
+                  cut={cutRows.has(id)}
                 />
               );
             })}

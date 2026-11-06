@@ -38,7 +38,7 @@
 //!
 //! The UI's decoder is `src/ipc/listing.ts`; both sides test this layout.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, RwLock, Weak};
@@ -732,6 +732,23 @@ impl Listings {
         let entries = listing.entries();
         let (attributes, modified) = (*entries.attributes().get(id)?, *entries.modified().get(id)?);
         Some((listing.path(id)?, attributes, modified))
+    }
+
+    /// The entries of the open listing `listing` the folder has now whose names (exact UTF-16) are
+    /// among `names`: the rows of Jerry's cut (#38). None for a listing that isn't open.
+    pub fn entries_named(&self, listing: u32, names: &HashSet<Vec<u16>>) -> Vec<u32> {
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let Some(state) = self.open().get(&listing).map(|open| open.state.clone()) else {
+            return Vec::new();
+        };
+        let listing = state.read();
+        let entries = listing.entries();
+        (0..entries.len())
+            .filter(|&id| !listing.is_removed(id) && names.contains(entries.name_utf16(id)))
+            .map(|id| id as u32)
+            .collect()
     }
 
     fn close_tab(&self, tab: u32) {
