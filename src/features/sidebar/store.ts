@@ -15,7 +15,7 @@ import { useWindow } from "../../stores/window";
 import { focusListSoon } from "../filter/focus";
 
 /** Sections that fold. */
-export type Section = "drives" | "network";
+export type Section = "favorites" | "recent" | "drives" | "network";
 
 interface SidebarState {
   /** Desktop, Downloads, Documents, Pictures, OneDrive: what this user has. */
@@ -24,7 +24,7 @@ interface SidebarState {
   drives: DriveList;
   /** The network locations the user added. */
   network: readonly NetworkPlace[];
-  /** Folded sections, for this window's life. */
+  /** Folded sections, for this window's life. Recent starts folded, one line as the design has it. */
   folded: ReadonlySet<Section>;
   /** The field that adds a network location is open. */
   adding: boolean;
@@ -36,7 +36,7 @@ const initial: SidebarState = {
   places: [],
   drives: { generation: 0, drives: [] },
   network: [],
-  folded: new Set(),
+  folded: new Set(["recent"]),
   adding: false,
   ejectFailed: undefined,
 };
@@ -144,6 +144,14 @@ export function toggleSection(section: Section): void {
     folded.add(section);
   }
   useSidebar.setState({ folded });
+}
+
+/** Unfolds a section, if it is folded. */
+export function unfoldSection(section: Section): void {
+  const folded = new Set(useSidebar.getState().folded);
+  if (folded.delete(section)) {
+    useSidebar.setState({ folded });
+  }
 }
 
 /** Ejects a drive; Windows says if something holds it. A failure of Jerry's own is kept to say. */

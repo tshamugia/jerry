@@ -23,6 +23,8 @@ use specta::Type;
 use crate::error::{ErrorCode, JerryError};
 use crate::settings::Settings;
 
+mod favorites;
+
 /// The schema, one entry per version. Append only: a released migration never changes.
 const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("storage/migrations/0001-v0.1.sql")),

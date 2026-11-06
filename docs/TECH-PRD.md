@@ -220,6 +220,14 @@ jerry/
 - Eject: Shell-ის "eject" verb (`ShellExecuteExW`, `SEE_MASK_INVOKEIDLIST`) საკუთარ Shell pool-ზე, 60 წმ timeout-ით; დაკავებულ დისკზე Windows საკუთარ შეტყობინებას აჩვენებს. Eject ღილაკი აქვს მოსახსნელ მედიას, ოპტიკურ დისკს და ლოკალურ დისკს USB, 1394, SD ან MMC bus-ზე (`IOCTL_STORAGE_QUERY_PROPERTY`). Hot-plug ნიშნები ვირტუალურ დისკსაც აქვს (Google Drive), რომელსაც Explorer-ში Eject არ აქვს, ამიტომ ისინი არ გამოდგება. აქტიური ტრანსფერისას გაფრთხილება v0.2-ში ემატება.
 - სტანდარტული ადგილები Known Folders-იდან მოდის (`jerry_win::drives::places`), OneDrive თავისი საქაღალდის სახელით (`OneDrive - Insta LLC`). ხელით დამატებული ქსელური მისამართები `network_places` ცხრილშია და სერვერთან დაკავშირების გარეშე ემატება; ცვლილებას `network-places:changed` ატყობინებს. Recycle Bin v1.0-მდე Explorer-ში იხსნება (`shell:RecycleBinFolder`).
 
+### ფავორიტები და ბოლო საქაღალდეები
+
+- `favorites` და `favorite_groups` (#35): ჯერ ზედა დონე, შემდეგ ჯგუფები თავისი რიგით. `position` ზედა დონეში, თითო ჯგუფში და ჯგუფებს შორის 0, 1, 2…-ია. ერთი საქაღალდე ერთხელ ემატება (გზა Windows-ივით, რეგისტრის გარეშე შედარდება). `name` NULL = საქაღალდის საკუთარი სახელი. ჯგუფის წაშლისას მისი ფავორიტები ზედა დონის ბოლოში გადადის.
+- ბრძანებები: `favorites_list`, `favorites_add(listing, entry?)` (ღია listing-ის საქაღალდე ან მისი ქვესაქაღალდე, ბირთვის ზუსტი გზით), `favorites_rename`, `favorites_remove`, `favorites_move`, `favorites_group_add`, `favorites_group_rename`, `favorites_group_remove`, `favorites_group_move`. ყოველი ცვლილება `favorites:changed`-ით ყველა ფანჯარას მიდის, ბაზის lock-ის ქვეშ, ამიტომ შენახვის რიგით.
+- `favorites_check(id)` ამოწმებს, არის თუ არა საქაღალდე (`std::fs::metadata`, შიგთავსის წაკითხვის გარეშე): `NotFound` (წაიშალა, გადავიდა, გადაერქვა) ან `DeviceGone` (დისკი ან ქსელური მისამართი არ არის). ასეთი ფავორიტი ნაცრისფერია, დაჭერისას Jerry განმარტავს. UI თითო ფავორიტს ცალკე ამოწმებს და ერთდროულად მხოლოდ ერთხელ, რომ უპასუხო სერვერმა არაფერი შეაჩეროს: ჩატვირთვისას, სიის ცვლილებისას, ფანჯრის წინ მოსვლისას და დისკების შემადგენლობის ცვლილებისას.
+- ბოლო საქაღალდეები: `recent_folders_list` 10 უახლესს აბრუნებს; listing-ის ვიზიტის შემდეგ `recent-folders:changed` მიდის, მხოლოდ როცა ეს ათეული შეიცვალა.
+- გადალაგება dnd-kit-ით, პირველი კადრის შემდეგ ჩატვირთული (როგორც ტაბები). ფავორიტი იმ ჯგუფში ხვდება, რომლის სათაურიც მის ზემოთ ყველაზე ახლოსაა; ჯგუფი თავის ფავორიტებთან ერთად მოძრაობს, ზედა დონე ყოველთვის პირველია. კლავიატურით: Space იღებს და დებს, ისრები ამოძრავებს, Esc აუქმებს.
+
 ## Windows ინტეგრაცია (jerry-win)
 
 Windows-თან ყველა შეხება ერთ crate-შია, რომ COM-ის წესები ერთ ადგილას იყოს. პრინციპი: Jerry იქცევა ისე, როგორც Explorer, და სადაც შესაძლებელია, იგივე Shell API-ს იყენებს.
@@ -421,7 +429,7 @@ UI და ბირთვი ოთხი გზით უკავშირდ�
 | --- | --- | --- |
 | ბრძანება (`invoke`) | მოთხოვნა → პასუხი | `rename`, `create_folder`, `delete`, `open`, `settings_set` |
 | ნაკადი (Tauri `Channel`) | ეტაპობრივი შედეგი ერთი მომხმარებლისთვის | listing-ის batch-ები და diff-ები, ძებნის შედეგები |
-| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
+| მოვლენა (`emit`) | ბირთვიდან ყველა ფანჯარაში | `transfer:*`, `drives:changed`, `network-places:changed`, `favorites:changed`, `recent-folders:changed`, `clipboard:changed`, `settings:changed`, `appearance:changed`, `history:changed`, `dnd:*` |
 | Custom protocol | ბინარული მონაცემი `<img>` და `<video>`-სთვის | `icon://`, `thumb://`, asset protocol preview-სთვის |
 
 ### ბრძანებები

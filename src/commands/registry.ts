@@ -41,6 +41,7 @@ import {
   selectAllRows,
   toggleFocusedRow,
 } from "../features/selection/commands";
+import { addCurrentFolder, canAddFavorite } from "../features/sidebar/favorites";
 import { toggleSidebar } from "../features/sidebar/store";
 import {
   canCloseTab,
@@ -406,7 +407,15 @@ export const COMMANDS: readonly Command[] = [
   { id: "redo", group: "history", keys: ["Ctrl+Y"], context: "list", repeat: true },
 
   // Other.
-  { id: "addFavorite", group: "other", keys: ["Ctrl+Shift+D"], context: "global" },
+  // The folder the active pane shows; a folder in the list comes with its context menu (#39).
+  {
+    id: "addFavorite",
+    group: "other",
+    keys: ["Ctrl+Shift+D"],
+    context: "global",
+    enabled: canAddFavorite,
+    run: () => void addCurrentFolder(),
+  },
   { id: "palette", group: "other", keys: ["Ctrl+Shift+P"], context: "global" },
   { id: "settings", group: "other", keys: ["Ctrl+,"], context: "global" },
   {
