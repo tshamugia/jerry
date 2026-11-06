@@ -538,6 +538,15 @@ mod tests {
         let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     }
 
+    /// A temp folder, and its path by its long names. Where `TEMP` is an 8.3 short path (GitHub's
+    /// runner: `C:\Users\RUNNER~1\…`), the Shell hands files back by their long names, so paths
+    /// that went through it are compared in that form.
+    fn temp() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let long = jerry_core::path::plain_path(&fs::canonicalize(dir.path()).unwrap());
+        (dir, long)
+    }
+
     fn files(dir: &Path, names: &[&str]) -> Vec<PathBuf> {
         names
             .iter()
@@ -598,8 +607,8 @@ mod tests {
     #[test]
     fn copy_and_cut_carry_explorers_formats_and_the_effect() {
         sta();
-        let dir = tempfile::tempdir().unwrap();
-        let paths = files(dir.path(), &["ნახაზი — სართული 1.dwg", "ხარჯთაღრიცხვა.pdf"]);
+        let (_dir, dir) = temp();
+        let paths = files(&dir, &["ნახაზი — სართული 1.dwg", "ხარჯთაღრიცხვა.pdf"]);
         let long: Vec<PathBuf> = paths
             .iter()
             .map(|path| jerry_core::path::long_path(path).unwrap())
@@ -631,9 +640,9 @@ mod tests {
     #[test]
     fn long_paths_get_the_shell_object() {
         sta();
-        let dir = tempfile::tempdir().unwrap();
-        let long = long_file(dir.path());
-        let short = files(dir.path(), &["მოკლე.txt"]).remove(0);
+        let (_dir, dir) = temp();
+        let long = long_file(&dir);
+        let short = files(&dir, &["მოკლე.txt"]).remove(0);
         let verbatim = PathBuf::from(format!(r"\\?\{}", long.display()));
 
         assert!(shell_data_object(std::slice::from_ref(&verbatim)).is_err());
