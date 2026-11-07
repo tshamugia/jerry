@@ -24,6 +24,7 @@ import { useSetting } from "../../stores/settings";
 import type { Tab } from "../../stores/tabs";
 import { type PaneSide, useWindow } from "../../stores/window";
 import { errorText, strings } from "../../strings";
+import { ContextMenu, openContextMenuAt } from "../../ui/ContextMenu";
 import { useCutRows } from "../clipboard/clipboard";
 import { openItems } from "../navigation/open";
 import { nothingFocused } from "../navigation/panes";
@@ -43,6 +44,7 @@ import { usePointerSelection } from "../selection/usePointerSelection";
 import { ColumnHeader } from "./ColumnHeader";
 import { columnWidths } from "./cells";
 import { FileRow } from "./FileRow";
+import { ListMenu, type ListMenuKind } from "./ListMenu";
 import { useShownRows } from "./rows";
 
 /** Rows rendered past each edge of the view. */
@@ -58,6 +60,11 @@ const FALLBACK_ROW_PX = 30;
  * double-click time, as Explorer waits it out.
  */
 const SLOW_CLICK_MS = 500;
+/** From the keyboard, the item menu opens under the item, past its icon; the folder menu at the top. */
+const ITEM_MENU_X_PX = 32;
+const MENU_INSET_PX = 8;
+/** The inline rename field (`RENAME_SCOPE`): a right click there isn't the list's. */
+const RENAME_FIELD = '[data-command-scope="rename"]';
 
 /**
  * A pane's file list in the Details view: the column header and a virtualized list of rows with
@@ -201,6 +208,49 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
     folder.scrolled();
   }, [folder, scrollTo, rows]);
 
+  // The context menu: on the selected items, or on the folder (empty space). Shift+F10 and the
+  // Menu key open it at the focused item, as in Explorer, not where the browser would.
+  const [menu, setMenu] = useState<ListMenuKind>("items");
+  const fromKeyboard = useRef(false);
+  const contextMenu = (event: MouseEvent) => {
+    const target = event.target as Element;
+    if (event.defaultPrevented) {
+      return; // The column header's own menu.
+    }
+    if (target.closest(RENAME_FIELD)) {
+      event.preventDefault(); // The rename field: no menu of the list's.
+      return;
+    }
+    const keyboard = fromKeyboard.current;
+    fromKeyboard.current = false;
+    const onItem = keyboard
+      ? folder.store.getState().selected.size > 0
+      : target.closest("[data-id]") !== null;
+    setMenu(onItem ? "items" : "folder");
+  };
+  const menuFromKeyboard = () => {
+    const view = scroller.current;
+    if (!view) {
+      return;
+    }
+    const { selected, focused } = folder.store.getState();
+    const anchor =
+      focused !== undefined && selected.has(focused)
+        ? focused
+        : rows.find((id) => selected.has(id));
+    const at = indexOf(rows, anchor);
+    const box = view.getBoundingClientRect();
+    let x = box.left + MENU_INSET_PX;
+    let y = box.top + margin + MENU_INSET_PX;
+    if (at !== undefined) {
+      reveal(at);
+      x = box.left + ITEM_MENU_X_PX;
+      y = box.top + margin + (at + 1) * rowHeight - view.scrollTop;
+    }
+    fromKeyboard.current = true;
+    openContextMenuAt(view, x, y);
+  };
+
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     slowClick.cancel();
     // The list's own keys work while it has the focus, not a header button in it.
@@ -209,6 +259,12 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
       event.nativeEvent.isComposing ||
       event.target !== scroller.current
     ) {
+      return;
+    }
+    if (isMenuKey(event)) {
+      event.preventDefault();
+      typeAhead.reset();
+      menuFromKeyboard();
       return;
     }
     const selection = selectionOf(folder.store.getState());
@@ -306,91 +362,97 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* biome-ignore lint/a11y/useSemanticElements: a virtualized grid; see FileRow. */}
-      <div
-        ref={scroller}
-        role="grid"
-        aria-label={strings.fileList.files(name)}
-        aria-rowcount={rows.length + 1}
-        aria-colcount={stableColumns.length}
-        aria-multiselectable
-        aria-activedescendant={focusShown ? `${rowIds}${focused}` : undefined}
-        aria-busy={status === "loading"}
-        tabIndex={0}
-        data-file-list={pane}
-        className={`group relative min-h-0 flex-1 overflow-auto ${focused === undefined ? "" : "focus-visible:outline-none"}`}
-        style={columnWidths(layout)}
-        onKeyDown={keyDown}
-        onClick={click}
-        onDoubleClick={doubleClick}
-        onAuxClick={auxClick}
-        // No autoscroll on a middle press: it opens a folder in a new tab.
-        onMouseDown={(event) => event.button === 1 && event.preventDefault()}
-        {...pointer.handlers}
-        onPointerDown={(event) => {
-          slowClick.pressed(event);
-          pointer.handlers.onPointerDown(event);
-        }}
-        onScroll={() => {
-          folder.scrollTop = scroller.current?.scrollTop ?? 0;
-          pointer.handlers.onScroll();
-        }}
+      <ContextMenu
+        label={menu === "items" ? strings.fileList.menu.items : strings.fileList.menu.folder}
+        menu={<ListMenu kind={menu} folder={folder} />}
       >
-        <div className="flex min-h-full w-max min-w-full flex-col">
-          <ColumnHeader
-            folder={folder}
-            layout={layout}
-            columns={stableColumns}
-            sort={sort}
-            loading={slow}
-          />
-          <div
-            ref={body}
-            className="relative mt-1 shrink-0"
-            style={{ height: virtualizer.getTotalSize() }}
-          >
-            {shown.map((item) => {
-              const id = rows[item.index] ?? 0;
-              const key = entries.iconKeys[id] ?? IconKey.file;
-              const modified = entries.modified[id] ?? 0;
-              return (
-                <FileRow
-                  key={id}
-                  id={id}
-                  idPrefix={rowIds}
-                  index={item.index}
-                  top={item.top}
-                  columns={stableColumns}
-                  name={entries.names[id] ?? ""}
-                  size={entries.sizes[id] ?? 0}
-                  modified={modified}
-                  created={entries.created[id] ?? 0}
-                  attributes={entries.attributes[id] ?? 0}
-                  icon={
-                    key === IconKey.own && listing === undefined
-                      ? undefined
-                      : entryIconUrl({ listing: listing ?? 0, id, key, modified }, ICON_PX)
-                  }
-                  dateFormat={dateFormat}
-                  showExtensions={showExtensions}
-                  selected={selected.has(id)}
-                  focused={focused === id}
-                  activePane={activePane}
-                  editing={editing === id}
-                  cut={cutRows.has(id)}
+        {/* biome-ignore lint/a11y/useSemanticElements: a virtualized grid; see FileRow. */}
+        <div
+          ref={scroller}
+          role="grid"
+          aria-label={strings.fileList.files(name)}
+          aria-rowcount={rows.length + 1}
+          aria-colcount={stableColumns.length}
+          aria-multiselectable
+          aria-activedescendant={focusShown ? `${rowIds}${focused}` : undefined}
+          aria-busy={status === "loading"}
+          tabIndex={0}
+          data-file-list={pane}
+          className={`group relative min-h-0 flex-1 overflow-auto ${focused === undefined ? "" : "focus-visible:outline-none"}`}
+          style={columnWidths(layout)}
+          onKeyDown={keyDown}
+          onClick={click}
+          onDoubleClick={doubleClick}
+          onAuxClick={auxClick}
+          onContextMenu={contextMenu}
+          // No autoscroll on a middle press: it opens a folder in a new tab.
+          onMouseDown={(event) => event.button === 1 && event.preventDefault()}
+          {...pointer.handlers}
+          onPointerDown={(event) => {
+            slowClick.pressed(event);
+            pointer.handlers.onPointerDown(event);
+          }}
+          onScroll={() => {
+            folder.scrollTop = scroller.current?.scrollTop ?? 0;
+            pointer.handlers.onScroll();
+          }}
+        >
+          <div className="flex min-h-full w-max min-w-full flex-col">
+            <ColumnHeader
+              folder={folder}
+              layout={layout}
+              columns={stableColumns}
+              sort={sort}
+              loading={slow}
+            />
+            <div
+              ref={body}
+              className="relative mt-1 shrink-0"
+              style={{ height: virtualizer.getTotalSize() }}
+            >
+              {shown.map((item) => {
+                const id = rows[item.index] ?? 0;
+                const key = entries.iconKeys[id] ?? IconKey.file;
+                const modified = entries.modified[id] ?? 0;
+                return (
+                  <FileRow
+                    key={id}
+                    id={id}
+                    idPrefix={rowIds}
+                    index={item.index}
+                    top={item.top}
+                    columns={stableColumns}
+                    name={entries.names[id] ?? ""}
+                    size={entries.sizes[id] ?? 0}
+                    modified={modified}
+                    created={entries.created[id] ?? 0}
+                    attributes={entries.attributes[id] ?? 0}
+                    icon={
+                      key === IconKey.own && listing === undefined
+                        ? undefined
+                        : entryIconUrl({ listing: listing ?? 0, id, key, modified }, ICON_PX)
+                    }
+                    dateFormat={dateFormat}
+                    showExtensions={showExtensions}
+                    selected={selected.has(id)}
+                    focused={focused === id}
+                    activePane={activePane}
+                    editing={editing === id}
+                    cut={cutRows.has(id)}
+                  />
+                );
+              })}
+              {rect && (
+                <div
+                  data-marquee
+                  className="pointer-events-none absolute border border-accent bg-marquee"
+                  style={rect}
                 />
-              );
-            })}
-            {rect && (
-              <div
-                data-marquee
-                className="pointer-events-none absolute border border-accent bg-marquee"
-                style={rect}
-              />
-            )}
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      </ContextMenu>
       {message && (
         // Over the list, under its header, as wide as the pane even when the columns are wider.
         <div className="pointer-events-none absolute inset-x-0 top-col-header flex flex-col items-center gap-3 px-4 pt-6 text-center text-fg-2">
@@ -489,6 +551,14 @@ function useSlowClick(folder: Folder, activePane: boolean, enabled: boolean) {
       }
     },
   };
+}
+
+/** Shift+F10 or the Menu key: the context menu, from the keyboard. */
+function isMenuKey(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.altKey || event.metaKey) {
+    return false;
+  }
+  return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
 }
 
 /** Whether a key press runs a command where it lands ("?" opens the shortcut table). */

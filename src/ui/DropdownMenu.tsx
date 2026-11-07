@@ -2,7 +2,7 @@ import * as Radix from "@radix-ui/react-dropdown-menu";
 import type { ReactNode } from "react";
 
 const ITEM =
-  "flex h-8 min-w-0 items-center gap-2 rounded-ctrl pr-3 pl-2 outline-none data-disabled:text-disabled data-highlighted:bg-hover";
+  "flex h-8 min-w-0 items-center gap-2 rounded-ctrl pr-3 pl-2 outline-none data-disabled:text-disabled data-highlighted:bg-subtle-hover";
 
 /**
  * A menu that drops from a button (`trigger`, one element that takes the trigger's props), drawn

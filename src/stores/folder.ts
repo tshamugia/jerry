@@ -278,6 +278,19 @@ export class Folder {
     this.viewChanged();
   }
 
+  /**
+   * The context menu's Sort by: by `column`, in that direction. The folder remembers it, as it
+   * does a header click.
+   */
+  sortTo(column: SortColumn, descending: boolean): void {
+    const { sort } = this.store.getState();
+    if (sort.column === column && sort.descending === descending) {
+      return;
+    }
+    this.setSort({ ...sort, column, descending });
+    this.viewChanged();
+  }
+
   /** Follows the "Folders before files" setting. */
   setFoldersFirst(foldersFirst: boolean): void {
     const { sort } = this.store.getState();

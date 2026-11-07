@@ -235,13 +235,21 @@ export function canAddFavorite(): boolean {
  * Ctrl+Shift+D: adds the folder the active pane shows to the favorites, at the end of the top
  * level, and shows it: the section unfolds, and so does its group if it was a favorite already.
  */
-export async function addCurrentFolder(): Promise<void> {
+export function addCurrentFolder(): Promise<void> {
+  return addFavorite(null);
+}
+
+/**
+ * Adds the folder the active pane shows, or its subfolder `entry` (a folder's context menu), to
+ * the favorites, as Ctrl+Shift+D does.
+ */
+export async function addFavorite(entry: number | null): Promise<void> {
   const listing = activeFolder()?.store.getState().listing;
   if (listing === undefined) {
     return;
   }
   unfoldSection("favorites");
-  const result = await commands.favoritesAdd(listing, null);
+  const result = await commands.favoritesAdd(listing, entry);
   if (result.status === "error") {
     useFavorites.setState({ failed: result.error });
     return;

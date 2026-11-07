@@ -74,6 +74,18 @@ export const commands = {
 	 */
 	openEntries: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("open_entries", { listing, entries })),
 	/**
+	 *  Shows entries `entries` of listing `listing` selected in an Explorer window on the listing's
+	 *  folder: the context menu's "Show in Explorer". Waits for Explorer to take it, at most a few
+	 *  seconds. `NotFound` for an entry or listing that is gone.
+	 */
+	showInExplorer: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("show_in_explorer", { listing, entries })),
+	/**
+	 *  Opens a terminal in the folder listing `listing` shows, or in its subfolder `entry`: Windows
+	 *  Terminal, or Windows PowerShell where it isn't installed. `NotFound` for an entry or listing
+	 *  that is gone.
+	 */
+	openTerminal: (listing: number, entry: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("open_terminal", { listing, entry })),
+	/**
 	 *  Puts the path of folder token `folder` (`ListingOpened::folder`) on the clipboard as text,
 	 *  exactly, without the `\\?\` prefix: a tab's "Copy path". `NotFound` for an unknown token.
 	 */
@@ -104,6 +116,11 @@ export const commands = {
 	 *  they show dimmed. Asked again on every `clipboard:changed` and when a listing is in.
 	 */
 	clipboardCutEntries: (listing: number) => typedError<number[], JerryError>(__TAURI_INVOKE("clipboard_cut_entries", { listing })),
+	/**
+	 *  Whether the clipboard holds files to paste, whoever put them there: the context menu grays out
+	 *  Paste without them, as Explorer does.
+	 */
+	clipboardHasFiles: () => __TAURI_INVOKE<boolean>("clipboard_has_files"),
 	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.

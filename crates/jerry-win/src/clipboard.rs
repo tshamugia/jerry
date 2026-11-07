@@ -37,7 +37,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber,
-    OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows::Win32::System::Ole::{
@@ -191,6 +191,13 @@ pub fn cut_paths() -> Vec<PathBuf> {
 /// Whether Jerry's cut is on the clipboard ([`cut_paths`] isn't empty). Any thread.
 pub fn has_cut() -> bool {
     !cut().is_empty()
+}
+
+/// Whether the clipboard holds files to paste (`CF_HDROP`), whoever put them there: the context
+/// menu grays out Paste without them, as Explorer does. Any thread; the clipboard stays closed.
+pub fn has_files() -> bool {
+    // SAFETY: a plain query of the clipboard's formats.
+    unsafe { IsClipboardFormatAvailable(u32::from(CF_HDROP.0)) }.is_ok()
 }
 
 /// Reads the files on the clipboard, whoever put them there. `None` when it holds no files (text,

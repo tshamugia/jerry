@@ -5,6 +5,7 @@ import { clipboardStrings } from "./clipboard";
 import { deleteStrings } from "./delete";
 import { renameStrings } from "./rename";
 import { sessionStrings } from "./session";
+import { shellStrings } from "./shell";
 import { sidebarStrings } from "./sidebar";
 
 const integer = new Intl.NumberFormat("en-US");
@@ -111,6 +112,22 @@ export const strings = {
     noMatch: "No items match the filter",
     loading: "Loading…",
     retry: "Retry",
+    /**
+     * The list's context menu (right click, Shift+F10, the Menu key): on the selected items, or
+     * on the folder itself (empty space). Its commands bring their titles and shortcuts.
+     */
+    menu: {
+      items: "Selected items",
+      folder: "This folder",
+      /** The Recycle Bin command, as Explorer's menu names it; with Shift, for good. */
+      delete: "Delete",
+      view: "View",
+      hiddenFiles: "Hidden files",
+      compactRows: "Compact rows",
+      sortBy: "Sort by",
+      ascending: "Ascending",
+      descending: "Descending",
+    },
   },
   /** The status bar: the active pane's folder, and the switches. */
   status: {
@@ -193,6 +210,9 @@ export const strings = {
     properties: "Properties",
     copyPath: "Copy path",
     copyName: "Copy name",
+    openInTerminal: "Open in Terminal",
+    showInExplorer: "Show in Explorer",
+    windowsOptions: "Windows options…",
     renameSave: "Save name",
     renameCancel: "Cancel rename",
     renameNext: "Rename next file",
@@ -239,6 +259,8 @@ export const strings = {
   session: sessionStrings,
   /** Copy, Cut, Paste, Copy path, Copy name. */
   clipboard: clipboardStrings,
+  /** Show in Explorer, Open in Terminal. */
+  shell: shellStrings,
   /** The sidebar: places, drives, network locations, Recycle Bin. */
   sidebar: sidebarStrings,
   /** Select by pattern (Ctrl+Shift+A). */

@@ -27,6 +27,12 @@ import {
   toggleDualPane,
 } from "../features/navigation/panes";
 import {
+  canOpenTerminal,
+  canShowInExplorer,
+  openInTerminal,
+  showInExplorer,
+} from "../features/navigation/shell";
+import {
   canCreateFolder,
   cancelRename,
   canRename,
@@ -342,6 +348,25 @@ export const COMMANDS: readonly Command[] = [
     enabled: canCopy,
     run: () => void copyText("name"),
   },
+  // No shortcuts in the PRD: the context menu has them, and the palette (v1.0).
+  {
+    id: "openInTerminal",
+    group: "files",
+    keys: [],
+    context: "list",
+    enabled: canOpenTerminal,
+    run: () => void openInTerminal(),
+  },
+  {
+    id: "showInExplorer",
+    group: "files",
+    keys: [],
+    context: "list",
+    enabled: canShowInExplorer,
+    run: () => void showInExplorer(),
+  },
+  // Windows' own context menu ("Show more options"), last in Jerry's (v1.0).
+  { id: "windowsOptions", group: "files", keys: [], context: "list" },
 
   // Inline rename (PRD «ფაილური ოპერაციები»).
   {
@@ -408,7 +433,7 @@ export const COMMANDS: readonly Command[] = [
   { id: "redo", group: "history", keys: ["Ctrl+Y"], context: "list", repeat: true },
 
   // Other.
-  // The folder the active pane shows; a folder in the list comes with its context menu (#39).
+  // The folder the active pane shows; a folder in the list from its context menu.
   {
     id: "addFavorite",
     group: "other",
