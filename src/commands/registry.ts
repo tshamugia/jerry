@@ -41,6 +41,7 @@ import {
   selectAllRows,
   toggleFocusedRow,
 } from "../features/selection/commands";
+import { exitJerry } from "../features/session/instance";
 import { addCurrentFolder, canAddFavorite } from "../features/sidebar/favorites";
 import { toggleSidebar } from "../features/sidebar/store";
 import {
@@ -425,6 +426,8 @@ export const COMMANDS: readonly Command[] = [
     context: "global",
     run: () => openOverlay("shortcuts"),
   },
+  // Closing the last window only hides Jerry while it keeps running in the background (#43).
+  { id: "exitJerry", group: "other", keys: ["Ctrl+Q"], context: "global", run: exitJerry },
 ];
 
 const byId = new Map(COMMANDS.map((command) => [command.id, command]));

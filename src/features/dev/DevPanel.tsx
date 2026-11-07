@@ -85,6 +85,11 @@ export function DevPanel() {
         >
           {strings.dev.toggleFolderViews}
         </DevButton>
+        <DevButton
+          onClick={run(() => saved(setSetting("keepRunning", !(settings?.keepRunning ?? true))))}
+        >
+          {strings.dev.toggleKeepRunning}
+        </DevButton>
       </div>
       <p className="text-small text-fg-2">
         {settings ? strings.dev.settings(settings) : strings.dev.settingsLoading}
@@ -94,6 +99,7 @@ export function DevPanel() {
           {strings.dev.sessionSettings(
             settings.startup.kind === "folder" ? settings.startup.path : undefined,
             settings.rememberFolderViews,
+            settings.keepRunning,
           )}
         </p>
       )}

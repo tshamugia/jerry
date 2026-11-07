@@ -61,6 +61,7 @@ const PRD: Record<string, string> = {
   "Ctrl+Shift+D": "addFavorite",
   "Ctrl+Shift+P": "palette",
   "Ctrl+,": "settings",
+  "Ctrl+Q": "exitJerry",
   F1: "shortcuts",
   "?": "shortcuts",
 };
@@ -206,6 +207,7 @@ describe("the shortcut table", () => {
         rows: [
           { id: "addFavorite", title: "Add to favorites", keys: ["Ctrl+Shift+D"] },
           { id: "shortcuts", title: "Keyboard shortcuts", keys: ["F1", "?"] },
+          { id: "exitJerry", title: "Exit Jerry", keys: ["Ctrl+Q"] },
         ],
       },
     ]);
@@ -350,7 +352,10 @@ describe("the shortcut table", () => {
       {
         group: "other",
         title: "Other",
-        rows: [{ id: "addFavorite", title: "Add to favorites", keys: ["Ctrl+Shift+D"] }],
+        rows: [
+          { id: "addFavorite", title: "Add to favorites", keys: ["Ctrl+Shift+D"] },
+          { id: "exitJerry", title: "Exit Jerry", keys: ["Ctrl+Q"] },
+        ],
       },
     ]);
   });

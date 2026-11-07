@@ -322,13 +322,14 @@ export function addTab(
 
 /**
  * Opens `target` in a new tab right after `pane`'s active one, taking its sort and columns:
- * Ctrl+T, the + button, a middle click or Ctrl+Enter on a folder. In the background, a tab goes
- * after the ones opened before it from the same tab.
+ * Ctrl+T, the + button, a middle click or Ctrl+Enter on a folder, `jerry.exe <path>`. In the
+ * background, a tab goes after the ones opened before it from the same tab. `restore` names what
+ * the folder gets once its entries are in (a file to select).
  */
 export function openInNewTab(
   pane: PaneSide,
   target: ListingTarget,
-  { activate = true }: { activate?: boolean } = {},
+  { activate = true, restore }: { activate?: boolean; restore?: Restore } = {},
 ): Tab {
   const { tabs, active, opened } = useTabs.getState()[pane];
   const at = tabs.findIndex((tab) => tab.id === active);
@@ -341,7 +342,7 @@ export function openInNewTab(
   if (!activate) {
     setPane(pane, { opened: opened + 1 });
   }
-  void tab.open(target);
+  void tab.open(target, restore);
   return tab;
 }
 

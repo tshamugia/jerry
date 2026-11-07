@@ -9,9 +9,17 @@ export const commands = {
 	appVersion: () => __TAURI_INVOKE<string>("app_version"),
 	/**
 	 *  Called by the UI once its first frame is painted. The window is created hidden and shown
-	 *  only now, so it never flashes white.
+	 *  only now, so it never flashes white; a `--background` start keeps it hidden until the next
+	 *  start (#43).
 	 */
 	appReady: () => __TAURI_INVOKE<void>("app_ready"),
+	/**
+	 *  "Exit Jerry": quits, even while "Keep Jerry running in the background" is on. The session is
+	 *  written on the way out.
+	 */
+	appExit: () => __TAURI_INVOKE<void>("app_exit"),
+	/**  What starts left for this window to open, in order; each only once. */
+	launchTake: () => __TAURI_INVOKE<LaunchOpen[]>("launch_take"),
 	/**
 	 *  Opens a folder for `tab` and streams its entries to `on_message` as binary batches, then
 	 *  their order and a done message, then a diff and an order for every change while the listing
@@ -304,6 +312,7 @@ export const events = {
 	clipboardChanged: makeEvent<ClipboardChanged, ClipboardChanged>("clipboard:changed"),
 	drivesChanged: makeEvent<DrivesChanged, DrivesChanged>("drives:changed"),
 	favoritesChanged: makeEvent<FavoritesChanged, FavoritesChanged>("favorites:changed"),
+	launchOpened: makeEvent<LaunchOpened, LaunchOpened>("launch:opened"),
 	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
 	recentFoldersChanged: makeEvent<RecentFoldersChanged, RecentFoldersChanged>("recent-folders:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
@@ -599,6 +608,25 @@ export type Keybinding = {
 	/**  The shortcut with US key names (`Ctrl+Shift+N`), or none: the user removed the default. */
 	shortcut: string | null,
 };
+
+/**  What a start opens in a window. */
+export type LaunchOpen = 
+/**  A folder, in a new tab. */
+{ kind: "folder"; 
+/**  The folder, as a token for `ListingTarget::Folder`. */
+folder: number; 
+/**  A file in it to select: the start named a file. */
+select: string | null } | 
+/**  A path that leads nowhere. */
+{ kind: "failed"; 
+/**  The path as the start gave it. */
+path: string; error: JerryError };
+
+/**
+ *  Sent to every window when a start left something to open: each page takes its own with
+ *  `launch_take`.
+ */
+export type LaunchOpened = null;
 
 /**  An opened listing: its id, its folder, and how the tab shows it. */
 export type ListingOpened = {

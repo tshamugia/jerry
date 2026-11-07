@@ -39,6 +39,7 @@ export type {
   HistoryFolder,
   JerryError,
   Keybinding,
+  LaunchOpen,
   ListingOpened,
   ListingTarget,
   Look,
