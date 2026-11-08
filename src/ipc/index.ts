@@ -61,6 +61,8 @@ export type {
   TabSave,
   Tally,
   Theme,
+  UpdateOffer,
+  UpdateStage,
   View,
   WindowsAccent,
 } from "./bindings";

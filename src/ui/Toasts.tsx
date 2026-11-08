@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { dismissToast, useToasts } from "../stores/toasts";
 import { strings } from "../strings";
 import { CloseIcon, InfoIcon } from "./icons";
@@ -5,15 +6,14 @@ import { CloseIcon, InfoIcon } from "./icons";
 /**
  * The window's toasts (design: «Toast»): 336 px cards in the bottom right corner, 16 px from the
  * right and 96 px from the bottom, the newest lowest. Each has an icon, a bold line, a second
- * line and a dismiss button; screen readers hear them as they come.
+ * line and a dismiss button; screen readers hear them as they come. `children` are cards that
+ * stay until they are answered, above the toasts.
  */
-export function Toasts() {
+export function Toasts({ children }: { children?: ReactNode }) {
   const toasts = useToasts((state) => state.toasts);
-  if (toasts.length === 0) {
-    return null;
-  }
   return (
     <div className="pointer-events-none fixed right-4 bottom-24 z-50 flex w-toast flex-col gap-2">
+      {children}
       {toasts.map((toast) => (
         <div
           key={toast.id}

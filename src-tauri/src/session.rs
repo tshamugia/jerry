@@ -284,6 +284,11 @@ impl Sessions {
     pub fn flush(&self) {
         self.kept().exiting = true;
         self.0.changed.notify_all();
+        self.save_now();
+    }
+
+    /// Writes the session now if it changed since it was last written. The writer keeps going.
+    pub fn save_now(&self) {
         self.write();
         self.0.db.touch_used_views();
     }

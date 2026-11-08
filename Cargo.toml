@@ -32,6 +32,12 @@ tauri = "2.12.5"
 tauri-build = "2.7.4"
 # One Jerry at a time (#43): a second start hands its arguments to the running one.
 tauri-plugin-single-instance = "2.5"
+# New versions from GitHub Releases (#46). Windows' own TLS (Schannel) and proxy settings: a smaller
+# exe than rustls, and the machine's certificates. NSIS packages need no zip support.
+tauri-plugin-updater = { version = "2.14", default-features = false, features = [
+    "native-tls",
+    "system-proxy",
+] }
 tauri-specta = { version = "=2.0.0-rc.26", features = ["derive", "typescript"] }
 tempfile = "3"
 thiserror = "2"

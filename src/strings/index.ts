@@ -7,6 +7,7 @@ import { renameStrings } from "./rename";
 import { sessionStrings } from "./session";
 import { shellStrings } from "./shell";
 import { sidebarStrings } from "./sidebar";
+import { updateStrings } from "./updates";
 
 const integer = new Intl.NumberFormat("en-US");
 const decimal = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
@@ -263,6 +264,8 @@ export const strings = {
   shell: shellStrings,
   /** The sidebar: places, drives, network locations, Recycle Bin. */
   sidebar: sidebarStrings,
+  /** The notice about a new version (#46). */
+  updates: updateStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",
