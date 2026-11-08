@@ -9,6 +9,7 @@ import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
 import { ShellDialog } from "../features/navigation/ShellDialog";
 import { RenameDialogs } from "../features/rename/RenameDialogs";
 import { SelectByPattern } from "../features/selection/SelectByPattern";
+import { UpdateNotice } from "../features/updates/UpdateNotice";
 import { commands } from "../ipc";
 import { useAppearance } from "../stores/appearance";
 import { useSettings } from "../stores/settings";
@@ -50,7 +51,9 @@ export function App() {
       <OpenManyDialog />
       <DeleteDialog />
       <RenameDialogs />
-      <Toasts />
+      <Toasts>
+        <UpdateNotice />
+      </Toasts>
       <ClipboardDialog />
       <ShellDialog />
     </>

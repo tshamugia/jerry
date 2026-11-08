@@ -12,6 +12,7 @@ import { syncSidebar } from "./features/sidebar/store";
 import { syncAppearance } from "./stores/appearance";
 import { loadKeymap } from "./stores/keymap";
 import { syncSettings } from "./stores/settings";
+import { syncUpdates } from "./stores/updates";
 import "./app/styles.css";
 
 const root = document.getElementById("root");
@@ -34,6 +35,7 @@ syncAppearance();
 syncClipboard();
 syncSidebar();
 syncFavorites();
+syncUpdates();
 void loadKeymap();
 createRoot(root).render(
   <StrictMode>

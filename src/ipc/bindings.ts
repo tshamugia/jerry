@@ -287,6 +287,13 @@ export const commands = {
 	titleBarPress: (button: CaptionButton) => typedError<null, JerryError>(__TAURI_INVOKE("title_bar_press", { button })),
 	/**  Whether Mica can show and the Windows accent. */
 	appearanceGet: () => __TAURI_INVOKE<Appearance>("appearance_get"),
+	/**  The offer, for a page that just loaded; `update:changed` tells about later ones. */
+	updateOffer: () => __TAURI_INVOKE<UpdateOffer | null>("update_offer"),
+	/**
+	 *  Downloads and installs the offered version: the user pressed Update. How it goes comes through
+	 *  `update:changed`; when it works, Jerry exits and the new one starts.
+	 */
+	updateInstall: () => __TAURI_INVOKE<void>("update_install"),
 	/**
 	 *  Fails with a real Windows error: a background job reads a file that doesn't exist, so the
 	 *  UI gets `NotFound` with the path.
@@ -333,6 +340,7 @@ export const events = {
 	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
 	recentFoldersChanged: makeEvent<RecentFoldersChanged, RecentFoldersChanged>("recent-folders:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
+	updateChanged: makeEvent<UpdateChanged, UpdateChanged>("update:changed"),
 };
 
 /* Types */
@@ -937,6 +945,31 @@ export type Tally = {
 export type Theme = 
 /**  Follow the Windows app theme. */
 "system" | "light" | "dark";
+
+/**  Sent to every window when the offer changes; `None` when there is none any more. */
+export type UpdateChanged = UpdateOffer | null;
+
+/**  A newer version of Jerry. */
+export type UpdateOffer = {
+	/**  The version, for example `0.2.0`. */
+	version: string,
+	/**  The release notes, as Markdown. */
+	notes: string,
+	stage: UpdateStage,
+};
+
+/**  How far the offered version got. */
+export type UpdateStage = 
+/**  Waiting for the user. */
+{ kind: "offered" } | 
+/**  Downloading. */
+{ kind: "downloading"; 
+/**  Percent done; `None` while the size isn't known. */
+percent: number | null } | 
+/**  Downloaded and verified: the installer is starting, and Jerry exits for it. */
+{ kind: "installing" } | 
+/**  The download or the install failed. The offer stands, so the user can try again. */
+{ kind: "failed" };
 
 /**  File list view. */
 export type View = "details" | "list" | "grid";

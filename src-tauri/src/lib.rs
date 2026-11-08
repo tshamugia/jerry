@@ -19,6 +19,7 @@ pub mod session;
 pub mod shell;
 pub mod storage;
 pub mod title_bar;
+pub mod updates;
 pub mod views;
 pub mod window;
 
@@ -136,6 +137,8 @@ macro_rules! commands {
             title_bar::title_bar_set_buttons,
             title_bar::title_bar_press,
             window::appearance_get,
+            updates::update_offer,
+            updates::update_install,
             $($dev)*
         ]
     };
@@ -166,7 +169,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             drives::NetworkPlacesChanged,
             favorites::FavoritesChanged,
             favorites::RecentFoldersChanged,
-            instance::LaunchOpened
+            instance::LaunchOpened,
+            updates::UpdateChanged
         ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
@@ -242,8 +246,10 @@ pub fn run() -> tauri::Result<()> {
     let app = tauri::Builder::default()
         // First: a second start hands its arguments over and exits right here, in `build`.
         .plugin(instance::plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(instance::Instance::new(&launch))
         .manage(delete::Deleting::default())
+        .manage(updates::Updates::default())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
         .on_window_event(|window, event| match event {
@@ -297,6 +303,7 @@ pub fn run() -> tauri::Result<()> {
                 session::place(&window, &placement);
             }
             instance::first_start(app.handle(), launch);
+            updates::start(app.handle());
 
             // If the UI never reports ready (a script error, say), show the window anyway so
             // Jerry isn't left running invisibly.

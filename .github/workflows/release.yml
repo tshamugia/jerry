@@ -69,13 +69,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # Builds with `pnpm tauri build` (release profile, NSIS only), creates the release and uploads
-      # Jerry_<version>_x64-setup.exe. latest.json and the .sig files follow once the updater (#46)
-      # turns on createUpdaterArtifacts; without signatures the action skips latest.json.
+      # Jerry_<version>_x64-setup.exe, its .sig and latest.json for the updater (#46). The signed
+      # packages are switched on only here, by release.conf.json: the key is a release secret, and
+      # `pnpm build` has to work without it.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: pnpm tauri
+          args: --config src-tauri/release.conf.json
           tagName: ${{ github.ref_name }}
           releaseName: Jerry ${{ github.ref_name }}
           releaseBody: ${{ steps.notes.outputs.body }}

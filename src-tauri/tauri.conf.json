@@ -73,5 +73,15 @@
         "installerHooks": "windows/installer-hooks.nsh"
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVGNDEwQTkyOEQ5RjEwOTUKUldTVkVKK05rZ3BCNzNyMmJ0d2d6Y09xMkJaMG9BK2krRU5KUWhzZmFRMEZIejZ3LzZldUF3YXMK",
+      "endpoints": ["https://github.com/tshamugia/jerry/releases/latest/download/latest.json"],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }
