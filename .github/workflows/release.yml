@@ -62,9 +62,14 @@ jobs:
       - name: Release notes
         id: notes
         run: |
+          # git-cliff counts only stable tags as versions (cliff.toml): to it an rc is still unreleased.
+          case "$GITHUB_REF_NAME" in
+            *-*) range=(--unreleased --tag "$GITHUB_REF_NAME") ;;
+            *) range=(--latest) ;;
+          esac
           {
             echo 'body<<RELEASE_NOTES_EOF'
-            pnpm exec git-cliff --latest --strip header
+            pnpm exec git-cliff "${range[@]}" --strip header
             echo 'RELEASE_NOTES_EOF'
           } >> "$GITHUB_OUTPUT"
 
