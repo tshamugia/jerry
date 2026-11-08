@@ -32,7 +32,8 @@ conventional_commits = true
 # Merge commits and anything else that isn't a Conventional Commit stay out.
 filter_unconventional = true
 protect_breaking_commits = true
-tag_pattern = "^v[0-9]"
+# Only a stable tag is a version here, so a stable release's notes include what its pre-releases had.
+tag_pattern = "^v[0-9]+[.][0-9]+[.][0-9]+$"
 sort_commits = "oldest"
 # The first match wins: a breaking feat goes under breaking changes, not features.
 commit_parsers = [
