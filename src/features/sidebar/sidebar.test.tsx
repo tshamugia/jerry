@@ -147,6 +147,9 @@ test("Eject ejects the drive, and says so when Jerry couldn't", async () => {
   let fail: JerryError | undefined = { code: "Os", params: { os: 1460 }, path: null };
   mockIPC((cmd, args) => {
     calls.push({ cmd, args });
+    if (cmd === "eject_check") {
+      return { transfers: 0 };
+    }
     if (cmd === "eject" && fail) {
       throw fail;
     }
@@ -164,6 +167,33 @@ test("Eject ejects the drive, and says so when Jerry couldn't", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Try again" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(calls.filter((call) => call.cmd === "eject")).toHaveLength(2);
+});
+
+test("Eject warns when transfers are on the drive and goes on only if told to", async () => {
+  const calls: { cmd: string; args: unknown }[] = [];
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    return cmd === "eject_check" ? { transfers: 2 } : null;
+  });
+  show([drive("E", { kind: "removable", label: "USB", ejectable: true })]);
+  render(<Sidebar />);
+  const ejects = () => calls.filter((call) => call.cmd === "eject");
+
+  fireEvent.click(within(nav()).getByRole("button", { name: "Eject USB (E:)" }));
+  let dialog = await screen.findByRole("dialog", { name: "Transfers are using this drive" });
+  expect(dialog).toHaveTextContent("2 transfers are using E:");
+  expect(calls).toContainEqual({ cmd: "eject_check", args: { letter: "E" } });
+  expect(ejects()).toHaveLength(0);
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(ejects()).toHaveLength(0);
+
+  fireEvent.click(within(nav()).getByRole("button", { name: "Eject USB (E:)" }));
+  dialog = await screen.findByRole("dialog", { name: "Transfers are using this drive" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Eject anyway" }));
+  await waitFor(() => expect(ejects()).toHaveLength(1));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
 test("a network location is added by typing it, and removed from its menu", async () => {

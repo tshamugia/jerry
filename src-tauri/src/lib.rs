@@ -19,6 +19,7 @@ pub mod session;
 pub mod shell;
 pub mod storage;
 pub mod title_bar;
+pub mod transfers;
 pub mod updates;
 pub mod views;
 pub mod window;
@@ -108,8 +109,14 @@ macro_rules! commands {
             delete::delete_permanently,
             rename::create_folder,
             rename::rename,
+            transfers::transfer_enqueue,
+            transfers::transfer_control,
+            transfers::transfer_reorder,
+            transfers::transfer_retry_failed,
+            transfers::transfer_list,
             drives::drives_list,
             drives::folder_space,
+            drives::eject_check,
             drives::eject,
             drives::sidebar_places,
             drives::network_places_list,
@@ -170,7 +177,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
             favorites::FavoritesChanged,
             favorites::RecentFoldersChanged,
             instance::LaunchOpened,
-            updates::UpdateChanged
+            updates::UpdateChanged,
+            transfers::TransfersChanged,
+            transfers::TransfersProgressed,
+            transfers::TransferFinished
         ])
         // One TypeScript type per Rust type. With serde phases a `Channel<T>` argument got T's
         // deserialize shape (`T_Deserialize`), though Rust only ever serializes T.
@@ -285,6 +295,7 @@ pub fn run() -> tauri::Result<()> {
             }
             clipboard::watch(app.handle());
             app.manage(drives::Drives::start(app.handle()));
+            app.manage(transfers::Transfers::start(app.handle(), &db));
             recent.attach(app.handle());
 
             // The window gets its theme and Mica at creation, so it needs the settings now, and

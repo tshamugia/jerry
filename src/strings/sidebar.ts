@@ -33,6 +33,14 @@ export const sidebarStrings = {
   disconnected: (name: string) => `${name} (disconnected)`,
   eject: (name: string) => `Eject ${name}`,
   ejectFailed: "Couldn't eject the drive",
+  /** Asked before ejecting a drive transfers are on. */
+  ejectWarning: "Transfers are using this drive",
+  ejectWarningText: (letter: string, transfers: number) =>
+    transfers === 1
+      ? `A transfer is using ${letter}: and hasn't finished. Ejecting it may stop the transfer.`
+      : `${transfers} transfers are using ${letter}: and haven't finished. Ejecting it may stop them.`,
+  ejectAnyway: "Eject anyway",
+  cancel: "Cancel",
   /** Sections fold and unfold. */
   showSection: (section: string) => `Show ${section}`,
   hideSection: (section: string) => `Hide ${section}`,

@@ -547,7 +547,7 @@ fn scan_letter(letter: u8) -> Option<Scanned> {
 
 /// A network drive's share from the local connection table, and whether it is connected. No
 /// network access.
-fn connection(letter: u8) -> (Option<String>, bool) {
+pub(crate) fn connection(letter: u8) -> (Option<String>, bool) {
     let device = wide(&format!("{}:", char::from(letter)));
     let mut buffer = vec![0u16; 300];
     loop {

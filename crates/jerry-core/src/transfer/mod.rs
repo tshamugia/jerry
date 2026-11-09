@@ -1,5 +1,5 @@
 //! Copying and moving files: one job, from counting to its summary (Tech PRD «ტრანსფერების
-//! ძრავი», #48). The queue, the workers and the IPC commands come on top of this (#49).
+//! ძრავი», #48). [`queue`] runs jobs one per disk and reports them to the UI (#49).
 //!
 //! A job counts what it will write, checks the destination has room, does the work, and returns a
 //! [`Summary`]. What keeps the user's files safe (data safety rules 1, 2 and 7):
@@ -25,6 +25,7 @@ mod copy;
 mod execute;
 mod link;
 mod plan;
+pub mod queue;
 mod speed;
 #[cfg(test)]
 mod tests;
@@ -32,12 +33,16 @@ mod tests;
 use std::path::{Path, PathBuf};
 
 pub use control::Control;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 
 use crate::delete::{Item, Tally};
 use crate::error::JerryError;
 
 /// What a job does with its sources.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+#[serde(rename = "TransferKind")]
 pub enum Kind {
     Copy,
     Move,
@@ -54,7 +59,9 @@ pub struct Job {
 }
 
 /// The stages of a job, in order. The [`Summary`] is the last one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+#[serde(rename = "TransferPhase")]
 pub enum Phase {
     Counting,
     CheckingSpace,

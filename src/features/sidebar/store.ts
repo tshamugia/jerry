@@ -30,6 +30,8 @@ interface SidebarState {
   adding: boolean;
   /** An eject that failed, to say so and offer to try again. */
   ejectFailed: { letter: string; error: JerryError } | undefined;
+  /** An eject that would get in the way of transfers, to ask first. */
+  ejectWarning: { letter: string; transfers: number } | undefined;
 }
 
 const initial: SidebarState = {
@@ -39,6 +41,7 @@ const initial: SidebarState = {
   folded: new Set(["recent"]),
   adding: false,
   ejectFailed: undefined,
+  ejectWarning: undefined,
 };
 
 /**
@@ -154,9 +157,19 @@ export function unfoldSection(section: Section): void {
   }
 }
 
-/** Ejects a drive; Windows says if something holds it. A failure of Jerry's own is kept to say. */
-export async function eject(letter: string): Promise<void> {
-  useSidebar.setState({ ejectFailed: undefined });
+/**
+ * Ejects a drive, asking first if transfers are on it (`confirmed`: the user said go on). Windows
+ * says if something holds it. A failure of Jerry's own is kept to say.
+ */
+export async function eject(letter: string, confirmed = false): Promise<void> {
+  useSidebar.setState({ ejectFailed: undefined, ejectWarning: undefined });
+  if (!confirmed) {
+    const check = await commands.ejectCheck(letter);
+    if (check.status === "ok" && check.data.transfers > 0) {
+      useSidebar.setState({ ejectWarning: { letter, transfers: check.data.transfers } });
+      return;
+    }
+  }
   const result = await commands.eject(letter);
   if (result.status === "error" && result.error.code !== "Cancelled") {
     useSidebar.setState({ ejectFailed: { letter, error: result.error } });
@@ -165,6 +178,10 @@ export async function eject(letter: string): Promise<void> {
 
 export function dismissEjectFailed(): void {
   useSidebar.setState({ ejectFailed: undefined });
+}
+
+export function dismissEjectWarning(): void {
+  useSidebar.setState({ ejectWarning: undefined });
 }
 
 export function startAdding(): void {

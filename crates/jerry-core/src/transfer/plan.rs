@@ -277,7 +277,8 @@ fn same_volume(path: &Path, root: Option<&Path>) -> bool {
 /// Where `path` really is (`GetFinalPathNameByHandleW`, through `canonicalize`): junctions and
 /// symbolic links resolved. Fails if it isn't an existing folder.
 fn real_folder(path: &Path) -> Result<PathBuf, JerryError> {
-    let metadata = std::fs::metadata(path).map_err(|error| JerryError::from(error).at(path))?;
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| volume::missing_or_gone(JerryError::from(error).at(path), path))?;
     if !metadata.is_dir() {
         return Err(JerryError::new(ErrorCode::NotFound).at(path));
     }
