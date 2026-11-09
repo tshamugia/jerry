@@ -16,6 +16,7 @@ use super::{Event, Failure, Kind, Options, Progress, Status, Summary};
 use crate::delete::{Item, children, remove};
 use crate::error::{ErrorCode, JerryError};
 use crate::rename::is_taken;
+use crate::volume::missing_or_gone;
 
 /// What became of a plan's entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,10 +102,12 @@ impl Run<'_, '_> {
     }
 
     /// Takes in a failed step: the status the job ends with, if this ends it.
-    fn settle(&mut self, failure: Failure) -> Option<Status> {
+    fn settle(&mut self, mut failure: Failure) -> Option<Status> {
         if failure.error.code == ErrorCode::Cancelled && self.control.is_cancelled() {
             return Some(Status::Cancelled);
         }
+        failure.error = missing_or_gone(failure.error, &failure.target);
+        failure.error = missing_or_gone(failure.error, &failure.source);
         // Every file left would fail the same way.
         let stop = matches!(
             failure.error.code,
