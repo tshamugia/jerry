@@ -164,6 +164,31 @@ export const commands = {
 	 */
 	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
 	/**
+	 *  Copies or moves `entries` of listing `listing` into `destination`, at the end of the queue,
+	 *  and returns the job's id. Entries the listing no longer has are left out; with none left it
+	 *  fails with `NotFound`. A move of a system folder needs `system`, the user's confirmation
+	 *  (`delete_check` says whether to ask); without it, it fails with `AccessDenied` and nothing is
+	 *  queued.
+	 */
+	transferEnqueue: (kind: TransferKind, listing: number, entries: number[], destination: TransferDestination, system: boolean) => typedError<number, JerryError>(__TAURI_INVOKE("transfer_enqueue", { kind, listing, entries, destination, system })),
+	/**
+	 *  Pauses, resumes or cancels job `job`, or every job with null. Resume also carries on a job
+	 *  that waits for its device, once its state says `ready`. `NotFound` for a job that isn't listed.
+	 */
+	transferControl: (action: TransferAction, job: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("transfer_control", { action, job })),
+	/**  Puts the jobs of `order` first, in that order; the others follow as they were. */
+	transferReorder: (order: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("transfer_reorder", { order })),
+	/**
+	 *  Queues job `job` again if it ended with failed items (only those are tried again) or couldn't
+	 *  start. `NotFound` if there is no such job or nothing to try again.
+	 */
+	transferRetryFailed: (job: number) => typedError<null, JerryError>(__TAURI_INVOKE("transfer_retry_failed", { job })),
+	/**
+	 *  The queue as it is now; `transfer:changed` brings every later list. Keep the one with the
+	 *  highest `generation`.
+	 */
+	transferList: () => typedError<TransferList, JerryError>(__TAURI_INVOKE("transfer_list")),
+	/**
 	 *  The drives as last read; `drives:changed` brings every later list. Keep the one with the
 	 *  highest `generation`.
 	 */
@@ -175,6 +200,11 @@ export const commands = {
 	 *  read, or the listing isn't open.
 	 */
 	folderSpace: (listing: number) => typedError<Space | null, JerryError>(__TAURI_INVOKE("folder_space", { listing })),
+	/**
+	 *  Whether ejecting drive `letter` would get in the way of a transfer, so the UI warns first
+	 *  (PRD «დისკები»). Windows itself refuses while a file is open on the drive.
+	 */
+	ejectCheck: (letter: string) => typedError<EjectCheck, JerryError>(__TAURI_INVOKE("eject_check", { letter })),
 	/**
 	 *  Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
 	 *  something holds the drive; the list follows with `drives:changed`.
@@ -340,6 +370,9 @@ export const events = {
 	networkPlacesChanged: makeEvent<NetworkPlacesChanged, NetworkPlacesChanged>("network-places:changed"),
 	recentFoldersChanged: makeEvent<RecentFoldersChanged, RecentFoldersChanged>("recent-folders:changed"),
 	settingsChanged: makeEvent<SettingsChanged, SettingsChanged>("settings:changed"),
+	transferChanged: makeEvent<TransfersChanged, TransfersChanged>("transfer:changed"),
+	transferEnded: makeEvent<TransferFinished, TransferFinished>("transfer:ended"),
+	transferProgress: makeEvent<TransfersProgressed, TransfersProgressed>("transfer:progress"),
 	updateChanged: makeEvent<UpdateChanged, UpdateChanged>("update:changed"),
 };
 
@@ -495,6 +528,12 @@ export type DriveList = {
  *  drive mapped or disconnected, a label or the free space.
  */
 export type DrivesChanged = DriveList;
+
+/**  What the UI should warn about before ejecting a drive. */
+export type EjectCheck = {
+	/**  Unfinished transfers that read from or write to the drive. */
+	transfers: number,
+};
 
 /**  What went wrong, with the parameters the UI needs to explain it. */
 export type ErrorCode = 
@@ -947,6 +986,113 @@ export type Tally = {
 export type Theme = 
 /**  Follow the Windows app theme. */
 "system" | "light" | "dark";
+
+/**  What the UI can ask of a job. */
+export type TransferAction = "pause" | "resume" | "cancel";
+
+/**  The folder a transfer goes into. */
+export type TransferDestination = 
+/**  The folder the open listing `listing` shows. */
+{ kind: "listing"; listing: number } | 
+/**  Subfolder `entry` of the open listing `listing`. */
+{ kind: "entry"; listing: number; entry: number } | 
+/**  A folder a listing named before (`ListingOpened::folder`, a crumb). */
+{ kind: "folder"; folder: number };
+
+/**  What a job did, once, when it ends. */
+export type TransferEnded = {
+	id: number,
+	state: TransferState,
+	files: number,
+	folders: number,
+	bytes: number,
+	failed: TransferFailure[],
+};
+
+/**  An item that couldn't be copied or moved. `transfer_retry_failed` tries these again. */
+export type TransferFailure = {
+	/**  The item, as display text. */
+	source: string,
+	/**  Where it was going, as display text. */
+	target: string,
+	error: JerryError,
+	/**  A move: the copy is complete, and only removing the source failed. */
+	copied: boolean,
+};
+
+/**  A job ended, with what it did and what failed. */
+export type TransferFinished = TransferEnded;
+
+/**  One job. */
+export type TransferJob = {
+	id: number,
+	kind: TransferKind,
+	state: TransferState,
+	/**  The first source, as display text. */
+	source: string,
+	/**  How many sources the job has. */
+	sources: number,
+	/**  The folder it goes into, as display text. */
+	destination: string,
+	progress: TransferProgress,
+};
+
+/**  What a job does with its sources. */
+export type TransferKind = "copy" | "move";
+
+/**
+ *  The queue as the panel shows it, numbered: a later list has a higher generation, so a window
+ *  that hears of the jobs two ways (`transfer_list` and `transfer:changed`) keeps the newest.
+ */
+export type TransferList = {
+	generation: number,
+	/**  In queue order, the jobs that ended among them. */
+	jobs: TransferJob[],
+};
+
+/**  The stages of a job, in order. The [`Summary`] is the last one. */
+export type TransferPhase = "counting" | "checkingSpace" | "working";
+
+/**  How far a job has come. Sums over everything it has done, Resume and Retry included. */
+export type TransferProgress = {
+	id: number,
+	phase: TransferPhase,
+	/**  The file being worked on, as display text. None before the first one. */
+	file: string | null,
+	filesDone: number,
+	filesTotal: number,
+	bytesDone: number,
+	bytesTotal: number,
+	/**  Bytes per second over the last few seconds; 0 until that is known. */
+	speed: number,
+	/**  Items that failed so far. */
+	failed: number,
+};
+
+/**  Where a job is. */
+export type TransferState = 
+/**  Waiting for its disk. */
+{ kind: "queued" } | { kind: "running" } | 
+/**  Paused by the user: where it was running, it still holds its disk and its current file. */
+{ kind: "paused" } | 
+/**
+ *  Stopped because a volume went away or filled up. `ready`: it is worth trying again (the
+ *  volume is back), so Resume does; Cancel ends it either way.
+ */
+{ kind: "waiting"; error: JerryError; ready: boolean } | 
+/**  Everything was attempted. `progress.failed` says how many items didn't make it. */
+{ kind: "done" } | { kind: "cancelled" } | 
+/**  It couldn't start. */
+{ kind: "failed"; error: JerryError };
+
+/**
+ *  Sent to every window when the queue changes: a job came, went, was reordered or changed state.
+ *  Keep the list with the highest `generation`.
+ */
+export type TransfersChanged = TransferList;
+
+/**  How far the running jobs have come, at most 10 times a second. */
+export type TransfersProgressed = TransferProgress[];
 
 /**  Sent to every window when the offer changes; `None` when there is none any more. */
 export type UpdateChanged = UpdateOffer | null;

@@ -98,7 +98,8 @@ impl Deleting {
         self.0.shell.get_or_init(ShellPool::new)
     }
 
-    fn system(&self) -> &[PathBuf] {
+    /// Windows' system folders, which neither a delete nor a move takes unconfirmed.
+    pub fn system(&self) -> &[PathBuf] {
         self.0
             .system
             .get_or_init(jerry_win::folders::system_folders)

@@ -30,6 +30,7 @@ import {
 import {
   addNetworkPlace,
   dismissEjectFailed,
+  dismissEjectWarning,
   driveRoot,
   eject,
   FULL,
@@ -137,6 +138,7 @@ export const Sidebar = memo(function Sidebar() {
         <RecycleBinItem />
       </div>
       <EjectFailed />
+      <EjectWarning />
       <FavoriteExplained />
       <FavoritesFailed />
     </nav>
@@ -311,6 +313,35 @@ function RecycleBinItem() {
       <ItemIcon src={`${placeIconUrl("recyclebin", 16)}&look=${look}`} />
       <span className="min-w-0 flex-1 truncate">{t.recycleBin}</span>
     </button>
+  );
+}
+
+/** Transfers are on the drive about to be ejected (PRD): the user decides. */
+function EjectWarning() {
+  const warning = useSidebar((state) => state.ejectWarning);
+  return (
+    <Dialog
+      open={warning !== undefined}
+      onClose={dismissEjectWarning}
+      title={t.ejectWarning}
+      closeHint={t.closeHint}
+    >
+      <p className="break-words px-4 pt-3 text-fg">
+        {warning && t.ejectWarningText(warning.letter, warning.transfers)}
+      </p>
+      <div className="flex justify-end gap-2 p-4">
+        <button
+          type="button"
+          onClick={() => warning && void eject(warning.letter, true)}
+          className={BUTTON}
+        >
+          {t.ejectAnyway}
+        </button>
+        <button type="button" onClick={dismissEjectWarning} className={BUTTON}>
+          {t.cancel}
+        </button>
+      </div>
+    </Dialog>
   );
 }
 

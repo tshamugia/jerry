@@ -23,6 +23,7 @@ use crate::jobs;
 use crate::listing::Listings;
 use crate::storage::Db;
 use crate::title_bar::hwnd;
+use crate::transfers::Transfers;
 
 /// How long an eject may take before Jerry stops waiting. Windows first asks every program to
 /// let go of the drive, and may show its own message, which waits for a click.
@@ -135,6 +136,35 @@ pub async fn folder_space(
     jobs::background("folder space", move || Ok(reader.read(&folder, SPACE_WAIT))).await
 }
 
+/// What the UI should warn about before ejecting a drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct EjectCheck {
+    /// Unfinished transfers that read from or write to the drive.
+    pub transfers: u32,
+}
+
+/// `"E"` as a drive letter, upper case.
+fn drive_letter(letter: &str) -> Result<u8, JerryError> {
+    match letter.as_bytes() {
+        [letter] if letter.is_ascii_alphabetic() => Ok(letter.to_ascii_uppercase()),
+        _ => Err(JerryError::new(ErrorCode::NotFound)),
+    }
+}
+
+/// Whether ejecting drive `letter` would get in the way of a transfer, so the UI warns first
+/// (PRD «დისკები»). Windows itself refuses while a file is open on the drive.
+#[tauri::command]
+#[specta::specta]
+pub async fn eject_check(
+    transfers: State<'_, Transfers>,
+    letter: String,
+) -> Result<EjectCheck, JerryError> {
+    Ok(EjectCheck {
+        transfers: transfers.on_drive(drive_letter(&letter)?),
+    })
+}
+
 /// Ejects drive `letter` (`"E"`) as Explorer's Eject does. Windows shows its own message if
 /// something holds the drive; the list follows with `drives:changed`.
 #[tauri::command]
@@ -144,10 +174,7 @@ pub async fn eject(
     drives: State<'_, Drives>,
     letter: String,
 ) -> Result<(), JerryError> {
-    let letter = match letter.as_bytes() {
-        [letter] if letter.is_ascii_alphabetic() => letter.to_ascii_uppercase(),
-        _ => return Err(JerryError::new(ErrorCode::NotFound)),
-    };
+    let letter = drive_letter(&letter)?;
     let owner = hwnd(&window).ok();
     let drives = Drives::clone(&drives);
     jobs::background("eject", move || {
