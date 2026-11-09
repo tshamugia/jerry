@@ -52,6 +52,8 @@ pub enum ErrorCode {
     NoRecycleBin,
     /// The user cancelled.
     Cancelled,
+    /// A folder can't be copied or moved into itself or a folder inside it.
+    IntoItself,
     /// Any other Windows error.
     Os {
         /// The Win32 error code, or the `HRESULT` (as `u32`) when Windows reported one.
