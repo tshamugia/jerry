@@ -175,7 +175,7 @@ fn remove_tree(folder: Item) -> Result<(), JerryError> {
 
 /// Removes one file, link or empty folder. A read-only one loses the attribute first; if it still
 /// can't be removed, it gets the attribute back.
-fn remove(item: &Item) -> Result<(), JerryError> {
+pub(crate) fn remove(item: &Item) -> Result<(), JerryError> {
     let wide: Vec<u16> = item.path.as_os_str().encode_wide().chain([0]).collect();
     let path = PCWSTR(wide.as_ptr());
     let attempt = || {
@@ -239,12 +239,15 @@ fn win32(error: &windows::core::Error) -> Option<WIN32_ERROR> {
 }
 
 /// A file, folder or link, as its folder lists it.
-struct Item {
-    path: PathBuf,
-    attributes: u32,
-    size: u64,
+#[derive(Debug, Clone)]
+pub(crate) struct Item {
+    pub(crate) path: PathBuf,
+    pub(crate) attributes: u32,
+    pub(crate) size: u64,
     /// A link (symbolic link, junction, mount point): deleting removes only the link.
-    link: bool,
+    pub(crate) link: bool,
+    /// The reparse tag of a link, else 0.
+    pub(crate) tag: u32,
 }
 
 impl Item {
@@ -252,22 +255,24 @@ impl Item {
         let name = OsString::from_wide(find_data_name(data));
         let attributes = data.dwFileAttributes;
         let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0;
+        // With the reparse point attribute, `dwReserved0` is the reparse tag.
+        let link = reparse && data.dwReserved0 & NAME_SURROGATE != 0;
         Self {
             path: folder.join(name),
             attributes,
             size: (u64::from(data.nFileSizeHigh) << 32) | u64::from(data.nFileSizeLow),
-            // With the reparse point attribute, `dwReserved0` is the reparse tag.
-            link: reparse && data.dwReserved0 & NAME_SURROGATE != 0,
+            link,
+            tag: if link { data.dwReserved0 } else { 0 },
         }
     }
 
-    fn is_dir(&self) -> bool {
+    pub(crate) fn is_dir(&self) -> bool {
         self.attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0
     }
 }
 
 /// The item at `path` as its folder lists it. A drive root is no item: [`ErrorCode::InvalidName`].
-fn probe(path: &Path) -> Result<Item, JerryError> {
+pub(crate) fn probe(path: &Path) -> Result<Item, JerryError> {
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(JerryError::new(ErrorCode::InvalidName).at(path));
     };
@@ -283,7 +288,7 @@ fn probe(path: &Path) -> Result<Item, JerryError> {
 }
 
 /// Everything in `folder`.
-fn children(folder: &Path) -> Result<Vec<Item>, JerryError> {
+pub(crate) fn children(folder: &Path) -> Result<Vec<Item>, JerryError> {
     let mut items = Vec::new();
     find_name(folder, &[u16::from(b'*')], |data| {
         items.push(Item::found(folder, data));
@@ -299,7 +304,7 @@ pub fn takes_system_folder(path: &Path, system: &[PathBuf]) -> bool {
 }
 
 /// Whether `inner` is `outer` or inside it.
-fn is_within(inner: &Path, outer: &Path) -> bool {
+pub(crate) fn is_within(inner: &Path, outer: &Path) -> bool {
     let (Ok(inner), Ok(outer)) = (long_path(inner), long_path(outer)) else {
         return false;
     };

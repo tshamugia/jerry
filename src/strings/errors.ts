@@ -37,6 +37,10 @@ export function errorText(error: JerryError): string {
         : "This location has no Recycle Bin. Deleting here is permanent.";
     case "Cancelled":
       return "Cancelled.";
+    case "IntoItself":
+      return name
+        ? `${name} can't be copied or moved into itself or a folder inside it. Choose another destination.`
+        : "A folder can't be copied or moved into itself. Choose another destination.";
     case "Os":
       return name
         ? `Windows couldn't complete this for ${name} (${osCodeText(error.params.os)}).`

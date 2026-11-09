@@ -43,6 +43,14 @@ describe("errorText", () => {
     ],
     [{ code: "Cancelled", path: at }, "Cancelled."],
     [
+      { code: "IntoItself", path: String.raw`C:\Work\Plans` },
+      "“Plans” can't be copied or moved into itself or a folder inside it. Choose another destination.",
+    ],
+    [
+      { code: "IntoItself", path: null },
+      "A folder can't be copied or moved into itself. Choose another destination.",
+    ],
+    [
       { code: "Os", params: { os: 87 }, path: at },
       "Windows couldn't complete this for “ნახაზი.dwg” (error 87).",
     ],

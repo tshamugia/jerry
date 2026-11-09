@@ -522,6 +522,8 @@ export type ErrorCode =
 { code: "NoRecycleBin" } | 
 /**  The user cancelled. */
 { code: "Cancelled" } | 
+/**  A folder can't be copied or moved into itself or a folder inside it. */
+{ code: "IntoItself" } | 
 /**  Any other Windows error. */
 { code: "Os"; params: {
 	/**  The Win32 error code, or the `HRESULT` (as `u32`) when Windows reported one. */

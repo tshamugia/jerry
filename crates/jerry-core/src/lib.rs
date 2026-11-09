@@ -20,6 +20,7 @@ pub mod sort;
 pub mod space;
 pub mod storage;
 pub mod synth;
+pub mod transfer;
 pub mod volume;
 pub mod watcher;
 

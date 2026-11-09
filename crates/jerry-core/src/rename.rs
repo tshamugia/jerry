@@ -65,7 +65,7 @@ fn through_temporary(path: &Path, target: &Path) -> Result<PathBuf, JerryError> 
 }
 
 /// `MoveFileExW` without replacing: a name that is taken fails with `ERROR_ALREADY_EXISTS`.
-fn move_file(from: &Path, to: &Path) -> windows::core::Result<()> {
+pub(crate) fn move_file(from: &Path, to: &Path) -> windows::core::Result<()> {
     let from = wide(from.as_os_str());
     let to = wide(to.as_os_str());
     // SAFETY: both point into NUL-terminated buffers that outlive the call.
@@ -78,7 +78,7 @@ fn move_file(from: &Path, to: &Path) -> windows::core::Result<()> {
     }
 }
 
-fn is_taken(error: &windows::core::Error) -> bool {
+pub(crate) fn is_taken(error: &windows::core::Error) -> bool {
     matches!(
         WIN32_ERROR::from_error(error),
         Some(ERROR_ALREADY_EXISTS | ERROR_FILE_EXISTS)
