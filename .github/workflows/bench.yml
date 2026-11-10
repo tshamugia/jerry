@@ -1,6 +1,6 @@
-# Listing and sort benchmarks (#44) on pull requests that touch the core. The base and the head
-# run on the same runner in turns, and a benchmark more than 20% slower than the base gets a
-# warning (never a failure). The comparison is in the job summary. .github/scripts/bench.sh runs
+# Core benchmarks (listing and sort #44, search #65) on pull requests that touch the core. The base
+# and the head run on the same runner in turns, and a benchmark more than 20% slower than the base
+# gets a warning (never a failure). The comparison is in the job summary. .github/scripts/bench.sh runs
 # the benchmarks, bench-compare.mjs next to it compares them.
 name: Benchmarks
 
@@ -31,7 +31,7 @@ env:
 
 jobs:
   bench:
-    name: Listing and sort
+    name: Listing, sort and search
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

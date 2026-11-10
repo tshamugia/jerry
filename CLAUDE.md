@@ -144,7 +144,7 @@ Dev environment (#7): Visual Studio Build Tools 2022 with "Desktop development w
 | Type check | `pnpm typecheck` |
 | UI tests | `pnpm test` |
 | Rust tests | `cargo nextest run --workspace` |
-| Core benchmarks (listing, sort) | `cargo bench -p jerry-core` (synthetic folders in `%TEMP%\jerry-synth`) |
+| Core benchmarks (listing, sort, search) | `cargo bench -p jerry-core` (synthetic folders in `%TEMP%\jerry-synth`) |
 | UI benchmarks (quick filter) | `pnpm bench` (Vitest, `src/**/*.bench.ts`) |
 | Everything CI checks, before a PR | `pnpm check` |
 | Regenerate IPC bindings | `pnpm bindings` (debug runs of the app also refresh them) |

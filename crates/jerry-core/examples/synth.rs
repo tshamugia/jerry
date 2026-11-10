@@ -3,6 +3,7 @@
 //! ```text
 //! cargo run -p jerry-core --release --example synth              # 1 000, 10 000, 100 000
 //! cargo run -p jerry-core --release --example synth -- 5000      # one custom size
+//! cargo run -p jerry-core --release --example synth -- --tree    # the search tree, 50 000
 //! cargo run -p jerry-core --release --example synth -- --clean   # delete them all
 //! ```
 
@@ -17,6 +18,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|arg| arg == "--clean") {
         synth::remove_all()?;
         println!("removed {}", synth::root().display());
+        return Ok(());
+    }
+    if args.iter().any(|arg| arg == "--tree") {
+        let started = Instant::now();
+        let dir = synth::ensure_tree(synth::TREE_SIZE)?;
+        println!(
+            "{:>7} entries  {:>8.0} ms  {}",
+            synth::TREE_SIZE,
+            started.elapsed().as_secs_f64() * 1000.0,
+            dir.display()
+        );
         return Ok(());
     }
     let counts: Vec<usize> = if args.is_empty() {
