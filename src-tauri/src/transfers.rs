@@ -1,12 +1,17 @@
 //! The transfer queue in the app (#49): commands, and `transfer:changed`, `transfer:progress` and
-//! `transfer:ended` to every window. The queue itself is `jerry_core::transfer::queue`.
+//! `transfer:ended` to every window. The queue itself is `jerry_core::transfer::queue`, and its
+//! journal in `jerry.db` is `jerry_core::transfer::journal` (#50): as Jerry starts, the jobs the
+//! Jerry before it didn't finish come back as `unfinished`, for Resume or Discard.
 //!
 //! The UI names what to transfer by listing entries and the destination by a listing, an entry
 //! or a folder token, so an operation's paths never come from JS text (CLAUDE.md rule 4).
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use jerry_core::delete::takes_system_folder;
+use jerry_core::storage::Storage;
+use jerry_core::transfer::journal::{StorageJournal, Store};
 use jerry_core::transfer::queue::{
     Action, Notice, Queue, TransferEnded, TransferList, TransferProgress,
 };
@@ -20,7 +25,7 @@ use tauri_specta::Event;
 use crate::delete::Deleting;
 use crate::jobs;
 use crate::listing::Listings;
-use crate::storage::{Db, SettingsChanged};
+use crate::storage::{Db, SettingsChanged, now_ms};
 
 /// Sent to every window when the queue changes: a job came, went, was reordered or changed state.
 /// Keep the list with the highest `generation`.
@@ -55,10 +60,15 @@ pub enum TransferDestination {
 pub struct Transfers(Queue);
 
 impl Transfers {
-    /// A queue that tells every window what happens, following the "parallel" setting.
+    /// A queue that tells every window what happens, following the "parallel" setting, and
+    /// writes its jobs down in `db`. The jobs the Jerry before didn't finish are listed once the
+    /// database is open.
     pub fn start(app: &AppHandle, db: &Db) -> Self {
         let handle = app.clone();
-        let queue = Queue::start(true, move |notice| announce(&handle, notice));
+        let journal = Arc::new(StorageJournal::new(db.clone(), now_ms()));
+        let queue = Queue::start(true, journal.clone(), move |notice| {
+            announce(&handle, notice);
+        });
         let following = queue.clone();
         SettingsChanged::listen_any(app, move |event| {
             following.set_parallel(event.payload.0.parallel_transfers);
@@ -68,6 +78,11 @@ impl Transfers {
             if let Ok(parallel) = db.with(|storage| Ok(storage.settings().parallel_transfers)) {
                 reading.set_parallel(parallel);
             }
+            let recovered =
+                jerry_core::job::run_job("transfer recovery", || Ok(journal.recover(&reading)));
+            if recovered.is_err() {
+                tracing::error!("couldn't look for transfers the Jerry before didn't finish");
+            }
         });
         Self(queue)
     }
@@ -76,6 +91,16 @@ impl Transfers {
     pub fn on_drive(&self, letter: u8) -> u32 {
         self.0
             .on_volume(Path::new(&format!(r"\\?\{}:\", char::from(letter))))
+    }
+}
+
+/// The journal writes to the app's database, waiting for it to open.
+impl Store for Db {
+    fn with_storage(
+        &self,
+        job: &mut dyn FnMut(&mut Storage) -> Result<(), JerryError>,
+    ) -> Result<(), JerryError> {
+        self.with(job)
     }
 }
 
@@ -119,7 +144,8 @@ pub async fn transfer_enqueue(
 }
 
 /// Pauses, resumes or cancels job `job`, or every job with null. Resume also carries on a job
-/// that waits for its device, once its state says `ready`. `NotFound` for a job that isn't listed.
+/// that waits for its device, once its state says `ready`, and one Jerry didn't finish
+/// (`unfinished`); Cancel discards that one. `NotFound` for a job that isn't listed.
 #[tauri::command]
 #[specta::specta]
 pub async fn transfer_control(
@@ -127,7 +153,8 @@ pub async fn transfer_control(
     action: Action,
     job: Option<u32>,
 ) -> Result<(), JerryError> {
-    transfers.0.control(action, job)
+    let transfers = Transfers::clone(&transfers);
+    jobs::background("transfer control", move || transfers.0.control(action, job)).await
 }
 
 /// Puts the jobs of `order` first, in that order; the others follow as they were.

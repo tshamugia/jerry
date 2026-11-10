@@ -431,12 +431,12 @@ fn a_rename_refused_for_another_volume_copies_instead() {
 /// Copies, but the device goes away at the file called `b.txt`.
 fn device_gone_at_b(
     request: &copy::Request<'_>,
-    chunk: &mut dyn FnMut(u64) -> control::Flow,
+    step: &mut dyn FnMut(copy::Step<'_>) -> control::Flow,
 ) -> Result<u64, JerryError> {
     if request.source.ends_with("b.txt") {
         return Err(JerryError::new(ErrorCode::DeviceGone).at(request.source));
     }
-    copy::copy_file(request, chunk)
+    copy::copy_file(request, step)
 }
 
 #[test]
@@ -537,4 +537,150 @@ fn the_rest_of_an_interrupted_job_waits_for_a_retry() {
     assert_eq!(again.files, 2);
     assert!(empty(&scene.from));
     assert_eq!(names(&scene.to), ["one.txt", "two.txt"]);
+}
+
+/// Resumes `job` and returns its summary and the names of the files it began to write.
+fn resume_it(job: &Job, resume: &Resume, control: &Control) -> (Summary, Vec<String>) {
+    let mut written = Vec::new();
+    let summary = resume_with(job, resume, COPYING, control, &mut |event| {
+        if let Event::Writing(writing) = event {
+            let name = writing.source.file_name().unwrap().to_string_lossy();
+            written.push(name.into_owned());
+        }
+    })
+    .unwrap();
+    written.sort();
+    (summary, written)
+}
+
+#[test]
+fn a_resumed_copy_writes_only_what_is_not_there() {
+    let scene = scene();
+    let project = scene.from.join("პროექტი");
+    let sub = project.join("sub");
+    fs::create_dir_all(&sub).unwrap();
+    write(&project.join("a.txt"), 1);
+    write(&project.join("b.txt"), 2);
+    write(&project.join("c.txt"), 3);
+    write(&sub.join("d.txt"), 4);
+    // What the Jerry before did: the folder, a.txt, and b.txt as it stopped. c.txt is someone
+    // else's file of that name.
+    let copied = scene.to.join("პროექტი");
+    fs::create_dir(&copied).unwrap();
+    fs::copy(project.join("a.txt"), copied.join("a.txt")).unwrap();
+    fs::copy(project.join("b.txt"), copied.join("b.txt")).unwrap();
+    write(&copied.join("c.txt"), 9);
+    let job = Job {
+        kind: Kind::Copy,
+        sources: vec![project.clone()],
+        destination: scene.to.clone(),
+    };
+    let resume = Resume {
+        writing: Some((project.join("b.txt"), copied.join("b.txt"))),
+    };
+
+    let (summary, written) = resume_it(&job, &resume, &Control::new());
+    assert_eq!(summary.status, Status::Done);
+    assert_eq!(written, ["d.txt"], "a.txt and b.txt are there");
+    assert_eq!(summary.failed.len(), 1);
+    assert_eq!(summary.failed[0].target, copied.join("c.txt"));
+    assert_eq!(summary.failed[0].error.code, ErrorCode::InvalidName);
+    assert_eq!(
+        fs::metadata(copied.join("c.txt")).unwrap().len(),
+        9,
+        "never replaced"
+    );
+    assert_eq!(
+        names(&scene.to),
+        ["a.txt", "b.txt", "c.txt", "d.txt", "sub", "პროექტი"]
+    );
+    assert_eq!(
+        names(&scene.from),
+        names(&scene.to),
+        "the copy left the source"
+    );
+}
+
+#[test]
+fn a_resumed_move_removes_only_the_source_it_was_writing() {
+    let scene = scene();
+    let project = scene.from.join("project");
+    fs::create_dir(&project).unwrap();
+    write(&project.join("b.txt"), 2);
+    write(&project.join("c.txt"), 3);
+    write(&project.join("d.txt"), 4);
+    // a.txt and other.txt were moved before Jerry stopped; b.txt's copy was complete and its
+    // source not yet removed; c.txt is there with the same size and date, but not by this job.
+    let moved = scene.to.join("project");
+    fs::create_dir(&moved).unwrap();
+    write(&moved.join("a.txt"), 1);
+    fs::copy(project.join("b.txt"), moved.join("b.txt")).unwrap();
+    fs::copy(project.join("c.txt"), moved.join("c.txt")).unwrap();
+    let other = scene.from.join("other.txt");
+    write(&scene.to.join("other.txt"), 5);
+    let job = Job {
+        kind: Kind::Move,
+        sources: vec![project.clone(), other],
+        destination: scene.to.clone(),
+    };
+    let resume = Resume {
+        writing: Some((project.join("b.txt"), moved.join("b.txt"))),
+    };
+
+    let (summary, written) = resume_it(&job, &resume, &Control::new());
+    assert_eq!(summary.status, Status::Done);
+    assert_eq!(written, ["d.txt"]);
+    assert_eq!(summary.failed.len(), 1, "{:?}", summary.failed);
+    assert_eq!(summary.failed[0].source, project.join("c.txt"));
+    assert!(!summary.failed[0].copied);
+    assert!(!project.join("b.txt").exists(), "its copy is complete");
+    assert!(project.join("c.txt").exists(), "not this job's copy");
+    assert_eq!(names(&scene.from), ["c.txt", "project"]);
+    assert_eq!(
+        names(&scene.to),
+        ["a.txt", "b.txt", "c.txt", "d.txt", "other.txt", "project"]
+    );
+}
+
+#[test]
+fn a_resumed_move_keeps_a_source_that_changed() {
+    let scene = scene();
+    let source = scene.from.join("b.txt");
+    write(&source, 2);
+    let target = scene.to.join("b.txt");
+    fs::copy(&source, &target).unwrap();
+    write(&source, 3);
+    let job = job(&[&source], &scene.to);
+    let resume = Resume {
+        writing: Some((source.clone(), target.clone())),
+    };
+
+    let (summary, _) = resume_it(&job, &resume, &Control::new());
+    assert_eq!(summary.failed.len(), 1);
+    assert!(summary.failed[0].copied);
+    assert_eq!(fs::metadata(&source).unwrap().len(), 3, "kept");
+    assert_eq!(fs::metadata(&target).unwrap().len(), 2);
+}
+
+#[test]
+fn a_cancelled_resume_leaves_the_folder_that_was_there() {
+    let scene = scene();
+    let project = scene.from.join("project");
+    fs::create_dir(&project).unwrap();
+    write(&project.join("a.txt"), 3_000_000);
+    fs::create_dir(scene.to.join("project")).unwrap();
+    let job = Job {
+        kind: Kind::Copy,
+        sources: vec![project],
+        destination: scene.to.clone(),
+    };
+    let control = Control::new();
+    let summary = resume_with(&job, &Resume::default(), COPYING, &control, &mut |event| {
+        if let Event::Writing(_) = event {
+            control.cancel();
+        }
+    })
+    .unwrap();
+    assert_eq!(summary.status, Status::Cancelled);
+    assert_eq!(names(&scene.to), ["project"]);
 }

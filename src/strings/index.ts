@@ -7,6 +7,7 @@ import { renameStrings } from "./rename";
 import { sessionStrings } from "./session";
 import { shellStrings } from "./shell";
 import { sidebarStrings } from "./sidebar";
+import { transferStrings } from "./transfers";
 import { updateStrings } from "./updates";
 
 const integer = new Intl.NumberFormat("en-US");
@@ -266,6 +267,8 @@ export const strings = {
   sidebar: sidebarStrings,
   /** The notice about a new version (#46). */
   updates: updateStrings,
+  /** Copying and moving: the transfer queue and what a Jerry before left (v0.2). */
+  transfers: transferStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",
