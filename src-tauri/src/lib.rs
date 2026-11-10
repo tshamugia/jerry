@@ -120,6 +120,7 @@ macro_rules! commands {
             transfers::transfer_reorder,
             transfers::transfer_retry_failed,
             transfers::transfer_list,
+            transfers::conflict_resolve,
             drives::drives_list,
             drives::folder_space,
             drives::eject_check,

@@ -14,6 +14,10 @@
 //!   It waits with its [`Summary`] until its volumes answer again, then Resume carries on from
 //!   there (the engine's [`retry`](super::retry)) and Cancel ends it. A full disk has nothing to
 //!   wait for, and Resume can be tried at once.
+//! - **Conflicts** (#51). A job whose name is taken waits for the user's answer
+//!   ([`TransferState::Conflict`], [`Queue::resolve`]) on its thread, but leaves its lane: the
+//!   next job on that disk starts, so one question doesn't hold up the queue. Once answered, it
+//!   carries on as soon as its lane is free again, before the jobs queued after it.
 //! - **Progress.** The engine reports every chunk; the UI hears at most [`PROGRESS_EVERY`], one
 //!   event for all running jobs.
 //! - **The journal.** Every job is written down as it is queued, as each turn starts and as each
@@ -29,6 +33,7 @@ mod view;
 mod tests;
 
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
@@ -36,15 +41,18 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use specta::Type;
 pub use view::{
-    TransferEnded, TransferFailure, TransferJob, TransferList, TransferProgress, TransferState,
+    ConflictItem, TransferConflict, TransferEnded, TransferFailure, TransferJob, TransferList,
+    TransferProgress, TransferState,
 };
 
+use super::conflict::Side;
 use super::journal::{Counts, Journal, Unfinished, remove_part};
-use super::{Control, Event, Failure, Job, Phase, Resume, Status, Summary};
+use super::{Answer, Bin, Conflict, Control, Event, Failure, Job, Phase, Resume, Status, Summary};
 use crate::delete::Tally;
 use crate::drives::quiet_errors;
 use crate::error::{ErrorCode, JerryError, display_path};
 use crate::job::run_job;
+use crate::listing::filetime_to_unix_ms;
 use crate::volume::{self, Lane, same_root};
 
 /// How often the UI hears about progress at most: 10 times a second (CLAUDE.md rule 3).
@@ -75,6 +83,32 @@ pub enum Notice {
     Progress(Vec<TransferProgress>),
     /// A job ended.
     Ended(Box<TransferEnded>),
+}
+
+/// What the queue needs from Windows' Shell, which core doesn't call (CLAUDE.md): `jerry_win`
+/// has it, and the app hands it over. The Recycle Bin a replaced file goes to, and icons.
+pub trait Shell: Bin + 'static {
+    /// The key of the type icon (`icon://type-<key>`) of an item named `name` with
+    /// `attributes`, for the conflict window.
+    fn icon(&self, name: &OsStr, attributes: u32) -> u32;
+}
+
+/// No Shell, for tests: no Recycle Bin takes anything, and every icon is a plain file's.
+#[cfg(test)]
+pub(crate) struct NoShell;
+
+#[cfg(test)]
+impl Bin for NoShell {
+    fn recycle(&self, path: &Path) -> Result<(), JerryError> {
+        Err(JerryError::new(ErrorCode::NoRecycleBin).at(path))
+    }
+}
+
+#[cfg(test)]
+impl Shell for NoShell {
+    fn icon(&self, _: &OsStr, _: u32) -> u32 {
+        2
+    }
 }
 
 /// What does the work: [`System`], or a fake in tests.
@@ -111,7 +145,9 @@ trait Engine: Send + Sync + 'static {
 }
 
 /// The real thing.
-struct System;
+struct System {
+    shell: Arc<dyn Shell>,
+}
 
 impl Engine for System {
     fn run(
@@ -120,7 +156,7 @@ impl Engine for System {
         control: &Control,
         observer: &mut dyn FnMut(Event<'_>),
     ) -> Result<Summary, JerryError> {
-        super::run(job, control, observer)
+        super::run(job, control, &*self.shell, observer)
     }
 
     fn retry(
@@ -129,7 +165,7 @@ impl Engine for System {
         control: &Control,
         observer: &mut dyn FnMut(Event<'_>),
     ) -> Result<Summary, JerryError> {
-        super::retry(summary, control, observer)
+        super::retry(summary, control, &*self.shell, observer)
     }
 
     fn resume(
@@ -139,7 +175,7 @@ impl Engine for System {
         control: &Control,
         observer: &mut dyn FnMut(Event<'_>),
     ) -> Result<Summary, JerryError> {
-        super::resume(job, resume, control, observer)
+        super::resume(job, resume, control, &*self.shell, observer)
     }
 
     fn lane(&self, destination: &Path) -> Lane {
@@ -162,6 +198,7 @@ pub struct Queue(Arc<Shared>);
 struct Shared {
     engine: Box<dyn Engine>,
     journal: Arc<dyn Journal>,
+    shell: Arc<dyn Shell>,
     notify: Box<dyn Fn(Notice) + Send + Sync>,
     timing: Timing,
     state: Mutex<State>,
@@ -209,6 +246,10 @@ enum Stage {
     Queued,
     /// On its thread, paused or not.
     Active,
+    /// On its thread, which waits for the user to answer a conflict. It holds no lane.
+    Asking(Box<TransferConflict>),
+    /// Answered: its thread carries on with this once its lane is free.
+    Answered(Answer),
     Waiting {
         error: JerryError,
         ready: bool,
@@ -247,6 +288,8 @@ struct Meter {
     failed: u32,
     /// What the job's earlier turns finished.
     finished: Tally,
+    /// Files its turns skipped because their name was taken.
+    skipped: u64,
 }
 
 impl Meter {
@@ -261,6 +304,7 @@ impl Meter {
             speed: 0,
             failed: 0,
             finished: Tally::default(),
+            skipped: 0,
         }
     }
 
@@ -288,6 +332,7 @@ impl Meter {
                 folders: 0,
                 bytes: counts.bytes_done,
             },
+            skipped: 0,
         }
     }
 
@@ -330,6 +375,8 @@ impl Meter {
             Event::Failed(_) => self.failed += 1,
             // The queue writes it down; the file shows with the progress that follows.
             Event::Writing(_) => {}
+            // The queue asks the user.
+            Event::Conflict(_) => self.speed = 0,
         }
     }
 
@@ -337,6 +384,7 @@ impl Meter {
         self.finished.files += summary.files;
         self.finished.folders += summary.folders;
         self.finished.bytes += summary.bytes;
+        self.skipped += summary.skipped;
         self.failed = summary.failed.len() as u32;
         self.speed = 0;
     }
@@ -349,8 +397,13 @@ impl Entry {
 
     fn state(&self) -> TransferState {
         match &self.stage {
-            Stage::Queued | Stage::Active if self.paused => TransferState::Paused,
-            Stage::Queued => TransferState::Queued,
+            Stage::Asking(conflict) => TransferState::Conflict {
+                conflict: (**conflict).clone(),
+            },
+            Stage::Queued | Stage::Active | Stage::Answered(_) if self.paused => {
+                TransferState::Paused
+            }
+            Stage::Queued | Stage::Answered(_) => TransferState::Queued,
             Stage::Active => TransferState::Running,
             Stage::Waiting { error, ready } => TransferState::Waiting {
                 error: error.clone(),
@@ -401,6 +454,7 @@ impl Entry {
             files: finished.files,
             folders: finished.folders,
             bytes: finished.bytes,
+            skipped: self.meter.skipped,
             failed: failed
                 .iter()
                 .map(|failure| TransferFailure {
@@ -436,6 +490,21 @@ impl Entry {
             (Action::Cancel, Stage::Active) => {
                 self.control.cancel();
                 self.paused = false;
+            }
+            // Its thread waits for the answer: a pause holds it once it goes on.
+            (Action::Pause, Stage::Asking(_) | Stage::Answered(_)) => {
+                self.control.pause();
+                self.paused = true;
+            }
+            (Action::Resume, Stage::Asking(_) | Stage::Answered(_)) => {
+                self.control.resume();
+                self.paused = false;
+            }
+            // Its thread stops waiting and ends the job, tidying up on its disk as it goes.
+            (Action::Cancel, Stage::Asking(_) | Stage::Answered(_)) => {
+                self.control.cancel();
+                self.paused = false;
+                self.stage = Stage::Active;
             }
             _ => {}
         }
@@ -506,22 +575,26 @@ struct Turn {
 }
 
 impl Queue {
-    /// A queue with nothing in it that writes its jobs down in `journal`. `notify` hears
-    /// everything that happens, in order, under the queue's lock: it must be quick and must not
-    /// call back into the queue.
+    /// A queue with nothing in it that writes its jobs down in `journal` and asks `shell` for the
+    /// Recycle Bin and icons. `notify` hears everything that happens, in order, under the
+    /// queue's lock: it must be quick and must not call back into the queue.
     pub fn start(
         parallel: bool,
         journal: Arc<dyn Journal>,
+        shell: Arc<dyn Shell>,
         notify: impl Fn(Notice) + Send + Sync + 'static,
     ) -> Self {
         Self::with(
-            System,
+            System {
+                shell: shell.clone(),
+            },
             parallel,
             Timing {
                 progress: PROGRESS_EVERY,
                 watch: WATCH_EVERY,
             },
             journal,
+            shell,
             notify,
         )
     }
@@ -531,11 +604,13 @@ impl Queue {
         parallel: bool,
         timing: Timing,
         journal: Arc<dyn Journal>,
+        shell: Arc<dyn Shell>,
         notify: impl Fn(Notice) + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(Shared {
             engine: Box::new(engine),
             journal,
+            shell,
             notify: Box::new(notify),
             timing,
             state: Mutex::new(State {
@@ -646,6 +721,27 @@ impl Queue {
                 self.0.journal.ended(record);
             }
         }
+        Ok(())
+    }
+
+    /// Answers the conflict job `id` waits on ([`TransferState::Conflict`]). It carries on once
+    /// its lane is free: at once, unless another job started on its disk meanwhile.
+    /// [`ErrorCode::NotFound`] if the job doesn't wait for an answer (answered already, in
+    /// another window); `Internal` for a choice the conflict doesn't offer.
+    pub fn resolve(&self, id: u32, answer: Answer) -> Result<(), JerryError> {
+        let mut state = self.0.lock();
+        let entry = state
+            .find(id)
+            .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
+        let Stage::Asking(conflict) = &entry.stage else {
+            return Err(JerryError::new(ErrorCode::NotFound));
+        };
+        if !conflict.choices.contains(&answer.choice) {
+            tracing::error!(?answer, "an answer the conflict doesn't offer");
+            return Err(JerryError::internal());
+        }
+        entry.stage = Stage::Answered(answer);
+        self.0.changed(&mut state);
         Ok(())
     }
 
@@ -785,7 +881,7 @@ impl Shared {
         (self.notify)(Notice::Jobs(state.list()));
     }
 
-    /// Starts every job whose turn it is.
+    /// Starts every job whose turn it is, and lets an answered one go on.
     fn dispatch(self: &Arc<Self>, state: &mut State) {
         let mut busy: HashSet<Lane> = state
             .jobs
@@ -798,9 +894,14 @@ impl Shared {
             if !parallel && !busy.is_empty() {
                 break;
             }
-            if entry.stage == Stage::Queued && !entry.paused && !busy.contains(&entry.lane) {
+            let waits = matches!(entry.stage, Stage::Queued | Stage::Answered(_));
+            if waits && !entry.paused && !busy.contains(&entry.lane) {
                 busy.insert(entry.lane.clone());
-                self.start(entry);
+                match std::mem::replace(&mut entry.stage, Stage::Active) {
+                    // Its thread is waiting for this.
+                    Stage::Answered(answer) => entry.control.answer(answer),
+                    _ => self.start(entry),
+                }
             }
         }
     }
@@ -883,8 +984,21 @@ impl Shared {
 
     /// One report from a running job. Every one counts; the UI hears of them at most every
     /// [`PROGRESS_EVERY`], and the job's ending says how it came out. A file it begins is written
-    /// down before the job goes on.
-    fn observe(&self, id: u32, event: Event<'_>) {
+    /// down before the job goes on. A conflict is the UI's to answer, and the job leaves its
+    /// lane meanwhile.
+    fn observe(self: &Arc<Self>, id: u32, event: Event<'_>) {
+        if let Event::Conflict(conflict) = event {
+            let view = self.conflict_view(conflict);
+            let mut state = self.lock();
+            if let Some(entry) = state.find(id)
+                && !entry.control.is_cancelled()
+            {
+                entry.meter.take(event);
+                entry.stage = Stage::Asking(Box::new(view));
+                self.changed(&mut state);
+            }
+            return;
+        }
         if let Event::Writing(writing) = event {
             let noted = self.lock().find(id).and_then(|entry| {
                 if let Some(part) = writing.part {
@@ -914,6 +1028,26 @@ impl Shared {
                 .map(Entry::progress)
                 .collect();
             (self.notify)(Notice::Progress(running));
+        }
+    }
+
+    /// What the conflict window shows of `conflict`: display text, and icons by type.
+    fn conflict_view(&self, conflict: &Conflict<'_>) -> TransferConflict {
+        let item = |path: &Path, side: &Side| ConflictItem {
+            folder: side.folder,
+            size: side.size,
+            modified: (side.modified != 0).then(|| filetime_to_unix_ms(side.modified)),
+            icon: self
+                .shell
+                .icon(path.file_name().unwrap_or_default(), side.attributes),
+        };
+        TransferConflict {
+            source: display_path(conflict.source),
+            target: display_path(conflict.target),
+            incoming: item(conflict.source, &conflict.incoming),
+            existing: item(conflict.target, &conflict.existing),
+            choices: conflict.choices.to_vec(),
+            no_recycle_bin: conflict.no_recycle_bin,
         }
     }
 

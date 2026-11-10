@@ -1,11 +1,15 @@
 //! The transfer queue in the app (#49): commands, and `transfer:changed`, `transfer:progress` and
 //! `transfer:ended` to every window. The queue itself is `jerry_core::transfer::queue`, and its
 //! journal in `jerry.db` is `jerry_core::transfer::journal` (#50): as Jerry starts, the jobs the
-//! Jerry before it didn't finish come back as `unfinished`, for Resume or Discard.
+//! Jerry before it didn't finish come back as `unfinished`, for Resume or Discard. A job whose
+//! name is taken waits as `conflict` for `conflict_resolve` (#51); what Replace replaces goes to
+//! the Recycle Bin through `jerry_win::recycle`, on the delete commands' Shell pool.
 //!
 //! The UI names what to transfer by listing entries and the destination by a listing, an entry
 //! or a folder token, so an operation's paths never come from JS text (CLAUDE.md rule 4).
 
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,9 +17,9 @@ use jerry_core::delete::takes_system_folder;
 use jerry_core::storage::Storage;
 use jerry_core::transfer::journal::{StorageJournal, Store};
 use jerry_core::transfer::queue::{
-    Action, Notice, Queue, TransferEnded, TransferList, TransferProgress,
+    Action, Notice, Queue, Shell, TransferEnded, TransferList, TransferProgress,
 };
-use jerry_core::transfer::{Job, Kind};
+use jerry_core::transfer::{Answer, Bin, Job, Kind};
 use jerry_core::{ErrorCode, JerryError};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -66,7 +70,8 @@ impl Transfers {
     pub fn start(app: &AppHandle, db: &Db) -> Self {
         let handle = app.clone();
         let journal = Arc::new(StorageJournal::new(db.clone(), now_ms()));
-        let queue = Queue::start(true, journal.clone(), move |notice| {
+        let shell = Arc::new(WinShell(app.state::<Deleting>().inner().clone()));
+        let queue = Queue::start(true, journal.clone(), shell, move |notice| {
             announce(&handle, notice);
         });
         let following = queue.clone();
@@ -91,6 +96,23 @@ impl Transfers {
     pub fn on_drive(&self, letter: u8) -> u32 {
         self.0
             .on_volume(Path::new(&format!(r"\\?\{}:\", char::from(letter))))
+    }
+}
+
+/// What the queue needs of Windows' Shell: the Recycle Bin a replaced file goes to, on the
+/// delete commands' Shell pool, and type icons for the conflict window.
+struct WinShell(Deleting);
+
+impl Bin for WinShell {
+    fn recycle(&self, path: &Path) -> Result<(), JerryError> {
+        self.0.recycle_replaced(path)
+    }
+}
+
+impl Shell for WinShell {
+    fn icon(&self, name: &OsStr, attributes: u32) -> u32 {
+        let name: Vec<u16> = name.encode_wide().collect();
+        jerry_win::icons::keys::type_key(&name, attributes)
     }
 }
 
@@ -177,6 +199,20 @@ pub async fn transfer_retry_failed(
     job: u32,
 ) -> Result<(), JerryError> {
     transfers.0.retry_failed(job)
+}
+
+/// Answers the conflict job `job` waits on (its state is `conflict`): one of the conflict's
+/// `choices`, and with `all`, the same for every later conflict of its kind in the job. The job
+/// goes on once its disk is free. `NotFound` if it doesn't wait for an answer any more (answered
+/// in another window, or cancelled).
+#[tauri::command]
+#[specta::specta]
+pub async fn conflict_resolve(
+    transfers: State<'_, Transfers>,
+    job: u32,
+    answer: Answer,
+) -> Result<(), JerryError> {
+    transfers.0.resolve(job, answer)
 }
 
 /// The queue as it is now; `transfer:changed` brings every later list. Keep the one with the
@@ -325,6 +361,120 @@ mod tests {
             gone.err().map(|error| error.code),
             Some(ErrorCode::NotFound)
         );
+    }
+
+    /// The original path the `$I` record next to `in_bin` (`$R…`) keeps.
+    fn recorded_original(in_bin: &Path) -> String {
+        let name = in_bin
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("$R");
+        let bytes = std::fs::read(in_bin.with_file_name(name.replacen("$R", "$I", 1))).expect("$I");
+        // Version 2: a header of 24 bytes, the path length in UTF-16 units, then the path.
+        let units: Vec<u16> = bytes[28..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair))
+            .take_while(|&unit| unit != 0)
+            .collect();
+        String::from_utf16_lossy(&units)
+    }
+
+    #[test]
+    fn replace_sends_the_file_there_to_windows_recycle_bin() {
+        use jerry_core::transfer::Choice;
+        use jerry_core::transfer::queue::TransferState;
+
+        let dir = tempfile::Builder::new()
+            .prefix("jerry-replace-")
+            .tempdir()
+            .expect("temp folder");
+        // Long names, as the Recycle Bin records them (`%TEMP%` can be `C:\Users\RUNNER~1\…`).
+        let root = std::fs::canonicalize(dir.path()).expect("canonical path");
+        let (from, to) = (root.join("from"), root.join("to"));
+        std::fs::create_dir(&from).expect("mkdir");
+        std::fs::create_dir(&to).expect("mkdir");
+        let name = "ნახაზი.dwg";
+        std::fs::write(from.join(name), b"new drawing").expect("write");
+        std::fs::write(to.join(name), b"old drawing").expect("write");
+
+        let deleting = Deleting::default();
+        let shell = Arc::new(WinShell(deleting.clone()));
+        let queue = Queue::start(true, Arc::new(()), shell, |_| {});
+        let id = queue.enqueue(Job {
+            kind: Kind::Copy,
+            sources: vec![from.join(name)],
+            destination: to.clone(),
+        });
+        let state = || queue.list().jobs[0].state.clone();
+        let until = |what: &str, done: &dyn Fn(&TransferState) -> bool| {
+            let started = Instant::now();
+            while !done(&state()) {
+                assert!(started.elapsed() < Duration::from_secs(30), "{what}");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        until("asks", &|state| {
+            matches!(state, TransferState::Conflict { .. })
+        });
+        let TransferState::Conflict { conflict } = state() else {
+            unreachable!()
+        };
+        assert_eq!(
+            conflict.choices,
+            [
+                Choice::Replace,
+                Choice::Skip,
+                Choice::KeepBoth,
+                Choice::ReplaceIfNewer
+            ]
+        );
+        assert!(
+            conflict.existing.icon >= jerry_win::icons::keys::FIRST_TYPE,
+            "the type's icon"
+        );
+        assert_eq!(conflict.existing.size, 11);
+
+        queue
+            .resolve(
+                id,
+                Answer {
+                    choice: Choice::Replace,
+                    all: false,
+                },
+            )
+            .expect("answered");
+        until("done", &|state| *state == TransferState::Done);
+        assert_eq!(std::fs::read(to.join(name)).expect("read"), b"new drawing");
+
+        let replaced = deleting.replaced();
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(replaced[0].original, to.join(name));
+        let in_bin = &replaced[0].in_bin;
+        assert!(
+            in_bin.to_string_lossy().contains("$Recycle.Bin"),
+            "{in_bin:?}"
+        );
+        assert_eq!(
+            std::fs::read(in_bin).expect("in the Recycle Bin"),
+            b"old drawing"
+        );
+        assert_eq!(
+            recorded_original(in_bin),
+            jerry_core::error::display_path(&to.join(name)),
+            "Restore puts it back there"
+        );
+        // Our own item leaves the Recycle Bin again.
+        let record = in_bin.with_file_name(
+            in_bin
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("$R")
+                .replacen("$R", "$I", 1),
+        );
+        std::fs::remove_file(record).expect("$I goes");
+        std::fs::remove_file(in_bin).expect("$R goes");
     }
 
     #[test]

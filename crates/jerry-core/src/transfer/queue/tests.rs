@@ -12,9 +12,10 @@ use windows::Win32::Storage::FileSystem::{
 use windows::core::PCWSTR;
 
 use super::*;
+use crate::transfer::conflict::{FILE_CHOICES, Policy};
 use crate::transfer::control::Flow;
 use crate::transfer::journal::Writing;
-use crate::transfer::{Kind, Options, Progress};
+use crate::transfer::{Choice, Kind, Options, Progress};
 
 /// What a fake job does.
 #[derive(Clone)]
@@ -36,6 +37,8 @@ enum Script {
     Panic,
     /// Reports progress as fast as it can for this long.
     Chatter(Duration),
+    /// Meets a conflict, waits for the answer, then ends well.
+    Ask,
 }
 
 #[derive(Default)]
@@ -65,10 +68,12 @@ fn summary(status: Status, files: u64, failed: Vec<Failure>) -> Summary {
         files,
         folders: 0,
         bytes: files * 10,
+        skipped: 0,
         failed,
         kind: Kind::Copy,
         destination: PathBuf::from(r"\\?\C:\dest"),
         options: Options::default(),
+        policy: Policy::default(),
         pending: Vec::new(),
         leftovers: Vec::new(),
         resuming: None,
@@ -166,6 +171,32 @@ impl Fake {
                     std::thread::sleep(Duration::from_micros(200));
                 }
                 self.finish_it(observer)
+            }
+            Script::Ask => {
+                Self::report(observer, 1);
+                let side = Side {
+                    folder: false,
+                    attributes: 0x20,
+                    size: 10,
+                    modified: 0,
+                };
+                let conflict = Conflict {
+                    source: Path::new(r"\\?\C:\from\a.txt"),
+                    target: Path::new(r"\\?\C:\to\a.txt"),
+                    incoming: side,
+                    existing: side,
+                    choices: FILE_CHOICES,
+                    no_recycle_bin: false,
+                };
+                control.forget_answer();
+                observer(Event::Conflict(&conflict));
+                match control.wait_answer() {
+                    Some(answer) => {
+                        self.note("answered", &format!("{name} {:?}", answer.choice));
+                        self.finish_it(observer)
+                    }
+                    None => Ok(summary(Status::Cancelled, 0, Vec::new())),
+                }
             }
         };
         self.note("end", name);
@@ -329,6 +360,7 @@ fn scene(parallel: bool) -> Scene {
         parallel,
         FAST,
         journal.clone(),
+        Arc::new(NoShell),
         move |notice| {
             lock(&sink).push(notice);
         },
@@ -1035,7 +1067,10 @@ fn a_drive_that_goes_away_between_files_waits_and_goes_on_when_it_is_back() {
         .collect();
     let mut letter = Letter::over(&disk);
 
-    let queue = Queue::with(System, true, FAST, Arc::new(()), |_| {});
+    let system = System {
+        shell: Arc::new(NoShell),
+    };
+    let queue = Queue::with(system, true, FAST, Arc::new(()), Arc::new(NoShell), |_| {});
     let id = queue.enqueue(Job {
         kind: Kind::Copy,
         sources,
@@ -1129,7 +1164,9 @@ fn a_real_job_goes_through_the_queue() {
 
     let notices = Arc::new(Mutex::new(Vec::new()));
     let sink = notices.clone();
-    let queue = Queue::start(true, Arc::new(()), move |notice| lock(&sink).push(notice));
+    let queue = Queue::start(true, Arc::new(()), Arc::new(NoShell), move |notice| {
+        lock(&sink).push(notice);
+    });
     let id = queue.enqueue(Job {
         kind: Kind::Move,
         sources: vec![file.clone()],
@@ -1331,4 +1368,153 @@ fn the_part_a_jerry_left_goes_as_the_job_resumes() {
         scene.journal.lines(),
         ["part gone 7", "started 7 3/10", "ended 7"]
     );
+}
+
+fn asks(state: &TransferState) -> bool {
+    matches!(state, TransferState::Conflict { .. })
+}
+
+fn answer(choice: Choice) -> Answer {
+    Answer { choice, all: false }
+}
+
+#[test]
+fn a_job_that_asks_leaves_its_disk_to_the_next_one() {
+    for parallel in [true, false] {
+        let scene = scene(parallel);
+        scene.script("a", Script::Ask);
+        let a = scene.queue.enqueue(job(1, "a"));
+        let b = scene.queue.enqueue(job(1, "b"));
+        scene.wait_for("a to ask", |scene| asks(&scene.state(a)));
+        scene.wait_state(b, &TransferState::Done);
+
+        let TransferState::Conflict { conflict } = scene.state(a) else {
+            panic!("a asks: {:?}", scene.state(a));
+        };
+        assert_eq!(conflict.choices, FILE_CHOICES);
+        assert_eq!(conflict.target, r"C:\to\a.txt", "display text");
+        assert_eq!(conflict.existing.size, 10);
+        assert_eq!(conflict.existing.icon, 2, "the Shell's icon key");
+        assert_eq!(
+            conflict.existing.modified, None,
+            "a date that can't be read"
+        );
+        assert!(!conflict.no_recycle_bin);
+
+        scene
+            .queue
+            .resolve(a, answer(Choice::Skip))
+            .expect("answered");
+        scene.wait_state(a, &TransferState::Done);
+        assert!(scene.log().contains(&"answered a Skip".to_owned()));
+    }
+}
+
+#[test]
+fn an_answered_job_waits_for_its_disk_and_then_goes_first() {
+    let scene = scene(true);
+    scene.script("a", Script::Ask);
+    let a = scene.queue.enqueue(job(1, "a"));
+    let release = scene.hold("b");
+    let b = scene.queue.enqueue(job(1, "b"));
+    let c = scene.queue.enqueue(job(1, "c"));
+    scene.wait_for("a to ask", |scene| asks(&scene.state(a)));
+    scene.wait_state(b, &TransferState::Running);
+
+    scene
+        .queue
+        .resolve(a, answer(Choice::KeepBoth))
+        .expect("answered");
+    assert_eq!(scene.state(a), TransferState::Queued, "b holds the disk");
+    assert_eq!(scene.state(c), TransferState::Queued);
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(!scene.log().iter().any(|line| line.starts_with("answered")));
+
+    release.store(true, Ordering::SeqCst);
+    scene.wait_state(a, &TransferState::Done);
+    scene.wait_state(c, &TransferState::Done);
+    let log = scene.log();
+    let at = |line: &str| log.iter().position(|each| each == line).expect(line);
+    assert!(at("end b") < at("answered a KeepBoth"));
+    assert!(
+        at("answered a KeepBoth") < at("run c"),
+        "a goes before c: {log:?}"
+    );
+}
+
+#[test]
+fn only_a_job_that_asks_takes_an_answer_and_only_one_it_offers() {
+    let scene = scene(true);
+    scene.script("a", Script::Ask);
+    let a = scene.queue.enqueue(job(1, "a"));
+    let b = scene.queue.enqueue(job(2, "b"));
+    scene.wait_for("a to ask", |scene| asks(&scene.state(a)));
+    scene.wait_state(b, &TransferState::Done);
+    let code = |result: Result<(), JerryError>| result.map_err(|error| error.code);
+
+    assert_eq!(
+        code(scene.queue.resolve(b, answer(Choice::Skip))),
+        Err(ErrorCode::NotFound)
+    );
+    assert_eq!(
+        code(scene.queue.resolve(99, answer(Choice::Skip))),
+        Err(ErrorCode::NotFound)
+    );
+    assert_eq!(
+        code(scene.queue.resolve(a, answer(Choice::Merge))),
+        Err(ErrorCode::Internal),
+        "a file can't merge"
+    );
+    assert!(asks(&scene.state(a)), "still asking");
+    assert_eq!(
+        code(scene.queue.resolve(a, answer(Choice::Replace))),
+        Ok(())
+    );
+    assert_eq!(
+        code(scene.queue.resolve(a, answer(Choice::Skip))),
+        Err(ErrorCode::NotFound),
+        "answered already, in another window"
+    );
+    scene.wait_state(a, &TransferState::Done);
+}
+
+#[test]
+fn cancelling_a_job_that_asks_ends_it() {
+    let scene = scene(true);
+    scene.script("a", Script::Ask);
+    let a = scene.queue.enqueue(job(1, "a"));
+    scene.wait_for("a to ask", |scene| asks(&scene.state(a)));
+    scene
+        .queue
+        .control(Action::Cancel, Some(a))
+        .expect("cancels");
+    scene.wait_state(a, &TransferState::Cancelled);
+    assert_eq!(scene.ended(a).state, TransferState::Cancelled);
+    assert!(!scene.log().iter().any(|line| line.starts_with("answered")));
+    assert_eq!(scene.log(), ["run a", "end a"]);
+}
+
+#[test]
+fn a_job_paused_while_it_asks_goes_on_at_resume() {
+    let scene = scene(true);
+    scene.script("a", Script::Ask);
+    let a = scene.queue.enqueue(job(1, "a"));
+    scene.wait_for("a to ask", |scene| asks(&scene.state(a)));
+    scene.queue.control(Action::Pause, Some(a)).expect("pauses");
+    assert!(asks(&scene.state(a)), "the question stays");
+
+    scene
+        .queue
+        .resolve(a, answer(Choice::Skip))
+        .expect("answered");
+    assert_eq!(scene.state(a), TransferState::Paused);
+    let b = scene.queue.enqueue(job(1, "b"));
+    scene.wait_state(b, &TransferState::Done);
+    assert_eq!(scene.state(a), TransferState::Paused, "it holds no disk");
+
+    scene
+        .queue
+        .control(Action::Resume, Some(a))
+        .expect("resumes");
+    scene.wait_state(a, &TransferState::Done);
 }

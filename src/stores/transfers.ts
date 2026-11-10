@@ -1,5 +1,13 @@
 import { create } from "zustand";
-import { commands, events, subscribe, type TransferJob, type TransferList } from "../ipc";
+import {
+  type ConflictChoice,
+  commands,
+  events,
+  subscribe,
+  type TransferConflict,
+  type TransferJob,
+  type TransferList,
+} from "../ipc";
 
 interface TransfersState {
   /** The queue as the core last listed it: the list with the highest generation, its running jobs' progress kept up. */
@@ -63,4 +71,28 @@ export function discardTransfers(jobs: readonly number[]): void {
   for (const job of jobs) {
     void commands.transferControl("cancel", job);
   }
+}
+
+/** A job waiting for an answer to a conflict (#51), and the conflict. */
+export interface Asking {
+  job: TransferJob;
+  conflict: TransferConflict;
+}
+
+/** The first job in queue order that waits for an answer to a conflict, if one does. */
+export function firstConflict(list: TransferList): Asking | undefined {
+  for (const job of list.jobs) {
+    if (job.state.kind === "conflict") {
+      return { job, conflict: job.state.conflict };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Answers the conflict job `job` waits on; with `all`, every later conflict of its kind in the
+ * job gets the same answer. If another window answered first, nothing happens.
+ */
+export function resolveConflict(job: number, choice: ConflictChoice, all: boolean): void {
+  void commands.conflictResolve(job, { choice, all });
 }

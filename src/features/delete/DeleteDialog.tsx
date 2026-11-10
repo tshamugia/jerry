@@ -1,7 +1,8 @@
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { commands, stream, type Tally } from "../../ipc";
 import { errorText, strings } from "../../strings";
 import { Dialog } from "../../ui/Dialog";
+import { DialogButton, DialogButtons } from "../../ui/DialogButton";
 import {
   confirmDelete,
   type DeleteDialogState,
@@ -81,7 +82,7 @@ function Confirm({ mode, request }: { mode: DeleteMode; request: DeleteRequest }
           </div>
         )}
       </div>
-      <Buttons>
+      <DialogButtons>
         <DialogButton
           primary
           disabled={request.system && !agreed}
@@ -92,7 +93,7 @@ function Confirm({ mode, request }: { mode: DeleteMode; request: DeleteRequest }
         <DialogButton onClick={dismissDelete}>
           {mode === "noRecycleBin" ? t.noRecycleBin.keep(ids.length) : t.cancel}
         </DialogButton>
-      </Buttons>
+      </DialogButtons>
     </div>
   );
 }
@@ -141,31 +142,12 @@ function Failed({ failures }: { failures: Failure[] }) {
           <p className="text-fg-2 text-small">{t.failed.more(failures.length - LISTED)}</p>
         )}
       </div>
-      <Buttons>
+      <DialogButtons>
         <DialogButton primary onClick={() => void retryDelete()}>
           {t.failed.retry}
         </DialogButton>
         <DialogButton onClick={dismissDelete}>{t.failed.dismiss}</DialogButton>
-      </Buttons>
+      </DialogButtons>
     </div>
-  );
-}
-
-function Buttons({ children }: { children: ReactNode }) {
-  return <div className="flex justify-end gap-2 border-stroke border-t px-4 py-3">{children}</div>;
-}
-
-/** A dialog's text button, Windows style; the first one answers the question. */
-function DialogButton({
-  primary = false,
-  className = "",
-  ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { primary?: boolean }) {
-  return (
-    <button
-      type="button"
-      className={`h-toolbar-btn min-w-20 rounded-ctrl border border-ctrl-border bg-ctrl px-3 enabled:hover:bg-hover disabled:text-disabled ${primary ? "font-semibold" : ""} ${className}`}
-      {...rest}
-    />
   );
 }

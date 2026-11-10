@@ -212,6 +212,13 @@ export const commands = {
 	 */
 	transferList: () => typedError<TransferList, JerryError>(__TAURI_INVOKE("transfer_list")),
 	/**
+	 *  Answers the conflict job `job` waits on (its state is `conflict`): one of the conflict's
+	 *  `choices`, and with `all`, the same for every later conflict of its kind in the job. The job
+	 *  goes on once its disk is free. `NotFound` if it doesn't wait for an answer any more (answered
+	 *  in another window, or cancelled).
+	 */
+	conflictResolve: (job: number, answer: ConflictAnswer) => typedError<null, JerryError>(__TAURI_INVOKE("conflict_resolve", { job, answer })),
+	/**
 	 *  The drives as last read; `drives:changed` brings every later list. Keep the one with the
 	 *  highest `generation`.
 	 */
@@ -452,6 +459,38 @@ export type ColumnLayout = {
 	hidden: SortColumn[],
 	/**  Widths the user dragged, in CSS px. */
 	widths: Partial<{ [key in SortColumn]: number }>,
+};
+
+/**  The user's answer to a conflict. */
+export type ConflictAnswer = {
+	choice: ConflictChoice,
+	/**  "Apply to all": the same answer for every later conflict of this kind in the job. */
+	all: boolean,
+};
+
+/**  What the user can do about a name that is taken. */
+export type ConflictChoice = 
+/**  The copy takes the name; what was there goes to the Recycle Bin. */
+"replace" | 
+/**  This item isn't copied or moved; what is there stays. */
+"skip" | 
+/**  Both stay: the copy gets a free name, `name (2).ext`. */
+"keepBoth" | 
+/**  Replace if the coming file was modified later than the one there, else Skip. */
+"replaceIfNewer" | 
+/**  A folder's content goes into the folder that is there. */
+"merge";
+
+/**  One side of a conflict. */
+export type ConflictItem = {
+	/**  A folder, not a file or a link. */
+	folder: boolean,
+	/**  In bytes; 0 for a folder. */
+	size: number,
+	/**  When it was last modified, in ms since the Unix epoch; null if that can't be read. */
+	modified: number | null,
+	/**  Its type's icon: `icon://type-<icon>`. */
+	icon: number,
 };
 
 /**  What Copy path and Copy name put on the clipboard. */
@@ -1095,6 +1134,23 @@ export type Theme =
 /**  What the UI can ask of a job. */
 export type TransferAction = "pause" | "resume" | "cancel";
 
+/**  A name a job writes is taken (#51): what the conflict window shows. */
+export type TransferConflict = {
+	/**  What comes, as display text. */
+	source: string,
+	/**  Where it goes, where something is already, as display text. */
+	target: string,
+	incoming: ConflictItem,
+	existing: ConflictItem,
+	/**  What can be chosen, in the order to show. */
+	choices: ConflictChoice[],
+	/**
+	 *  Replace was chosen, and the file there can't go to the Recycle Bin: Replace now deletes
+	 *  it for good.
+	 */
+	noRecycleBin: boolean,
+};
+
 /**  The folder a transfer goes into. */
 export type TransferDestination = 
 /**  The folder the open listing `listing` shows. */
@@ -1111,6 +1167,8 @@ export type TransferEnded = {
 	files: number,
 	folders: number,
 	bytes: number,
+	/**  Files and links left where they were because their name was taken (Skip). */
+	skipped: number,
 	failed: TransferFailure[],
 };
 
@@ -1180,6 +1238,11 @@ export type TransferState =
 { kind: "queued" } | { kind: "running" } | 
 /**  Paused by the user: where it was running, it still holds its disk and its current file. */
 { kind: "paused" } | 
+/**
+ *  A name it writes is taken: it waits for `conflict_resolve`, or Cancel. Its disk is free
+ *  for other jobs meanwhile.
+ */
+{ kind: "conflict"; conflict: TransferConflict } | 
 /**
  *  Stopped because a volume went away or filled up. `ready`: it is worth trying again (the
  *  volume is back), so Resume does; Cancel ends it either way.

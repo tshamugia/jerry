@@ -9,6 +9,7 @@ import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
 import { ShellDialog } from "../features/navigation/ShellDialog";
 import { RenameDialogs } from "../features/rename/RenameDialogs";
 import { SelectByPattern } from "../features/selection/SelectByPattern";
+import { ConflictDialog } from "../features/transfers/ConflictDialog";
 import { UnfinishedNotice } from "../features/transfers/UnfinishedNotice";
 import { UpdateNotice } from "../features/updates/UpdateNotice";
 import { commands } from "../ipc";
@@ -51,6 +52,7 @@ export function App() {
       <SelectByPattern />
       <OpenManyDialog />
       <DeleteDialog />
+      <ConflictDialog />
       <RenameDialogs />
       <Toasts>
         <UnfinishedNotice />
