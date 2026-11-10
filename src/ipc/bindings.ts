@@ -183,7 +183,8 @@ export const commands = {
 	transferEnqueue: (kind: TransferKind, listing: number, entries: number[], destination: TransferDestination, system: boolean) => typedError<number, JerryError>(__TAURI_INVOKE("transfer_enqueue", { kind, listing, entries, destination, system })),
 	/**
 	 *  Pauses, resumes or cancels job `job`, or every job with null. Resume also carries on a job
-	 *  that waits for its device, once its state says `ready`. `NotFound` for a job that isn't listed.
+	 *  that waits for its device, once its state says `ready`, and one Jerry didn't finish
+	 *  (`unfinished`); Cancel discards that one. `NotFound` for a job that isn't listed.
 	 */
 	transferControl: (action: TransferAction, job: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("transfer_control", { action, job })),
 	/**  Puts the jobs of `order` first, in that order; the others follow as they were. */
@@ -1099,6 +1100,12 @@ export type TransferState =
  *  volume is back), so Resume does; Cancel ends it either way.
  */
 { kind: "waiting"; error: JerryError; ready: boolean } | 
+/**
+ *  Jerry closed before it finished (it crashed, or was ended). `progress` says how far it
+ *  came and `progress.file` what it was writing. Resume carries it on from there; Cancel
+ *  discards it, and what it did stays.
+ */
+{ kind: "unfinished" } | 
 /**  Everything was attempted. `progress.failed` says how many items didn't make it. */
 { kind: "done" } | { kind: "cancelled" } | 
 /**  It couldn't start. */

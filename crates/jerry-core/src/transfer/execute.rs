@@ -8,7 +8,8 @@ use std::time::Instant;
 use windows::Win32::Foundation::{ERROR_DIR_NOT_EMPTY, ERROR_NOT_SAME_DEVICE, WIN32_ERROR};
 
 use super::control::{Control, Flow};
-use super::copy::{Copier, Request, Stamp, patiently, set_attributes, set_times, stamp};
+use super::copy::{Copier, Request, Stamp, Step, patiently, set_attributes, set_times, stamp};
+use super::journal::Writing;
 use super::link::copy_link;
 use super::plan::{Counter, Entry, Plan, check_space};
 use super::speed::Speed;
@@ -59,6 +60,7 @@ pub(super) fn execute(
             options,
             pending: Vec::new(),
             leftovers: Vec::new(),
+            resuming: plan.resuming.clone(),
         },
     };
     for failure in std::mem::take(&mut plan.failed) {
@@ -200,7 +202,7 @@ impl Run<'_, '_> {
     ) -> Option<Status> {
         let source = item.path.clone();
         let goal = target.clone();
-        let mut extra = Plan::new(self.kind);
+        let mut extra = Plan::new(self.kind, plan.resuming.clone());
         let mut counter = Counter::new(self.control, &mut *self.observer);
         if extra.walk(item, target, &mut counter).is_err() {
             return Some(Status::Cancelled);
@@ -213,7 +215,7 @@ impl Run<'_, '_> {
                 copied: false,
             });
         }
-        self.files_total = self.files_total - 1 + extra.tally.files;
+        self.files_total = self.files_total - 1 + extra.tally.files + extra.removals.len() as u64;
         self.bytes_total += extra.tally.bytes;
         plan.absorb(extra);
         None
@@ -346,6 +348,11 @@ impl Run<'_, '_> {
             return Ok(());
         }
         let bytes = if entry.item.link {
+            (self.observer)(Event::Writing(&Writing {
+                source: &entry.item.path,
+                target: &entry.target,
+                part: None,
+            }));
             copy_link(&entry.item, &entry.target).map_err(not_copied)?;
             0
         } else {
@@ -371,7 +378,18 @@ impl Run<'_, '_> {
         };
         let copier = self.copier;
         let mut last = 0_u64;
-        copier(&request, &mut |transferred| {
+        copier(&request, &mut |step| {
+            let transferred = match step {
+                Step::Started(part) => {
+                    (self.observer)(Event::Writing(&Writing {
+                        source: file,
+                        target: &entry.target,
+                        part: Some(part),
+                    }));
+                    return Flow::Go;
+                }
+                Step::Copied(transferred) => transferred,
+            };
             self.streamed += transferred.saturating_sub(last);
             last = transferred;
             // Windows' totals count alternate data streams too; the plan's sizes don't.
@@ -429,8 +447,13 @@ impl Run<'_, '_> {
         status: &Status,
     ) {
         // Nothing of a cancelled job's half-made folders should stay, unless it holds finished
-        // files. Removing a folder fails if anything is in it.
-        if *status == Status::Cancelled && !finished && std::fs::remove_dir(&entry.target).is_ok() {
+        // files. Removing a folder fails if anything is in it. One that was there before this
+        // turn may not be the job's own.
+        if *status == Status::Cancelled
+            && !finished
+            && !entry.merge
+            && std::fs::remove_dir(&entry.target).is_ok()
+        {
             return;
         }
         if let Some(source) = stamps.get(&index) {
@@ -468,13 +491,16 @@ impl Run<'_, '_> {
     }
 }
 
-/// Creates the folder of `entry` and returns what its source looks like before anything moves out
-/// of it.
+/// Creates the folder of `entry`, unless a resumed job finds it there, and returns what its
+/// source looks like before anything moves out of it.
 fn make_folder(entry: &Entry) -> Result<Stamp, JerryError> {
     if let Some(error) = &entry.unreadable {
         return Err(error.clone());
     }
     let source = stamp(&entry.item.path)?;
+    if entry.merge {
+        return Ok(source);
+    }
     std::fs::create_dir(&entry.target).map_err(|error| {
         let code = if error.kind() == io::ErrorKind::AlreadyExists {
             JerryError::new(ErrorCode::InvalidName)

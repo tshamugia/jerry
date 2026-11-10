@@ -259,7 +259,7 @@ fn reports_phases_in_order_and_reaches_the_total() {
                     progress.bytes_total,
                 ));
             }
-            Event::Counted(_) | Event::Failed(_) => {}
+            Event::Counted(_) | Event::Failed(_) | Event::Writing(_) => {}
         },
     )
     .expect("starts");

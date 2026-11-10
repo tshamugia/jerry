@@ -45,6 +45,7 @@ Overlays:
 
 - **Toast** (bottom right, 336 px, 16 px from the right, 96 px from the bottom, radius 8, `shadow`): green check, "Copied 12 files · **Undo**", destination path, dismiss.
 - **Update notice** (no canvas frame yet): the toast's card, above the toasts, staying until answered. Bold "Jerry X.Y.Z is available", up to four changes in secondary text, `Later` and `Update` as 30 px dialog buttons. While installing, a 4 px accent bar on `track` instead of the buttons.
+- **Unfinished transfers notice** (no canvas frame yet, #50): the update notice's card, above it, staying until answered. Bold "Jerry closed before a transfer finished" (or "… 2 transfers finished"), then per job (up to three, then "and N more") a 12 px line "Copying 3 items to Archive" and a secondary line "1 of 3 files · 8 MB of 24 MB" (`tabular-nums`), and `Discard` and `Resume` as 30 px dialog buttons, Resume semibold.
 - **Command palette** (`Ctrl+Shift+P`): scrim over the window, dialog 640 px wide at top 96 px, centered. 52 px input row with mode chip ("Commands") and `Esc` kbd. Group caption "Commands · 6 matches", 38 px result rows (icon, matched text bold, description in `text3`, kbd chips), selected row = `sel` fill + accent pill. "Recently used" group. 36 px footer: `↑↓ Navigate`, `↵ Run`, `Tab Switch scope`, and prefixes `>` commands, `@` folders, `#` tags.
 
 ## States

@@ -16,13 +16,15 @@
 //!
 //! One file's failure doesn't stop the job: it goes on the [`Summary`]'s list and [`retry`] does
 //! only those. A destination that is gone or full ends the job early instead of failing every file
-//! left ([`Status::Interrupted`]); [`retry`] then carries on from there.
+//! left ([`Status::Interrupted`]); [`retry`] then carries on from there. A job that Jerry didn't
+//! finish ([`journal`]) carries on with [`resume`].
 //!
 //! Everything here is blocking IO: run it on a background thread, in `job::run_job`.
 
 mod control;
 mod copy;
 mod execute;
+pub mod journal;
 mod link;
 mod plan;
 pub mod queue;
@@ -49,7 +51,7 @@ pub enum Kind {
 }
 
 /// A copy or move of some items into one folder.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub kind: Kind,
     /// The files and folders to copy or move, as long paths (as core keeps them).
@@ -93,6 +95,17 @@ pub enum Event<'a> {
     Progress(&'a Progress<'a>),
     /// An item failed; the job goes on.
     Failed(&'a Failure),
+    /// The job begins to write a file: its temporary file is there and empty, or a link is about
+    /// to be made. The copy goes on once this returns, so what hears it can write it down first.
+    Writing(&'a journal::Writing<'a>),
+}
+
+/// What a job that Jerry didn't finish knew as it stopped, for [`resume`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Resume {
+    /// The last file it began to write: `(source, target)`. A move may have finished its copy
+    /// and not yet removed its source.
+    pub writing: Option<(PathBuf, PathBuf)>,
 }
 
 /// An item that couldn't be copied or moved.
@@ -135,6 +148,8 @@ pub struct Summary {
     pending: Vec<(PathBuf, PathBuf)>,
     /// A move: source folders that stayed because something in them did, deepest first.
     leftovers: Vec<Item>,
+    /// A resumed job: [`retry`] carries on as [`resume`] does.
+    resuming: Option<Resume>,
 }
 
 /// How a job goes about its work. Only tests change this, because a test machine may have only
@@ -184,7 +199,39 @@ fn run_with(
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
     observer(Event::Phase(Phase::Counting));
-    let plan = plan::build(job, options, control, observer)?;
+    let plan = plan::build(job, options, None, control, observer)?;
+    start(plan, &job.destination, options, control, observer)
+}
+
+/// Carries on `job`, which a Jerry started and didn't finish, as [`run`] would but from where it
+/// stopped. What is already at the destination stays and isn't counted again:
+///
+/// - a folder there is filled, not made again;
+/// - a copy whose file is there with its source's size and date is done;
+/// - a move's sources that are gone were moved; the file it was writing as it stopped
+///   (`resume.writing`), if its copy is complete, only has its source removed, and only if that
+///   source is unchanged.
+///
+/// Anything else already there fails as with [`run`]: nothing is replaced. The temporary file the
+/// job left isn't this function's: remove it first ([`journal::remove_part`]).
+pub fn resume(
+    job: &Job,
+    resume: &Resume,
+    control: &Control,
+    mut observer: impl FnMut(Event<'_>),
+) -> Result<Summary, JerryError> {
+    resume_with(job, resume, Options::default(), control, &mut observer)
+}
+
+fn resume_with(
+    job: &Job,
+    resume: &Resume,
+    options: Options,
+    control: &Control,
+    observer: &mut dyn FnMut(Event<'_>),
+) -> Result<Summary, JerryError> {
+    observer(Event::Phase(Phase::Counting));
+    let plan = plan::build(job, options, Some(resume), control, observer)?;
     start(plan, &job.destination, options, control, observer)
 }
 
@@ -215,6 +262,9 @@ fn start(
     control: &Control,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
+    // What counting found, also when it was too quick to report as it went: the journal writes
+    // the totals down with the first file.
+    observer(Event::Counted(&plan.tally));
     observer(Event::Phase(Phase::CheckingSpace));
     plan::check_space(destination, plan.tally.bytes)?;
     observer(Event::Phase(Phase::Working));
