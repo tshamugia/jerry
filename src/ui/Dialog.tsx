@@ -1,5 +1,5 @@
 import * as Radix from "@radix-ui/react-dialog";
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, type RefObject, useRef } from "react";
 import { Kbd } from "./Kbd";
 
 interface Props {
@@ -9,6 +9,8 @@ interface Props {
   title: string;
   /** The `Esc` hint at the header's end. */
   closeHint: string;
+  /** What has the focus as it opens; else the first control in it. */
+  initialFocus?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }
 
@@ -18,7 +20,7 @@ interface Props {
  * stays inside while it is open and goes back where it was after. Its content scrolls when the
  * window is too short.
  */
-export function Dialog({ open, onClose, title, closeHint, children }: Props) {
+export function Dialog({ open, onClose, title, closeHint, initialFocus, children }: Props) {
   // Radix gives the focus back to a trigger, and these dialogs open without one.
   const returnTo = useRef<HTMLElement | null>(null);
   return (
@@ -27,9 +29,14 @@ export function Dialog({ open, onClose, title, closeHint, children }: Props) {
         {/* Above the list's sticky column headers (z-10), level with menus (z-50). */}
         <Radix.Overlay className="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-4 pt-24 pb-8">
           <Radix.Content
-            onOpenAutoFocus={() => {
+            onOpenAutoFocus={(event) => {
               const active = document.activeElement;
               returnTo.current = active instanceof HTMLElement ? active : null;
+              const first = initialFocus?.current;
+              if (first) {
+                event.preventDefault();
+                first.focus({ preventScroll: true });
+              }
             }}
             onCloseAutoFocus={(event) => {
               const element = returnTo.current;
