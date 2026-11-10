@@ -47,6 +47,10 @@ pub enum TransferState {
         error: JerryError,
         ready: bool,
     },
+    /// Jerry closed before it finished (it crashed, or was ended). `progress` says how far it
+    /// came and `progress.file` what it was writing. Resume carries it on from there; Cancel
+    /// discards it, and what it did stays.
+    Unfinished,
     /// Everything was attempted. `progress.failed` says how many items didn't make it.
     Done,
     Cancelled,

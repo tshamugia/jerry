@@ -36,7 +36,7 @@ const NO_BUFFERING_FROM: u64 = 256 * 1024 * 1024;
 const MAX_NAME: usize = 255;
 
 /// The ending of a file that is still being written.
-const PART: &str = ".jerrypart";
+pub(super) const PART: &str = ".jerrypart";
 
 /// How many temporary names are tried next to files of that name Jerry didn't make in this run.
 const PART_NAMES: u32 = 100;
@@ -49,7 +49,17 @@ const HELD_FOR: [Duration; 3] = [
 ];
 
 /// What writes one file: [`copy_file`], or a fake in tests.
-pub(super) type Copier = fn(&Request<'_>, &mut dyn FnMut(u64) -> Flow) -> Result<u64, JerryError>;
+pub(super) type Copier =
+    fn(&Request<'_>, &mut dyn FnMut(Step<'_>) -> Flow) -> Result<u64, JerryError>;
+
+/// What a copy reports as it goes.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Step<'a> {
+    /// The temporary file is there, hidden, and nothing is in it yet.
+    Started(&'a Path),
+    /// How many bytes are written so far, starting with 0.
+    Copied(u64),
+}
 
 /// The attributes a copy takes from its source. The rest describe how the file is stored, such as
 /// a cloud placeholder's, and `CopyFileExW` deals with those.
@@ -105,19 +115,20 @@ pub(super) struct Request<'a> {
     pub(super) for_move: bool,
 }
 
-/// Writes `request.source` to `request.target` and returns its size. `chunk` hears the bytes
-/// written so far, starting with 0, and can stop the copy. Nothing stays behind if it fails: no
-/// final name, no temporary file. An existing target is never replaced.
+/// Writes `request.source` to `request.target` and returns its size. `step` hears when the
+/// temporary file is there and then the bytes written so far, and can stop the copy. Nothing
+/// stays behind if it fails: no final name, no temporary file. An existing target is never
+/// replaced.
 pub(super) fn copy_file(
     request: &Request<'_>,
-    chunk: &mut dyn FnMut(u64) -> Flow,
+    step: &mut dyn FnMut(Step<'_>) -> Flow,
 ) -> Result<u64, JerryError> {
     // Saves copying a file for nothing. The final rename is what guarantees no replacing.
     if stamp(request.target).is_ok() {
         return Err(taken(request.target));
     }
     let before = stamp(request.source)?;
-    let part = write_part(request, before.size, chunk)?;
+    let part = write_part(request, before.size, step)?;
     finish(request, &part, &before).inspect_err(|_| discard(&part))?;
     Ok(before.size)
 }
@@ -130,7 +141,7 @@ fn taken(target: &Path) -> JerryError {
 fn write_part(
     request: &Request<'_>,
     size: u64,
-    chunk: &mut dyn FnMut(u64) -> Flow,
+    step: &mut dyn FnMut(Step<'_>) -> Flow,
 ) -> Result<PathBuf, JerryError> {
     let flags = if size >= NO_BUFFERING_FROM {
         COPY_FILE_FAIL_IF_EXISTS | COPY_FILE_NO_BUFFERING
@@ -139,7 +150,7 @@ fn write_part(
     };
     for attempt in 0..PART_NAMES {
         let part = part_name(request.target, attempt);
-        match copy_to(request.source, &part, flags, chunk)? {
+        match copy_to(request.source, &part, flags, step)? {
             Written::Yes => return Ok(part),
             // Not this run's file, so it isn't this run's to touch (data safety rule 7).
             Written::NameTaken => {}
@@ -181,11 +192,13 @@ enum Written {
 
 /// What the progress routine works with during one `CopyFileExW` call.
 struct Context<'a> {
-    part: &'a [u16],
+    part: &'a Path,
+    /// `part`, NUL-terminated.
+    wide: &'a [u16],
     /// The routine has run, so the temporary file exists and this call made it.
     started: bool,
-    chunk: &'a mut dyn FnMut(u64) -> Flow,
-    /// A panic in `chunk`, carried over the system frames to the job's thread.
+    step: &'a mut dyn FnMut(Step<'_>) -> Flow,
+    /// A panic in `step`, carried over the system frames to the job's thread.
     panic: Option<Box<dyn Any + Send>>,
 }
 
@@ -193,9 +206,12 @@ impl Context<'_> {
     fn on_chunk(&mut self, transferred: i64) -> Flow {
         if !self.started {
             self.started = true;
-            hide(self.part);
+            hide(self.wide);
+            if (self.step)(Step::Started(self.part)) == Flow::Cancelled {
+                return Flow::Cancelled;
+            }
         }
-        (self.chunk)(u64::try_from(transferred).unwrap_or(0))
+        (self.step)(Step::Copied(u64::try_from(transferred).unwrap_or(0)))
     }
 }
 
@@ -233,14 +249,15 @@ fn copy_to(
     source: &Path,
     part: &Path,
     flags: COPYFILE_FLAGS,
-    chunk: &mut dyn FnMut(u64) -> Flow,
+    step: &mut dyn FnMut(Step<'_>) -> Flow,
 ) -> Result<Written, JerryError> {
     let from = wide(source);
     let to = wide(part);
     let mut context = Context {
-        part: &to,
+        part,
+        wide: &to,
         started: false,
-        chunk,
+        step,
         panic: None,
     };
     // SAFETY: both paths are NUL-terminated and outlive the call, and so does `context`, which is
