@@ -219,8 +219,11 @@ function decodeDiff(
   return { kind: "diff", ids, removed, ...decodeEntries(message, entriesAt, count, nameUnits) };
 }
 
-/** `count` entries laid out from `offset` on, as batches and diffs carry them. */
-function decodeEntries(
+/**
+ * `count` entries laid out from `offset` on, as batches and diffs carry them, and search batches
+ * (`./search`).
+ */
+export function decodeEntries(
   message: ArrayBuffer,
   offset: number,
   count: number,

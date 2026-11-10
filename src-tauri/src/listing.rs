@@ -973,12 +973,12 @@ fn diff_message(listing: &Listing, diff: &Diff) -> Bytes {
 }
 
 /// The size of `count` entries with `units` name units, as [`push_entries`] writes them.
-fn entries_bytes(count: usize, units: usize) -> usize {
+pub(crate) fn entries_bytes(count: usize, units: usize) -> usize {
     count * 36 + units * 2
 }
 
 /// Writes `entries` as batches and diffs carry them: each column in turn, then the names.
-fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
+pub(crate) fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
     for &size in entries.sizes() {
         out.extend_from_slice(&(size as f64).to_le_bytes());
     }
