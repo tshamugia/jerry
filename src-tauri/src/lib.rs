@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
+pub mod drag;
 pub mod drives;
 pub mod favorites;
 pub mod icons;
@@ -102,6 +103,8 @@ macro_rules! commands {
             clipboard::clipboard_copy_text,
             clipboard::clipboard_cut_entries,
             clipboard::clipboard_has_files,
+            drag::drag_threshold,
+            drag::drag_start,
             delete::delete_check,
             delete::delete_measure,
             delete::delete_measure_cancel,

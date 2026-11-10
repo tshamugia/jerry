@@ -121,6 +121,16 @@ export const commands = {
 	 *  Paste without them, as Explorer does.
 	 */
 	clipboardHasFiles: () => __TAURI_INVOKE<boolean>("clipboard_has_files"),
+	/**  Windows' drag threshold (`SM_CXDRAG`, `SM_CYDRAG`), in CSS px. */
+	dragThreshold: () => __TAURI_INVOKE<DragThreshold>("drag_threshold"),
+	/**
+	 *  Drags entries `entries` of listing `listing` out of Jerry, with Windows' drag image, and
+	 *  resolves once the user drops or cancels (the page gets no `pointerup` after a drag). Call it
+	 *  while the mouse button is still down, once the pointer moved past `drag_threshold`; if the
+	 *  button is up by the time Windows gets to it, nothing happens. `NotFound` for an entry, a
+	 *  listing or a file that is gone.
+	 */
+	dragStart: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("drag_start", { listing, entries })),
 	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.
@@ -480,6 +490,15 @@ export type Density = "comfortable" | "compact";
 export type DragAction = 
 /**  The Windows rule: move on the same drive, copy to another one. */
 "windows" | "copy" | "move";
+
+/**
+ *  Windows' drag threshold in CSS px: a press that moves farther than this with the button down
+ *  is a drag, not a click.
+ */
+export type DragThreshold = {
+	x: number,
+	y: number,
+};
 
 /**  A drive as the sidebar shows it. */
 export type Drive = {
