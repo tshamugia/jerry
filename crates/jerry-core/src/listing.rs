@@ -731,7 +731,7 @@ pub(crate) fn folder_error(folder: &Path) -> Option<JerryError> {
 }
 
 /// Closes a find handle when dropped.
-struct FindHandle(HANDLE);
+pub(crate) struct FindHandle(pub(crate) HANDLE);
 
 impl Drop for FindHandle {
     fn drop(&mut self) {
@@ -768,7 +768,7 @@ fn drive_is_gone(path: &Path) -> bool {
     unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == DRIVE_NO_ROOT_DIR }
 }
 
-fn is_dot_entry(data: &WIN32_FIND_DATAW) -> bool {
+pub(crate) fn is_dot_entry(data: &WIN32_FIND_DATAW) -> bool {
     const DOT: u16 = b'.' as u16;
     matches!(data.cFileName, [DOT, 0, ..] | [DOT, DOT, 0, ..])
 }

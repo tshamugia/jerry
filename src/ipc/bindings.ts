@@ -174,6 +174,18 @@ export const commands = {
 	 */
 	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
 	/**
+	 *  Starts searching `within` for `query` and returns the search's id at once, before anything is
+	 *  read. Results, progress and the end come through `on_message` as binary messages (decoded by
+	 *  `src/ipc/search.ts`), and so does what is wrong with the folder (`NotFound`, `AccessDenied`,
+	 *  `DeviceGone`). Fails only with `NotFound` for a folder token Jerry never gave.
+	 */
+	searchStart: (within: SearchIn, query: SearchQuery, onMessage: Channel<ArrayBuffer>) => typedError<number, JerryError>(__TAURI_INVOKE("search_start", { within, query, onMessage })),
+	/**
+	 *  Stops search `id` if it still runs: nothing more comes through its stream. Stopping one that
+	 *  has ended does nothing.
+	 */
+	searchCancel: (id: number) => __TAURI_INVOKE<void>("search_cancel", { id }),
+	/**
 	 *  Copies or moves `entries` of listing `listing` into `destination`, at the end of the queue,
 	 *  and returns the job's id. Entries the listing no longer has are left out; with none left it
 	 *  fails with `NotFound`. A move of a system folder needs `system`, the user's confirmation
@@ -456,6 +468,16 @@ export type Crumb = {
 	folder: number,
 };
 
+/**
+ *  Milliseconds since the Unix epoch, from `from` (included) to `to` (left out): today is
+ *  `[midnight, next midnight)`, in the user's time zone as the UI computes it. A missing end is
+ *  open.
+ */
+export type DateRange = {
+	from: number | null,
+	to: number | null,
+};
+
 /**  Whether deleting some entries needs the extra confirmation. */
 export type DeleteCheck = {
 	/**  An entry is a system folder (Windows, Program Files, the Users root) or holds one. */
@@ -622,6 +644,18 @@ export type FavoriteList = {
  *  added, renamed, moved or removed.
  */
 export type FavoritesChanged = FavoriteList;
+
+/**  A type group, or one extension. */
+export type FileType = 
+/**  Office documents, PDF, plain text. */
+{ kind: "documents" } | 
+/**  AutoCAD drawings: DWG and DXF. */
+{ kind: "drawings" } | { kind: "images" } | { kind: "archives" } | { kind: "video" } | 
+/**
+ *  Files with this extension, case ignored. A leading `*.` or `.` is dropped (`*.pdf`,
+ *  `.pdf` and `pdf` are one), and empty means files without an extension.
+ */
+{ kind: "extension"; extension: string };
 
 /**  A folder in a tab's history. */
 export type FolderSave = {
@@ -829,6 +863,51 @@ export type ResolvedPath = {
 	select: string | null,
 };
 
+/**  Where to search. */
+export type SearchIn = 
+/**  Folder token `folder` (`ListingOpened::folder`) and everything in it. */
+{ kind: "folder"; folder: number } | 
+/**  The whole drive or share folder token `folder` is on, from its root. */
+{ kind: "drive"; folder: number };
+
+/**  Which kinds of items match. */
+export type SearchItems = "all" | "files" | "folders";
+
+/**  What to look for. Every filter that is set must match; with none set, everything matches. */
+export type SearchQuery = {
+	/**
+	 *  Words of the name, separated by spaces; every word must match, in any order. A word
+	 *  without `*` or `?` is a part of the name (`rev` matches `plan_rev2.dwg`); one with them is
+	 *  the whole name, as in the quick filter (`*.pdf`, `rev*`): `*` any run of characters, `?`
+	 *  exactly one. Case doesn't count, in any script (Mtavruli matches Mkhedruli). Empty matches
+	 *  every name.
+	 */
+	name: string,
+	/**  A type group or one extension. Only files have a type, so with it no folder matches. */
+	fileType: FileType | null,
+	/**  Size in bytes. Only files have a size here, so with it no folder matches. */
+	size: SizeRange | null,
+	/**  Last write time. */
+	modified: DateRange | null,
+	/**  Files, folders or both. */
+	items: SearchItems,
+	/**
+	 *  Hidden files and folders too. Without it they neither match nor are searched, as the
+	 *  list hides them without Ctrl+H.
+	 */
+	hidden: boolean,
+	/**
+	 *  Search inside links (symbolic links, junctions, mount points) too. Off, a link can still
+	 *  match, but what it points to isn't searched.
+	 */
+	followLinks: boolean,
+	/**
+	 *  Search Windows' own folders too (Windows, Program Files, ProgramData), which are left out
+	 *  otherwise. A search that starts inside one of them always searches it.
+	 */
+	systemFolders: boolean,
+};
+
 /**  What a window opens: its panes and their tabs. */
 export type SessionRestore = {
 	/**  The pane the keyboard acts on. */
@@ -918,6 +997,12 @@ export type SidebarPlace = {
 	place: PlaceName,
 	path: string,
 	name: string | null,
+};
+
+/**  Bytes, both ends included. A missing end is open. */
+export type SizeRange = {
+	min: number | null,
+	max: number | null,
 };
 
 /**  How a list is sorted. */

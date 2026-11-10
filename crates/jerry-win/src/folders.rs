@@ -8,9 +8,10 @@ use jerry_core::JerryError;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::UI::Shell::{
     FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_LocalAppData,
-    FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_ProgramFiles,
-    FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, FOLDERID_SkyDrive, FOLDERID_UserProfiles,
-    FOLDERID_Videos, FOLDERID_Windows, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Profile, FOLDERID_ProgramData,
+    FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86, FOLDERID_RoamingAppData, FOLDERID_SkyDrive,
+    FOLDERID_UserProfiles, FOLDERID_Videos, FOLDERID_Windows, KF_FLAG_DEFAULT,
+    SHGetKnownFolderPath,
 };
 use windows::core::GUID;
 
@@ -28,6 +29,20 @@ pub fn system_folders() -> Vec<PathBuf> {
         &FOLDERID_ProgramFiles,
         &FOLDERID_ProgramFilesX86,
         &FOLDERID_UserProfiles,
+    ]
+    .into_iter()
+    .filter_map(|id| known_folder(id).ok())
+    .collect()
+}
+
+/// The folders a search leaves out unless asked (Tech PRD «ძებნა»): Windows, Program Files and
+/// Program Files (x86), and ProgramData. One the Shell doesn't know is left out.
+pub fn search_excluded() -> Vec<PathBuf> {
+    [
+        &FOLDERID_Windows,
+        &FOLDERID_ProgramFiles,
+        &FOLDERID_ProgramFilesX86,
+        &FOLDERID_ProgramData,
     ]
     .into_iter()
     .filter_map(|id| known_folder(id).ok())
@@ -142,5 +157,20 @@ mod tests {
                 .any(|folder| folder.as_os_str().eq_ignore_ascii_case(users.as_os_str())),
             "{folders:?}"
         );
+    }
+
+    #[test]
+    fn search_leaves_out_windows_program_files_and_program_data() {
+        let folders = search_excluded();
+        assert_eq!(folders.len(), 4, "{folders:?}");
+        for variable in ["SystemRoot", "ProgramFiles", "ProgramData"] {
+            let folder = std::env::var_os(variable).expect("the variable is set");
+            assert!(
+                folders
+                    .iter()
+                    .any(|known| known.as_os_str().eq_ignore_ascii_case(&folder)),
+                "{variable}: {folders:?}"
+            );
+        }
     }
 }

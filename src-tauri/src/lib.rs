@@ -16,6 +16,7 @@ pub mod listing;
 pub mod logging;
 pub mod navigation;
 pub mod rename;
+pub mod search;
 pub mod session;
 pub mod shell;
 pub mod storage;
@@ -112,6 +113,8 @@ macro_rules! commands {
             delete::delete_permanently,
             rename::create_folder,
             rename::rename,
+            search::search_start,
+            search::search_cancel,
             transfers::transfer_enqueue,
             transfers::transfer_control,
             transfers::transfer_reorder,
@@ -262,6 +265,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(instance::Instance::new(&launch))
         .manage(delete::Deleting::default())
+        .manage(search::Searches::default())
         .manage(updates::Updates::default())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())
