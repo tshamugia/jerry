@@ -21,13 +21,28 @@ use std::time::{Duration, Instant};
 use jerry_core::path::long_path;
 use jerry_core::storage::Storage;
 use jerry_core::transfer::journal::{Counts, Journal, StorageJournal, Writing};
-use jerry_core::transfer::queue::{Action, Queue, TransferState};
-use jerry_core::transfer::{Job, Kind};
-use jerry_core::volume;
+use jerry_core::transfer::queue::{Action, Queue, Shell, TransferState};
+use jerry_core::transfer::{Bin, Job, Kind};
+use jerry_core::{ErrorCode, JerryError, volume};
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
 
 /// Set in the child: what it is to do.
 const CHILD: &str = "JERRY_CRASH_CHILD";
+
+/// No Shell: these jobs replace nothing and show no icons.
+struct NoShell;
+
+impl Bin for NoShell {
+    fn recycle(&self, path: &Path) -> Result<(), JerryError> {
+        Err(JerryError::new(ErrorCode::NoRecycleBin).at(path))
+    }
+}
+
+impl Shell for NoShell {
+    fn icon(&self, _: &std::ffi::OsStr, _: u32) -> u32 {
+        0
+    }
+}
 const DB: &str = "JERRY_CRASH_DB";
 const FROM: &str = "JERRY_CRASH_FROM";
 const TO: &str = "JERRY_CRASH_TO";
@@ -125,7 +140,7 @@ fn killed_and_finished(kind: Kind, from: &tempfile::TempDir, to: &tempfile::Temp
 
     // What the next Jerry does as it starts: the job is listed for Resume or Discard.
     let journal = Arc::new(StorageJournal::new(Mutex::new(storage), NEXT_RUN));
-    let queue = Queue::start(true, journal.clone(), |_| {});
+    let queue = Queue::start(true, journal.clone(), Arc::new(NoShell), |_| {});
     assert_eq!(journal.recover(&queue), 1);
     let id = queue.list().jobs[0].id;
     assert_eq!(queue.list().jobs[0].state, TransferState::Unfinished);
@@ -213,7 +228,7 @@ fn child(kind: Kind) -> ! {
         journal: StorageJournal::new(Mutex::new(storage), KILLED_RUN),
         reached: Mutex::new(Some(reached)),
     });
-    let queue = Queue::start(true, journal, |_| {});
+    let queue = Queue::start(true, journal, Arc::new(NoShell), |_| {});
     queue.enqueue(Job {
         kind,
         sources: sources(&from),

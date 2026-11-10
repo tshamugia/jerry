@@ -109,6 +109,16 @@ pub fn keys(entries: &Entries) -> Vec<u32> {
     keys
 }
 
+/// The key of the type icon of an item named `name` with `attributes`: never [`OWN`], for where
+/// there is no listing entry to ask by (the conflict window, #51).
+pub fn type_key(name: &[u16], attributes: u32) -> u32 {
+    match icon_type_of(name, attributes) {
+        IconType::Folder => FOLDER,
+        IconType::File => FILE,
+        IconType::Extension(lower) => intern(&lower),
+    }
+}
+
 /// What `key` names, or `None` for [`OWN`] and keys this process never gave out.
 pub fn icon_type(key: u32) -> Option<IconType> {
     match key {

@@ -1,5 +1,6 @@
 //! One file: written under a temporary name, checked, and only then given its final name (data
-//! safety rules 1 and 2).
+//! safety rules 1 and 2). Between the two the caller makes room, if the file replaces another
+//! (data safety rule 3).
 
 use std::any::Any;
 use std::ffi::{OsString, c_void};
@@ -50,7 +51,16 @@ const HELD_FOR: [Duration; 3] = [
 
 /// What writes one file: [`copy_file`], or a fake in tests.
 pub(super) type Copier =
-    fn(&Request<'_>, &mut dyn FnMut(Step<'_>) -> Flow) -> Result<u64, JerryError>;
+    fn(&Request<'_>, &mut dyn FnMut(Step<'_>) -> Flow) -> Result<Written, JerryError>;
+
+/// A copy that is complete and checked under its temporary name, waiting for [`take_name`].
+#[derive(Debug)]
+pub(super) struct Written {
+    /// The temporary file.
+    pub(super) part: PathBuf,
+    /// What the source looked like as it was copied: its size is the copy's.
+    pub(super) source: Stamp,
+}
 
 /// What a copy reports as it goes.
 #[derive(Debug, Clone, Copy)]
@@ -115,22 +125,34 @@ pub(super) struct Request<'a> {
     pub(super) for_move: bool,
 }
 
-/// Writes `request.source` to `request.target` and returns its size. `step` hears when the
-/// temporary file is there and then the bytes written so far, and can stop the copy. Nothing
-/// stays behind if it fails: no final name, no temporary file. An existing target is never
-/// replaced.
+/// Writes `request.source` next to `request.target` under a temporary name and checks it: what
+/// [`take_name`] then turns into the file. `step` hears when the temporary file is there and then
+/// the bytes written so far, and can stop the copy. Nothing stays behind if it fails.
 pub(super) fn copy_file(
     request: &Request<'_>,
     step: &mut dyn FnMut(Step<'_>) -> Flow,
-) -> Result<u64, JerryError> {
-    // Saves copying a file for nothing. The final rename is what guarantees no replacing.
-    if stamp(request.target).is_ok() {
-        return Err(taken(request.target));
-    }
+) -> Result<Written, JerryError> {
     let before = stamp(request.source)?;
     let part = write_part(request, before.size, step)?;
     finish(request, &part, &before).inspect_err(|_| discard(&part))?;
-    Ok(before.size)
+    Ok(Written {
+        part,
+        source: before,
+    })
+}
+
+/// Gives a finished copy its final name. It never replaces anything: a name that is taken fails
+/// with [`ErrorCode::InvalidName`]. The temporary file stays for the caller either way.
+pub(super) fn take_name(part: &Path, target: &Path) -> Result<(), JerryError> {
+    patiently(|| {
+        move_file(part, target).map_err(|error| {
+            if is_taken(&error) {
+                taken(target)
+            } else {
+                JerryError::from(error).at(target)
+            }
+        })
+    })
 }
 
 fn taken(target: &Path) -> JerryError {
@@ -151,9 +173,9 @@ fn write_part(
     for attempt in 0..PART_NAMES {
         let part = part_name(request.target, attempt);
         match copy_to(request.source, &part, flags, step)? {
-            Written::Yes => return Ok(part),
+            Attempt::Written => return Ok(part),
             // Not this run's file, so it isn't this run's to touch (data safety rule 7).
-            Written::NameTaken => {}
+            Attempt::NameTaken => {}
         }
     }
     Err(taken(request.target))
@@ -185,8 +207,8 @@ fn part_name(target: &Path, attempt: u32) -> PathBuf {
     target.with_file_name(part)
 }
 
-enum Written {
-    Yes,
+enum Attempt {
+    Written,
     NameTaken,
 }
 
@@ -250,7 +272,7 @@ fn copy_to(
     part: &Path,
     flags: COPYFILE_FLAGS,
     step: &mut dyn FnMut(Step<'_>) -> Flow,
-) -> Result<Written, JerryError> {
+) -> Result<Attempt, JerryError> {
     let from = wide(source);
     let to = wide(part);
     let mut context = Context {
@@ -275,7 +297,7 @@ fn copy_to(
     let started = context.started;
     let panic = context.panic.take();
     match result {
-        Ok(()) => Ok(Written::Yes),
+        Ok(()) => Ok(Attempt::Written),
         Err(error) => {
             if started {
                 // Windows removes it when told to cancel. This is for when it doesn't.
@@ -285,7 +307,7 @@ fn copy_to(
                 resume_unwind(payload);
             }
             if !started && is_taken(&error) {
-                return Ok(Written::NameTaken);
+                return Ok(Attempt::NameTaken);
             }
             Err(JerryError::from(error).at(source))
         }
@@ -313,7 +335,8 @@ fn hide(part: &[u16]) {
     }
 }
 
-/// Turns the finished temporary file into the final one, or fails and leaves it to the caller.
+/// Readies the finished temporary file to become the final one, or fails and leaves it to the
+/// caller.
 fn finish(request: &Request<'_>, part: &Path, before: &Stamp) -> Result<(), JerryError> {
     let written = stamp(part)?;
     check_size(before.size, written.size, part)?;
@@ -321,21 +344,19 @@ fn finish(request: &Request<'_>, part: &Path, before: &Stamp) -> Result<(), Jerr
         // The file is about to become the only copy.
         write_to_disk(part, &written)?;
         set_times(part, Some(&before.created), None)?;
-        if !stamp(request.source)?.same_content(before) {
-            // Something wrote to it meanwhile, and that isn't in the copy.
-            return Err(JerryError::new(ErrorCode::InUse { app: None }).at(request.source));
-        }
+        check_unchanged(request.source, before)?;
     }
-    set_attributes(part, before.attributes)?;
-    patiently(|| {
-        move_file(part, request.target).map_err(|error| {
-            if is_taken(&error) {
-                taken(request.target)
-            } else {
-                JerryError::from(error).at(request.target)
-            }
-        })
-    })
+    set_attributes(part, before.attributes)
+}
+
+/// Fails with [`ErrorCode::InUse`] if the file at `source` isn't what `before` says any more:
+/// something wrote to it, and that isn't in its copy.
+pub(super) fn check_unchanged(source: &Path, before: &Stamp) -> Result<(), JerryError> {
+    if stamp(source)?.same_content(before) {
+        Ok(())
+    } else {
+        Err(JerryError::new(ErrorCode::InUse { app: None }).at(source))
+    }
 }
 
 /// Does `attempt`, again after a moment if the file is held. Virus scanners, the indexer and
@@ -424,7 +445,7 @@ pub(super) fn set_times(
 }
 
 /// Removes a temporary file this run made, if it is still there.
-fn discard(part: &Path) {
+pub(super) fn discard(part: &Path) {
     let Ok(item) = probe(part) else { return };
     if let Err(error) = remove(&item) {
         tracing::warn!(%error, "can't remove a partly copied file");

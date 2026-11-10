@@ -12,13 +12,19 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use jerry_core::job::run_job;
 use jerry_core::path::{long_path, plain_path};
 use jerry_core::space::folder_space;
-use jerry_core::transfer::{Control, Event, Job, Kind, Phase, Status, Summary, retry, run};
+use jerry_core::transfer::conflict::{
+    FILE_CHOICES, FOLDER_CHOICES, NO_BIN_CHOICES, ONTO_FILE_CHOICES, ONTO_FOLDER_CHOICES,
+};
+use jerry_core::transfer::{
+    Answer, Bin, Choice, Control, Event, Job, Kind, Phase, Status, Summary, retry, run,
+};
 use jerry_core::{ErrorCode, JerryError};
 use tempfile::TempDir;
 use windows::Win32::Foundation::HANDLE;
@@ -59,8 +65,70 @@ fn copy(sources: &[&Path], destination: &Path) -> Result<Summary, JerryError> {
     run(
         &job(Kind::Copy, sources, destination),
         &Control::new(),
-        |_| {},
+        &keep,
+        |event| assert!(!matches!(event, Event::Conflict(_)), "no name is taken"),
     )
+}
+
+/// No Recycle Bin: what Replace would replace stays, and the user is asked again.
+fn keep(path: &Path) -> Result<(), JerryError> {
+    Err(JerryError::new(ErrorCode::NoRecycleBin).at(path))
+}
+
+/// A Recycle Bin that is a folder of the test's, so that what goes there can be looked at.
+fn bin_in(folder: &Path) -> impl Fn(&Path) -> Result<(), JerryError> + Send + Sync + use<> {
+    fs::create_dir_all(folder).expect("mkdir");
+    let folder = folder.to_owned();
+    move |path: &Path| {
+        let name = path.file_name().expect("a name");
+        fs::rename(path, folder.join(name)).map_err(|error| JerryError::from(error).at(path))
+    }
+}
+
+/// A conflict a job asked about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Asked {
+    /// The name that is taken.
+    name: String,
+    choices: Vec<Choice>,
+    no_recycle_bin: bool,
+}
+
+fn asked(name: &str, choices: &[Choice]) -> Asked {
+    Asked {
+        name: name.to_owned(),
+        choices: choices.to_vec(),
+        no_recycle_bin: false,
+    }
+}
+
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .expect("a name")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Runs `job`, answering its conflicts in order with `answers` (choice and "Apply to all"), and
+/// returns its summary and what it asked.
+fn answering(job: &Job, bin: &dyn Bin, answers: &[(Choice, bool)]) -> (Summary, Vec<Asked>) {
+    let control = Control::new();
+    let mut questions = Vec::new();
+    let mut answers = answers.iter();
+    let summary = run(job, &control, bin, |event| {
+        if let Event::Conflict(conflict) = event {
+            questions.push(Asked {
+                name: name_of(conflict.target),
+                choices: conflict.choices.to_vec(),
+                no_recycle_bin: conflict.no_recycle_bin,
+            });
+            let &(choice, all) = answers.next().expect("an answer for every question");
+            control.answer(Answer { choice, all });
+        }
+    })
+    .expect("starts");
+    assert_eq!(answers.next(), None, "every answer was asked for");
+    (summary, questions)
 }
 
 fn write(path: &Path, bytes: usize) {
@@ -210,6 +278,7 @@ fn a_file_has_no_final_name_until_it_is_complete() {
     let summary = run(
         &job(Kind::Copy, &[&source], &scene.to),
         &Control::new(),
+        &keep,
         |event| {
             if let Event::Progress(progress) = event
                 && progress.files_done == 0
@@ -246,6 +315,7 @@ fn reports_phases_in_order_and_reaches_the_total() {
     run(
         &job(Kind::Copy, &[&folder], &scene.to),
         &Control::new(),
+        &keep,
         |event| match event {
             Event::Phase(phase) => phases.push(phase),
             Event::Progress(progress) => {
@@ -259,7 +329,7 @@ fn reports_phases_in_order_and_reaches_the_total() {
                     progress.bytes_total,
                 ));
             }
-            Event::Counted(_) | Event::Failed(_) | Event::Writing(_) => {}
+            Event::Counted(_) | Event::Failed(_) | Event::Writing(_) | Event::Conflict(_) => {}
         },
     )
     .expect("starts");
@@ -314,6 +384,7 @@ fn cancelling_removes_the_partial_file_and_keeps_finished_ones() {
     let summary = run(
         &job(Kind::Copy, &[&first, &second], &scene.to),
         &control,
+        &keep,
         |event| {
             // In the middle of the second file.
             if let Event::Progress(progress) = event
@@ -341,11 +412,16 @@ fn a_read_only_file_that_is_cancelled_leaves_nothing() {
     write(&source, 2 * MB);
     set_read_only(&source, true);
     let control = Control::new();
-    let summary = run(&job(Kind::Copy, &[&source], &scene.to), &control, |event| {
-        if matches!(event, Event::Progress(_)) {
-            control.cancel();
-        }
-    })
+    let summary = run(
+        &job(Kind::Copy, &[&source], &scene.to),
+        &control,
+        &keep,
+        |event| {
+            if matches!(event, Event::Progress(_)) {
+                control.cancel();
+            }
+        },
+    )
     .expect("starts");
     assert_eq!(summary.status, Status::Cancelled);
     assert_eq!(names(&scene.to), Vec::<String>::new());
@@ -365,7 +441,7 @@ fn a_pause_holds_the_copy_and_resume_finishes_it() {
     let worker_job = job(Kind::Copy, &[&source], &scene.to);
     let worker = std::thread::spawn(move || {
         let mut told = false;
-        run(&worker_job, &worker_control, |event| {
+        run(&worker_job, &worker_control, &keep, |event| {
             if matches!(event, Event::Progress(_)) && !told {
                 told = true;
                 worker_control.pause();
@@ -400,7 +476,7 @@ fn cancelling_ends_a_paused_job() {
     let worker_control = control.clone();
     let worker_job = job(Kind::Copy, &[&source], &scene.to);
     let worker = std::thread::spawn(move || {
-        run(&worker_job, &worker_control, |event| {
+        run(&worker_job, &worker_control, &keep, |event| {
             if matches!(event, Event::Progress(_)) {
                 worker_control.pause();
                 let _ = paused.send(());
@@ -424,8 +500,13 @@ fn cancelling_while_counting_starts_nothing() {
     write(&folder.join("a.txt"), 1);
     let control = Control::new();
     control.cancel();
-    let error =
-        run(&job(Kind::Copy, &[&folder], &scene.to), &control, |_| {}).expect_err("cancelled");
+    let error = run(
+        &job(Kind::Copy, &[&folder], &scene.to),
+        &control,
+        &keep,
+        |_| {},
+    )
+    .expect_err("cancelled");
     assert_eq!(error.code, ErrorCode::Cancelled);
     assert_eq!(names(&scene.to), Vec::<String>::new());
 }
@@ -458,7 +539,7 @@ fn a_locked_file_goes_on_the_list_and_a_retry_does_only_that() {
     let free_written = fs::metadata(scene.to.join("folder").join("free.txt"))
         .expect("copied")
         .creation_time();
-    let again = retry(&summary, &Control::new(), |_| {}).expect("starts");
+    let again = retry(&summary, &Control::new(), &keep, |_| {}).expect("starts");
     assert_eq!(again.failed, []);
     assert_eq!((again.files, again.bytes), (1, 40));
     assert_eq!(names(&scene.to), ["folder", "free.txt", "დაკავებული.dwg"]);
@@ -478,11 +559,11 @@ fn a_retry_that_fails_again_keeps_the_failure() {
     write(&locked, 1);
     let held = lock(&locked);
     let summary = copy(&[&locked], &scene.to).expect("starts");
-    let again = retry(&summary, &Control::new(), |_| {}).expect("starts");
+    let again = retry(&summary, &Control::new(), &keep, |_| {}).expect("starts");
     assert_eq!(again.failed.len(), 1);
     assert_eq!(again.failed[0].error.code, ErrorCode::InUse { app: None });
     drop(held);
-    let third = retry(&again, &Control::new(), |_| {}).expect("starts");
+    let third = retry(&again, &Control::new(), &keep, |_| {}).expect("starts");
     assert_eq!(third.failed, []);
     assert_eq!(names(&scene.to), ["a.txt"]);
 }
@@ -533,34 +614,12 @@ fn a_folder_that_can_not_be_read_goes_on_the_list() {
     assert_eq!(names(&scene.to), ["folder", "open.txt"]);
 
     drop(denied);
-    let again = retry(&summary, &Control::new(), |_| {}).expect("starts");
+    let again = retry(&summary, &Control::new(), &keep, |_| {}).expect("starts");
     assert_eq!(again.failed, []);
     assert_eq!(
         names(&scene.to),
         ["folder", "open.txt", "secret.txt", "დახურული"]
     );
-}
-
-#[test]
-fn an_existing_file_is_never_replaced() {
-    let scene = scene();
-    let source = scene.from.join("a.txt");
-    write(&source, 5);
-    let other = scene.from.join("b.txt");
-    write(&other, 6);
-    let existing = scene.to.join("a.txt");
-    fs::write(&existing, b"keep me").expect("write");
-
-    let summary = copy(&[&source, &other], &scene.to).expect("starts");
-    assert_eq!(summary.files, 1);
-    assert_eq!(summary.failed.len(), 1);
-    assert_eq!(summary.failed[0].error.code, ErrorCode::InvalidName);
-    assert_eq!(
-        summary.failed[0].error.path.as_deref(),
-        Some(existing.as_path())
-    );
-    assert_eq!(fs::read(&existing).expect("read"), b"keep me");
-    assert_eq!(names(&scene.to), ["a.txt", "b.txt"]);
 }
 
 #[test]
@@ -573,6 +632,7 @@ fn a_name_taken_during_the_copy_is_not_replaced() {
     let summary = run(
         &job(Kind::Copy, &[&source], &scene.to),
         &Control::new(),
+        &keep,
         |event| {
             if matches!(event, Event::Progress(_)) && !made {
                 made = true;
@@ -585,23 +645,6 @@ fn a_name_taken_during_the_copy_is_not_replaced() {
     assert_eq!(summary.failed[0].error.code, ErrorCode::InvalidName);
     assert_eq!(fs::read(&target).expect("read"), b"arrived first");
     assert_eq!(names(&scene.to), ["a.bin"], "and no temporary file stays");
-}
-
-#[test]
-fn an_existing_folder_fails_once_for_everything_in_it() {
-    let scene = scene();
-    let folder = scene.from.join("folder");
-    fs::create_dir_all(folder.join("sub")).expect("mkdir");
-    write(&folder.join("a.txt"), 1);
-    write(&folder.join("sub").join("b.txt"), 1);
-    fs::create_dir(scene.to.join("folder")).expect("mkdir");
-
-    let summary = copy(&[&folder], &scene.to).expect("starts");
-    assert_eq!(summary.status, Status::Done);
-    assert_eq!((summary.files, summary.folders), (0, 0));
-    assert_eq!(summary.failed.len(), 1);
-    assert_eq!(summary.failed[0].error.code, ErrorCode::InvalidName);
-    assert_eq!(names(&scene.to), ["folder"], "nothing was merged");
 }
 
 #[test]
@@ -711,8 +754,13 @@ fn a_folder_can_not_go_into_itself_or_inside_itself() {
 
     for kind in [Kind::Copy, Kind::Move] {
         for destination in [&folder, &inner] {
-            let error = run(&job(kind, &[&folder], destination), &Control::new(), |_| {})
-                .expect_err("blocked");
+            let error = run(
+                &job(kind, &[&folder], destination),
+                &Control::new(),
+                &keep,
+                |_| {},
+            )
+            .expect_err("blocked");
             assert_eq!(
                 error.code,
                 ErrorCode::IntoItself,
@@ -796,6 +844,7 @@ fn a_job_that_does_not_fit_does_not_start() {
     let error = run(
         &job(Kind::Copy, &[&small, &huge], &scene.to),
         &Control::new(),
+        &keep,
         |event| working |= matches!(event, Event::Phase(Phase::Working)),
     )
     .expect_err("doesn't fit");
@@ -841,6 +890,7 @@ fn moving_within_a_volume_renames_at_once() {
     let summary = run(
         &job(Kind::Move, &[&folder, &file], &scene.to),
         &Control::new(),
+        &keep,
         |event| {
             if let Event::Progress(progress) = event {
                 chunks += 1;
@@ -865,26 +915,6 @@ fn moving_within_a_volume_renames_at_once() {
 }
 
 #[test]
-fn moving_onto_an_existing_name_keeps_both() {
-    let scene = scene();
-    let source = scene.from.join("a.txt");
-    fs::write(&source, b"mine").expect("write");
-    let existing = scene.to.join("a.txt");
-    fs::write(&existing, b"theirs").expect("write");
-
-    let summary = run(
-        &job(Kind::Move, &[&source], &scene.to),
-        &Control::new(),
-        |_| {},
-    )
-    .expect("starts");
-    assert_eq!(summary.failed.len(), 1);
-    assert_eq!(summary.failed[0].error.code, ErrorCode::InvalidName);
-    assert_eq!(fs::read(&source).expect("read"), b"mine");
-    assert_eq!(fs::read(&existing).expect("read"), b"theirs");
-}
-
-#[test]
 fn moving_into_the_folder_it_is_in_changes_nothing() {
     let scene = scene();
     let source = scene.from.join("a.txt");
@@ -892,6 +922,7 @@ fn moving_into_the_folder_it_is_in_changes_nothing() {
     let summary = run(
         &job(Kind::Move, &[&source], &scene.from),
         &Control::new(),
+        &keep,
         |_| {},
     )
     .expect("starts");
@@ -911,6 +942,7 @@ fn a_locked_folder_move_fails_whole_and_a_retry_moves_it() {
     let summary = run(
         &job(Kind::Move, &[&folder], &scene.to),
         &Control::new(),
+        &keep,
         |_| {},
     )
     .expect("starts");
@@ -919,7 +951,7 @@ fn a_locked_folder_move_fails_whole_and_a_retry_moves_it() {
     assert_eq!(names(&scene.to), Vec::<String>::new());
 
     drop(held);
-    let again = retry(&summary, &Control::new(), |_| {}).expect("starts");
+    let again = retry(&summary, &Control::new(), &keep, |_| {}).expect("starts");
     assert_eq!(again.failed, []);
     assert_eq!(again.folders, 1);
     assert_eq!(names(&scene.to), ["a.txt", "folder"]);
@@ -935,6 +967,7 @@ fn a_missing_source_goes_on_the_list_and_the_rest_is_copied() {
     let summary = run(
         &job(Kind::Copy, &[&gone, &here], &scene.to),
         &Control::new(),
+        &keep,
         |event| {
             if let Event::Failed(failure) = event {
                 heard.push(failure.source.clone());
@@ -969,7 +1002,7 @@ fn a_panic_during_a_copy_fails_only_its_job() {
     write(&source, 3 * MB);
     let copy_job = job(Kind::Copy, &[&source], &scene.to);
     let error = run_job("transfer test", || {
-        run(&copy_job, &Control::new(), |event| {
+        run(&copy_job, &Control::new(), &keep, |event| {
             assert!(!matches!(event, Event::Progress(_)), "deliberate panic");
         })
     })
@@ -1008,6 +1041,7 @@ fn alternate_data_streams_come_along_and_progress_stays_within_the_total() {
     let summary = run(
         &job(Kind::Copy, &[&source], &scene.to),
         &Control::new(),
+        &keep,
         |event| {
             if let Event::Progress(progress) = event {
                 assert!(progress.bytes_done <= progress.bytes_total, "{progress:?}");
@@ -1021,5 +1055,456 @@ fn alternate_data_streams_come_along_and_progress_stays_within_the_total() {
     assert_eq!(
         fs::read(stream(&scene.to.join("a.bin"))).expect("the stream came along"),
         b"[ZoneTransfer]"
+    );
+}
+
+/// Sets the modified date of the file at `path` to `days` days ago.
+fn age(path: &Path, days: u64) {
+    let when = std::time::SystemTime::now() - Duration::from_secs(days * 24 * 60 * 60);
+    File::options()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.set_modified(when))
+        .expect("set the date");
+}
+
+#[test]
+fn replace_sends_the_file_there_to_the_recycle_bin_once_the_copy_is_complete() {
+    let scene = scene();
+    let source = scene.from.join("ნახაზი.dwg");
+    write(&source, 3 * MB);
+    let target = scene.to.join("ნახაზი.dwg");
+    fs::write(&target, b"old drawing").expect("write");
+    let part = scene.to.join("ნახაზი.dwg.jerrypart");
+    let recycled = long_path(scene.dir.path()).expect("long path").join("bin");
+    let into_bin = bin_in(&recycled);
+    let checked = Arc::new(AtomicBool::new(false));
+    let bin = {
+        let checked = checked.clone();
+        move |path: &Path| {
+            let written = fs::metadata(&part)
+                .expect("the copy is written first")
+                .len();
+            assert_eq!(written, (3 * MB) as u64, "and complete");
+            checked.store(true, Ordering::SeqCst);
+            into_bin(path)
+        }
+    };
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&source], &scene.to),
+        &bin,
+        &[(Choice::Replace, false)],
+    );
+    assert_eq!(questions, [asked("ნახაზი.dwg", FILE_CHOICES)]);
+    assert!(checked.load(Ordering::SeqCst));
+    assert_eq!(summary.failed, []);
+    assert_eq!((summary.files, summary.skipped), (1, 0));
+    assert_eq!(fs::metadata(&target).expect("there").len(), (3 * MB) as u64);
+    assert_eq!(
+        fs::read(recycled.join("ნახაზი.dwg")).expect("in the bin"),
+        b"old drawing"
+    );
+    assert_eq!(names(&scene.to), ["ნახაზი.dwg"], "no temporary file stays");
+}
+
+#[test]
+fn skip_leaves_what_is_there_and_keep_both_takes_a_free_name() {
+    let scene = scene();
+    let (a, b) = (scene.from.join("a.txt"), scene.from.join("b.txt"));
+    fs::write(&a, b"new a").expect("write");
+    fs::write(&b, b"new b").expect("write");
+    fs::write(scene.to.join("a.txt"), b"old a").expect("write");
+    fs::write(scene.to.join("b.txt"), b"old b").expect("write");
+    fs::write(scene.to.join("b (2).txt"), b"older b").expect("write");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&a, &b], &scene.to),
+        &keep,
+        &[(Choice::Skip, false), (Choice::KeepBoth, false)],
+    );
+    assert_eq!(
+        questions,
+        [asked("a.txt", FILE_CHOICES), asked("b.txt", FILE_CHOICES)]
+    );
+    assert_eq!((summary.files, summary.skipped), (1, 1));
+    assert_eq!(fs::read(scene.to.join("a.txt")).expect("read"), b"old a");
+    assert_eq!(fs::read(scene.to.join("b.txt")).expect("read"), b"old b");
+    assert_eq!(
+        fs::read(scene.to.join("b (3).txt")).expect("read"),
+        b"new b"
+    );
+    assert_eq!(
+        names(&scene.to),
+        ["a.txt", "b (2).txt", "b (3).txt", "b.txt"]
+    );
+}
+
+#[test]
+fn replace_if_newer_replaces_only_what_is_older() {
+    let scene = scene();
+    let (fresh, stale) = (scene.from.join("fresh.txt"), scene.from.join("stale.txt"));
+    fs::write(&fresh, b"fresh").expect("write");
+    fs::write(&stale, b"stale").expect("write");
+    fs::write(scene.to.join("fresh.txt"), b"was there").expect("write");
+    fs::write(scene.to.join("stale.txt"), b"was there").expect("write");
+    age(&scene.to.join("fresh.txt"), 2);
+    age(&stale, 2);
+    let recycled = long_path(scene.dir.path()).expect("long path").join("bin");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&fresh, &stale], &scene.to),
+        &bin_in(&recycled),
+        &[(Choice::ReplaceIfNewer, true)],
+    );
+    assert_eq!(questions.len(), 1, "Apply to all: {questions:?}");
+    assert_eq!((summary.files, summary.skipped), (1, 1));
+    assert_eq!(
+        fs::read(scene.to.join("fresh.txt")).expect("read"),
+        b"fresh"
+    );
+    assert_eq!(
+        fs::read(scene.to.join("stale.txt")).expect("read"),
+        b"was there"
+    );
+    assert_eq!(names(&recycled), ["fresh.txt"]);
+}
+
+#[test]
+fn apply_to_all_answers_files_and_folders_apart() {
+    let scene = scene();
+    let mut sources = Vec::new();
+    for name in ["1.txt", "2.txt", "3.txt"] {
+        let file = scene.from.join(name);
+        fs::write(&file, b"new").expect("write");
+        fs::write(scene.to.join(name), b"old").expect("write");
+        sources.push(file);
+    }
+    for name in ["A", "B"] {
+        let folder = scene.from.join(name);
+        fs::create_dir(&folder).expect("mkdir");
+        fs::write(folder.join("in.txt"), b"in").expect("write");
+        fs::create_dir(scene.to.join(name)).expect("mkdir");
+        sources.push(folder);
+    }
+    let sources: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &sources, &scene.to),
+        &keep,
+        &[(Choice::KeepBoth, true), (Choice::Merge, true)],
+    );
+    assert_eq!(
+        questions,
+        [asked("1.txt", FILE_CHOICES), asked("A", FOLDER_CHOICES)]
+    );
+    assert_eq!(summary.failed, []);
+    assert_eq!((summary.files, summary.folders), (5, 0));
+    assert_eq!(
+        names(&scene.to),
+        [
+            "1 (2).txt",
+            "1.txt",
+            "2 (2).txt",
+            "2.txt",
+            "3 (2).txt",
+            "3.txt",
+            "A",
+            "B",
+            "in.txt",
+            "in.txt"
+        ]
+    );
+}
+
+#[test]
+fn merging_fills_the_folders_there_at_every_depth() {
+    let scene = scene();
+    let project = scene.from.join("პროექტი");
+    fs::create_dir_all(project.join("sub").join("deep")).expect("mkdir");
+    fs::create_dir_all(project.join("new")).expect("mkdir");
+    fs::write(project.join("a.txt"), b"new a").expect("write");
+    fs::write(project.join("sub").join("b.txt"), b"b").expect("write");
+    fs::write(project.join("sub").join("deep").join("c.txt"), b"new c").expect("write");
+    fs::write(project.join("new").join("d.txt"), b"d").expect("write");
+    let there = scene.to.join("პროექტი");
+    fs::create_dir_all(there.join("sub").join("deep")).expect("mkdir");
+    fs::write(there.join("a.txt"), b"old a").expect("write");
+    fs::write(there.join("x.txt"), b"x").expect("write");
+    fs::write(there.join("sub").join("deep").join("c.txt"), b"old c").expect("write");
+    let recycled = long_path(scene.dir.path()).expect("long path").join("bin");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&project], &scene.to),
+        &bin_in(&recycled),
+        &[
+            (Choice::Merge, false),
+            (Choice::Skip, false),
+            (Choice::Replace, false),
+        ],
+    );
+    assert_eq!(
+        questions,
+        [
+            asked("პროექტი", FOLDER_CHOICES),
+            asked("a.txt", FILE_CHOICES),
+            asked("c.txt", FILE_CHOICES)
+        ],
+        "the folders inside merge without asking"
+    );
+    assert_eq!(summary.failed, []);
+    assert_eq!(
+        (summary.files, summary.folders, summary.skipped),
+        (3, 1, 1),
+        "b, c and d; only the folder called new is made"
+    );
+    assert_eq!(fs::read(there.join("a.txt")).expect("read"), b"old a");
+    assert_eq!(fs::read(there.join("x.txt")).expect("read"), b"x");
+    assert_eq!(
+        fs::read(there.join("sub").join("deep").join("c.txt")).expect("read"),
+        b"new c"
+    );
+    assert_eq!(
+        fs::read(recycled.join("c.txt")).expect("in the bin"),
+        b"old c"
+    );
+    assert_eq!(
+        names(&scene.to),
+        [
+            "a.txt",
+            "b.txt",
+            "c.txt",
+            "d.txt",
+            "deep",
+            "new",
+            "sub",
+            "x.txt",
+            "პროექტი"
+        ]
+    );
+}
+
+#[test]
+fn keep_both_for_a_folder_puts_all_of_it_under_the_new_name() {
+    let scene = scene();
+    let project = scene.from.join("project");
+    fs::create_dir_all(project.join("sub")).expect("mkdir");
+    fs::write(project.join("a.txt"), b"a").expect("write");
+    fs::write(project.join("sub").join("b.txt"), b"b").expect("write");
+    fs::create_dir(scene.to.join("project")).expect("mkdir");
+    fs::write(scene.to.join("project").join("other.txt"), b"o").expect("write");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&project], &scene.to),
+        &keep,
+        &[(Choice::KeepBoth, false)],
+    );
+    assert_eq!(questions, [asked("project", FOLDER_CHOICES)]);
+    assert_eq!(summary.failed, []);
+    assert_eq!((summary.files, summary.folders), (2, 2));
+    let kept = scene.to.join("project (2)");
+    assert_eq!(
+        fs::read(kept.join("sub").join("b.txt")).expect("read"),
+        b"b"
+    );
+    assert_eq!(names(&scene.to.join("project")), ["other.txt"]);
+    assert_eq!(names(&kept), ["a.txt", "b.txt", "sub"]);
+}
+
+#[test]
+fn a_file_onto_a_folder_and_a_folder_onto_a_file_keep_both() {
+    let scene = scene();
+    let file = scene.from.join("x");
+    fs::write(&file, b"file").expect("write");
+    let folder = scene.from.join("y");
+    fs::create_dir(&folder).expect("mkdir");
+    fs::write(folder.join("f.txt"), b"f").expect("write");
+    fs::create_dir(scene.to.join("x")).expect("mkdir");
+    fs::write(scene.to.join("y"), b"a file").expect("write");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&file, &folder], &scene.to),
+        &keep,
+        &[(Choice::KeepBoth, false), (Choice::KeepBoth, false)],
+    );
+    assert_eq!(
+        questions,
+        [
+            asked("x", ONTO_FOLDER_CHOICES),
+            asked("y", ONTO_FILE_CHOICES)
+        ]
+    );
+    assert_eq!(summary.failed, []);
+    assert_eq!(fs::read(scene.to.join("x (2)")).expect("read"), b"file");
+    assert_eq!(
+        fs::read(scene.to.join("y (2)").join("f.txt")).expect("read"),
+        b"f"
+    );
+}
+
+#[test]
+fn copying_into_its_own_folder_keeps_both_and_never_replaces_itself() {
+    let scene = scene();
+    let file = scene.from.join("ნახაზი.dwg");
+    fs::write(&file, b"drawing").expect("write");
+    let folder = scene.from.join("project");
+    fs::create_dir(&folder).expect("mkdir");
+    fs::write(folder.join("a.txt"), b"a").expect("write");
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &[&file, &folder], &scene.from),
+        &keep,
+        &[(Choice::KeepBoth, false), (Choice::KeepBoth, false)],
+    );
+    assert_eq!(
+        questions,
+        [
+            asked("ნახაზი.dwg", ONTO_FOLDER_CHOICES),
+            asked("project", ONTO_FILE_CHOICES)
+        ]
+    );
+    assert_eq!(summary.failed, []);
+    assert_eq!(
+        names(&scene.from),
+        [
+            "a.txt",
+            "a.txt",
+            "project",
+            "project (2)",
+            "ნახაზი (2).dwg",
+            "ნახაზი.dwg"
+        ]
+    );
+}
+
+#[test]
+fn without_a_recycle_bin_replace_asks_again_and_then_deletes_for_good() {
+    let scene = scene();
+    let mut sources = Vec::new();
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        let file = scene.from.join(name);
+        fs::write(&file, b"new").expect("write");
+        fs::write(scene.to.join(name), b"old").expect("write");
+        sources.push(file);
+    }
+    let sources: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    let no_bin = |name: &str| Asked {
+        no_recycle_bin: true,
+        ..asked(name, NO_BIN_CHOICES)
+    };
+
+    let (summary, questions) = answering(
+        &job(Kind::Copy, &sources, &scene.to),
+        &keep,
+        &[
+            (Choice::Replace, true),
+            (Choice::Skip, false),
+            (Choice::Replace, true),
+        ],
+    );
+    assert_eq!(
+        questions,
+        [
+            asked("a.txt", FILE_CHOICES),
+            no_bin("a.txt"),
+            no_bin("b.txt")
+        ],
+        "c.txt goes as b.txt did"
+    );
+    assert_eq!((summary.files, summary.skipped), (2, 1));
+    assert_eq!(fs::read(scene.to.join("a.txt")).expect("read"), b"old");
+    assert_eq!(fs::read(scene.to.join("b.txt")).expect("read"), b"new");
+    assert_eq!(fs::read(scene.to.join("c.txt")).expect("read"), b"new");
+    assert_eq!(
+        names(&scene.to),
+        ["a.txt", "b.txt", "c.txt"],
+        "no temporary file"
+    );
+}
+
+#[test]
+fn cancelling_while_the_job_asks_ends_it_and_replaces_nothing() {
+    let scene = scene();
+    let source = scene.from.join("a.txt");
+    fs::write(&source, b"new").expect("write");
+    let target = scene.to.join("a.txt");
+    fs::write(&target, b"old").expect("write");
+    let control = Control::new();
+    let summary = run(
+        &job(Kind::Copy, &[&source], &scene.to),
+        &control,
+        &keep,
+        |event| {
+            if let Event::Conflict(_) = event {
+                control.cancel();
+            }
+        },
+    )
+    .expect("starts");
+    assert_eq!(summary.status, Status::Cancelled);
+    assert_eq!(fs::read(&target).expect("read"), b"old");
+    assert_eq!(names(&scene.to), ["a.txt"]);
+}
+
+#[test]
+fn a_move_by_renaming_replaces_merges_and_skips() {
+    let scene = scene();
+    let file = scene.from.join("a.txt");
+    fs::write(&file, b"new a").expect("write");
+    let skipped = scene.from.join("s.txt");
+    fs::write(&skipped, b"mine").expect("write");
+    let project = scene.from.join("project");
+    fs::create_dir_all(project.join("sub")).expect("mkdir");
+    fs::write(project.join("sub").join("b.txt"), b"new b").expect("write");
+    fs::write(project.join("c.txt"), b"c").expect("write");
+    fs::write(scene.to.join("a.txt"), b"old a").expect("write");
+    fs::write(scene.to.join("s.txt"), b"theirs").expect("write");
+    let there = scene.to.join("project");
+    fs::create_dir_all(there.join("sub")).expect("mkdir");
+    fs::write(there.join("sub").join("b.txt"), b"old b").expect("write");
+    let recycled = long_path(scene.dir.path()).expect("long path").join("bin");
+
+    let (summary, questions) = answering(
+        &job(Kind::Move, &[&file, &skipped, &project], &scene.to),
+        &bin_in(&recycled),
+        &[
+            (Choice::Replace, false),
+            (Choice::Skip, false),
+            (Choice::Merge, false),
+            (Choice::KeepBoth, false),
+        ],
+    );
+    assert_eq!(
+        questions,
+        [
+            asked("a.txt", FILE_CHOICES),
+            asked("s.txt", FILE_CHOICES),
+            asked("project", FOLDER_CHOICES),
+            asked("b.txt", FILE_CHOICES)
+        ],
+        "sub merges without asking"
+    );
+    assert_eq!(summary.failed, []);
+    assert_eq!(summary.skipped, 1);
+    assert_eq!(fs::read(scene.to.join("a.txt")).expect("read"), b"new a");
+    assert_eq!(fs::read(recycled.join("a.txt")).expect("read"), b"old a");
+    assert_eq!(fs::read(scene.to.join("s.txt")).expect("read"), b"theirs");
+    assert_eq!(fs::read(&skipped).expect("stays"), b"mine");
+    assert_eq!(
+        fs::read(there.join("sub").join("b (2).txt")).expect("read"),
+        b"new b"
+    );
+    assert_eq!(names(&scene.from), ["s.txt"], "the merged folders went");
+    assert_eq!(
+        names(&scene.to),
+        [
+            "a.txt",
+            "b (2).txt",
+            "b.txt",
+            "c.txt",
+            "project",
+            "s.txt",
+            "sub"
+        ]
     );
 }

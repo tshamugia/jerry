@@ -249,7 +249,7 @@ mod tests {
     use super::*;
     use crate::path::long_path;
     use crate::transfer::Kind;
-    use crate::transfer::queue::TransferState;
+    use crate::transfer::queue::{NoShell, TransferState};
 
     #[test]
     fn a_jerry_starting_lists_what_the_one_before_left_and_tidies_up() {
@@ -295,7 +295,7 @@ mod tests {
         let own = storage.journal_queue(NOW, &job, NOW).unwrap();
 
         let journal = StorageJournal::new(Mutex::new(storage), NOW);
-        let queue = Queue::start(true, Arc::new(()), |_| {});
+        let queue = Queue::start(true, Arc::new(()), Arc::new(NoShell), |_| {});
         assert_eq!(journal.recover(&queue), 1);
         let jobs = queue.list().jobs;
         assert_eq!(jobs.len(), 1, "not this Jerry's own job");

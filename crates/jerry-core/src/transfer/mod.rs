@@ -6,8 +6,10 @@
 //!
 //! - A file is written as `name.ext.jerrypart` (hidden) and gets its final name only once it is
 //!   complete and its size checked, so a half-written file never has the final name.
-//! - The final name never replaces anything: an existing item at the destination fails that item.
-//!   Choosing Replace, Skip or Keep both comes with the conflict window (#51).
+//! - The final name never replaces anything. A name that is taken is a [`conflict`]: the job asks
+//!   ([`Event::Conflict`]) and waits for the answer, unless "Apply to all" answered it already.
+//!   Replace sends the file there to the Recycle Bin ([`Bin`]) once the copy is complete, and only
+//!   then the copy takes the name (rule 3).
 //! - A move across volumes deletes each source file only after its copy is complete, flushed to
 //!   disk and checked, and only if the source didn't change meanwhile. A cancelled move leaves
 //!   every file in exactly one place.
@@ -21,6 +23,7 @@
 //!
 //! Everything here is blocking IO: run it on a background thread, in `job::run_job`.
 
+pub mod conflict;
 mod control;
 mod copy;
 mod execute;
@@ -34,6 +37,8 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
+use conflict::Policy;
+pub use conflict::{Answer, Bin, Choice, Conflict};
 pub use control::Control;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -98,6 +103,9 @@ pub enum Event<'a> {
     /// The job begins to write a file: its temporary file is there and empty, or a link is about
     /// to be made. The copy goes on once this returns, so what hears it can write it down first.
     Writing(&'a journal::Writing<'a>),
+    /// A name the job writes is taken, and its policy has no answer. The job waits for
+    /// [`Control::answer`], which may come while this is heard, or for a cancel.
+    Conflict(&'a Conflict<'a>),
 }
 
 /// What a job that Jerry didn't finish knew as it stopped, for [`resume`].
@@ -140,10 +148,14 @@ pub struct Summary {
     pub folders: u64,
     /// Bytes of the files copied or moved by copying.
     pub bytes: u64,
+    /// Files and links left where they were because their name was taken (Skip).
+    pub skipped: u64,
     pub failed: Vec<Failure>,
     kind: Kind,
     destination: PathBuf,
     options: Options,
+    /// What "Apply to all" answered: [`retry`] keeps it.
+    policy: Policy,
     /// Items an interrupted job never got to: `(source, target)`.
     pending: Vec<(PathBuf, PathBuf)>,
     /// A move: source folders that stayed because something in them did, deepest first.
@@ -175,7 +187,8 @@ impl Default for Options {
 }
 
 /// Runs `job` to its end on this thread and returns what it did. `observer` hears about it as it
-/// goes; `control` pauses and cancels it from another thread.
+/// goes; `control` pauses, cancels and answers its conflicts from another thread. A file that
+/// Replace replaces goes to `bin`.
 ///
 /// Fails, with nothing changed, when the job can't start: [`IntoItself`], [`NoSpace`] (with what
 /// it needs and what is free), a destination that doesn't exist, or [`Cancelled`] while counting.
@@ -187,20 +200,29 @@ impl Default for Options {
 pub fn run(
     job: &Job,
     control: &Control,
+    bin: &dyn Bin,
     mut observer: impl FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
-    run_with(job, Options::default(), control, &mut observer)
+    run_with(job, Options::default(), control, bin, &mut observer)
 }
 
 fn run_with(
     job: &Job,
     options: Options,
     control: &Control,
+    bin: &dyn Bin,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
     observer(Event::Phase(Phase::Counting));
     let plan = plan::build(job, options, None, control, observer)?;
-    start(plan, &job.destination, options, control, observer)
+    let run = Turn {
+        destination: &job.destination,
+        options,
+        policy: Policy::default(),
+        control,
+        bin,
+    };
+    start(plan, &run, observer)
 }
 
 /// Carries on `job`, which a Jerry started and didn't finish, as [`run`] would but from where it
@@ -212,15 +234,18 @@ fn run_with(
 ///   (`resume.writing`), if its copy is complete, only has its source removed, and only if that
 ///   source is unchanged.
 ///
-/// Anything else already there fails as with [`run`]: nothing is replaced. The temporary file the
-/// job left isn't this function's: remove it first ([`journal::remove_part`]).
+/// Anything else already there is a conflict, as with [`run`]; a copy's file that is there under
+/// a name Keep both gave it counts as done too. The policy of "Apply to all" isn't known to a
+/// Jerry that stopped, so the resumed job asks again. The temporary file the job left isn't this
+/// function's: remove it first ([`journal::remove_part`]).
 pub fn resume(
     job: &Job,
     resume: &Resume,
     control: &Control,
+    bin: &dyn Bin,
     mut observer: impl FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
-    resume_with(job, resume, Options::default(), control, &mut observer)
+    resume_with(job, resume, Options::default(), control, bin, &mut observer)
 }
 
 fn resume_with(
@@ -228,51 +253,63 @@ fn resume_with(
     resume: &Resume,
     options: Options,
     control: &Control,
+    bin: &dyn Bin,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
     observer(Event::Phase(Phase::Counting));
     let plan = plan::build(job, options, Some(resume), control, observer)?;
-    start(plan, &job.destination, options, control, observer)
+    let run = Turn {
+        destination: &job.destination,
+        options,
+        policy: Policy::default(),
+        control,
+        bin,
+    };
+    start(plan, &run, observer)
 }
 
 /// Tries again what `summary` lists as failed and, after an interruption, what the job never got
-/// to. A move's copies that are already complete only have their sources removed. Fails like
-/// [`run`] if it can't start.
+/// to, with what "Apply to all" answered before. A move's copies that are already complete only
+/// have their sources removed. Fails like [`run`] if it can't start.
 pub fn retry(
     summary: &Summary,
     control: &Control,
+    bin: &dyn Bin,
     mut observer: impl FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
     let observer: &mut dyn FnMut(Event<'_>) = &mut observer;
     observer(Event::Phase(Phase::Counting));
     let plan = plan::for_retry(summary, control, observer)?;
-    start(
-        plan,
-        &summary.destination,
-        summary.options,
+    let run = Turn {
+        destination: &summary.destination,
+        options: summary.options,
+        policy: summary.policy,
         control,
-        observer,
-    )
+        bin,
+    };
+    start(plan, &run, observer)
+}
+
+/// What one turn of a job works with besides its plan.
+struct Turn<'a> {
+    destination: &'a Path,
+    options: Options,
+    /// What "Apply to all" answered so far.
+    policy: Policy,
+    control: &'a Control,
+    bin: &'a dyn Bin,
 }
 
 fn start(
     plan: plan::Plan,
-    destination: &Path,
-    options: Options,
-    control: &Control,
+    turn: &Turn<'_>,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Summary, JerryError> {
     // What counting found, also when it was too quick to report as it went: the journal writes
     // the totals down with the first file.
     observer(Event::Counted(&plan.tally));
     observer(Event::Phase(Phase::CheckingSpace));
-    plan::check_space(destination, plan.tally.bytes)?;
+    plan::check_space(turn.destination, plan.tally.bytes)?;
     observer(Event::Phase(Phase::Working));
-    Ok(execute::execute(
-        plan,
-        destination,
-        options,
-        control,
-        observer,
-    ))
+    Ok(execute::execute(plan, turn, observer))
 }

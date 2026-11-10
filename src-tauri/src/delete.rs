@@ -14,7 +14,7 @@
 //! asked. What went to the Recycle Bin is kept in memory for Undo (#56).
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
@@ -64,7 +64,8 @@ pub struct DeleteFailure {
     pub error: JerryError,
 }
 
-/// An item Del sent to the Recycle Bin: where it was and where it is now. Undo (#56) puts it back.
+/// An item Del or a transfer's Replace sent to the Recycle Bin: where it was and where it is now.
+/// Undo (#56) puts it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recycled {
     pub original: PathBuf,
@@ -84,6 +85,8 @@ struct Inner {
     measures: Mutex<HashMap<u32, Arc<AtomicBool>>>,
     /// What each recycle sent to the Recycle Bin, newest last.
     recycled: Mutex<VecDeque<Vec<Recycled>>>,
+    /// The files transfers' Replace sent to the Recycle Bin, newest last.
+    replaced: Mutex<VecDeque<Recycled>>,
     /// Windows' system folders (`jerry_win::folders::system_folders`), read once.
     system: OnceLock<Vec<PathBuf>>,
 }
@@ -94,8 +97,46 @@ impl Deleting {
         lock(&self.0.recycled).iter().cloned().collect()
     }
 
+    /// The last files transfers replaced, as they went to the Recycle Bin, oldest first. Undo
+    /// (#56) puts them back.
+    pub fn replaced(&self) -> Vec<Recycled> {
+        lock(&self.0.replaced).iter().cloned().collect()
+    }
+
     fn shell(&self) -> &ShellPool {
         self.0.shell.get_or_init(ShellPool::new)
+    }
+
+    /// Sends `path`, a file a transfer's Replace replaces (#51), to the Recycle Bin on this
+    /// pool, and waits for it: call it on a transfer's thread. `NoRecycleBin` where none takes
+    /// it, and it stays then.
+    pub fn recycle_replaced(&self, path: &Path) -> Result<(), JerryError> {
+        let paths = vec![path.to_owned()];
+        let outcomes = self
+            .shell()
+            .run("replace", RECYCLE_TIMEOUT, move || recycle(&paths))?;
+        match outcomes.into_iter().next() {
+            Some(Outcome::Recycled { in_bin }) => {
+                tracing::info!(
+                    found = in_bin.is_some(),
+                    "a replaced file went to the Recycle Bin"
+                );
+                if let Some(in_bin) = in_bin {
+                    let mut replaced = lock(&self.0.replaced);
+                    if replaced.len() == RECORDED {
+                        replaced.pop_front();
+                    }
+                    replaced.push_back(Recycled {
+                        original: path.to_owned(),
+                        in_bin,
+                    });
+                }
+                Ok(())
+            }
+            Some(Outcome::NoRecycleBin) => Err(JerryError::new(ErrorCode::NoRecycleBin).at(path)),
+            Some(Outcome::Failed(error)) => Err(error),
+            None => Err(JerryError::internal().at(path)),
+        }
     }
 
     /// Windows' system folders, which neither a delete nor a move takes unconfirmed.

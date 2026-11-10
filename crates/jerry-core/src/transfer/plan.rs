@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
 
+use super::conflict::kept_names;
 use super::control::{Control, Flow};
 use super::copy::stamp;
 use super::{Event, Failure, Job, Kind, Options, Resume, Summary};
@@ -24,7 +25,8 @@ pub(super) struct Entry {
     pub(super) parent: Option<usize>,
     /// Why a folder couldn't be read.
     pub(super) unreadable: Option<JerryError>,
-    /// A resumed job: the folder is there already, so it is filled, not made, and never removed.
+    /// The folder is there already, so it is filled, not made, and never removed: a resumed
+    /// job's, or one the user chose to merge into (#51).
     pub(super) merge: bool,
 }
 
@@ -89,8 +91,8 @@ impl Plan {
         if may_exist && let Some(resuming) = &self.resuming {
             match already(self.kind, resuming, &item, &target) {
                 Already::Done => return,
-                Already::Copied => {
-                    self.removals.push((item, target));
+                Already::Copied(copy) => {
+                    self.removals.push((item, copy));
                     return;
                 }
                 Already::No => {}
@@ -160,43 +162,58 @@ impl Plan {
 
 /// What a resumed job finds at a file's target.
 enum Already {
-    /// Nothing of its own: the file is written as by any job, and fails if the name is taken.
+    /// Nothing of its own: the file is written as by any job, and a name that is taken is a
+    /// conflict.
     No,
     /// A copy that is there.
     Done,
-    /// A move whose copy is complete: only its source has to go.
-    Copied,
+    /// A move whose copy is complete here: only its source has to go.
+    Copied(PathBuf),
 }
 
 /// What a resumed job does with `item`, whose `target` may be there already. A copy takes a file
-/// with the source's size and date for done: copying keeps the date. A move only takes the file
-/// it was writing as it stopped for its own, since nothing else it copied has its source left.
+/// with the source's size and date for done (copying keeps the date), at the target or under a
+/// name Keep both gives it. A move only takes the file it was writing as it stopped for its own,
+/// wherever that went, since nothing else it copied has its source left.
 fn already(kind: Kind, resuming: &Resume, item: &Item, target: &Path) -> Already {
-    let Ok(there) = stamp(target) else {
-        return Already::No;
-    };
-    let was_writing = resuming
-        .writing
-        .as_ref()
-        .is_some_and(|(source, goal)| *source == item.path && goal == target);
     match kind {
         // Its final name came only once it was complete and checked; the removal checks again
         // that the source didn't change.
-        Kind::Move if was_writing => Already::Copied,
-        Kind::Move => Already::No,
-        Kind::Copy if was_writing => Already::Done,
-        Kind::Copy if item.link => {
-            if there.attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
-                Already::Done
-            } else {
-                Already::No
+        Kind::Move => match &resuming.writing {
+            Some((source, copy)) if *source == item.path && is_copy_of(item, copy) => {
+                Already::Copied(copy.clone())
             }
-        }
-        Kind::Copy => match stamp(&item.path) {
-            Ok(source) if source.same_content(&there) => Already::Done,
             _ => Already::No,
         },
+        Kind::Copy if item.link => match stamp(target) {
+            Ok(there) if there.attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 => Already::Done,
+            _ => Already::No,
+        },
+        Kind::Copy => {
+            let Ok(source) = stamp(&item.path) else {
+                return Already::No;
+            };
+            let candidates = std::iter::once(target.to_owned()).chain(kept_names(target, false));
+            for candidate in candidates {
+                match stamp(&candidate) {
+                    Ok(there) if source.same_content(&there) => return Already::Done,
+                    Ok(_) => {}
+                    // Keep both takes the first free name, so none comes after it.
+                    Err(_) => return Already::No,
+                }
+            }
+            Already::No
+        }
     }
+}
+
+/// Whether `copy` is there and is a complete copy of `item`: a link at all, a file with its size
+/// and date. A file Replace was about to replace isn't.
+fn is_copy_of(item: &Item, copy: &Path) -> bool {
+    let Ok(there) = stamp(copy) else {
+        return false;
+    };
+    item.link || stamp(&item.path).is_ok_and(|source| source.same_content(&there))
 }
 
 /// Whether `path` is a folder, and not a link to one.
