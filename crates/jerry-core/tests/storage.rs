@@ -79,6 +79,7 @@ fn a_new_database_has_every_table_in_wal_mode() {
             "recent_folders",
             "session",
             "settings",
+            "transfer_journal",
         ]
     );
 }

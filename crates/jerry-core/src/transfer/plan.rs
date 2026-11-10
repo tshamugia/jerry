@@ -4,8 +4,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
 use super::control::{Control, Flow};
-use super::{Event, Failure, Job, Kind, Options, Summary};
+use super::copy::stamp;
+use super::{Event, Failure, Job, Kind, Options, Resume, Summary};
 use crate::delete::{Item, MEASURE_PROGRESS, Tally, children, is_within, probe};
 use crate::error::{ErrorCode, JerryError};
 use crate::space::folder_space;
@@ -21,6 +24,8 @@ pub(super) struct Entry {
     pub(super) parent: Option<usize>,
     /// Why a folder couldn't be read.
     pub(super) unreadable: Option<JerryError>,
+    /// A resumed job: the folder is there already, so it is filled, not made, and never removed.
+    pub(super) merge: bool,
 }
 
 impl Entry {
@@ -45,10 +50,12 @@ pub(super) struct Plan {
     pub(super) leftovers: Vec<Item>,
     /// What `entries` will write; a folder that is renamed counts as nothing.
     pub(super) tally: Tally,
+    /// A job that Jerry didn't finish: what is at the destination already may be its own.
+    pub(super) resuming: Option<Resume>,
 }
 
 impl Plan {
-    pub(super) fn new(kind: Kind) -> Self {
+    pub(super) fn new(kind: Kind, resuming: Option<Resume>) -> Self {
         Self {
             kind,
             renames: Vec::new(),
@@ -57,11 +64,14 @@ impl Plan {
             failed: Vec::new(),
             leftovers: Vec::new(),
             tally: Tally::default(),
+            resuming,
         }
     }
 
-    /// Adds `other`'s entries after this plan's. Nothing may have started on the entries yet.
+    /// Adds `other`'s entries and removals after this plan's. Nothing may have started on either
+    /// yet.
     pub(super) fn absorb(&mut self, other: Self) {
+        self.removals.extend(other.removals);
         let offset = self.entries.len();
         self.entries
             .extend(other.entries.into_iter().map(|entry| Entry {
@@ -73,7 +83,19 @@ impl Plan {
         self.tally.bytes += other.tally.bytes;
     }
 
-    fn push_leaf(&mut self, item: Item, target: PathBuf, parent: Option<usize>) {
+    /// Adds a file or link. `may_exist`: a resumed job, and the folder it goes into was there
+    /// already, so its target may be too.
+    fn push_leaf(&mut self, item: Item, target: PathBuf, parent: Option<usize>, may_exist: bool) {
+        if may_exist && let Some(resuming) = &self.resuming {
+            match already(self.kind, resuming, &item, &target) {
+                Already::Done => return,
+                Already::Copied => {
+                    self.removals.push((item, target));
+                    return;
+                }
+                Already::No => {}
+            }
+        }
         self.tally.files += 1;
         self.tally.bytes += item.size;
         self.entries.push(Entry {
@@ -81,6 +103,7 @@ impl Plan {
             target,
             parent,
             unreadable: None,
+            merge: false,
         });
     }
 
@@ -93,15 +116,17 @@ impl Plan {
         target: PathBuf,
         counter: &mut Counter<'_, '_>,
     ) -> Result<(), JerryError> {
+        let resuming = self.resuming.is_some();
         if !item.is_dir() || item.link {
-            self.push_leaf(item, target, None);
+            self.push_leaf(item, target, None, resuming);
             return Ok(());
         }
+        let merge = resuming && is_folder(&target);
         // A folder's entry goes on the list when it comes off this stack, so the items of a
         // folder are together: when a job stops, only the folders around the current item are
         // still being filled.
-        let mut folders = vec![(item, target, None)];
-        while let Some((folder, target, parent)) = folders.pop() {
+        let mut folders = vec![(item, target, None, merge)];
+        while let Some((folder, target, parent, merge)) = folders.pop() {
             counter.checkpoint()?;
             let index = self.entries.len();
             let listing = children(&folder.path);
@@ -112,6 +137,7 @@ impl Plan {
                 target: target.clone(),
                 parent,
                 unreadable,
+                merge,
             });
             for child in listing.unwrap_or_default() {
                 let Some(name) = child.path.file_name() else {
@@ -119,15 +145,63 @@ impl Plan {
                 };
                 let child_target = target.join(name);
                 if child.is_dir() && !child.link {
-                    folders.push((child, child_target, Some(index)));
+                    // Only what is in a folder that was there can be there.
+                    let merge = merge && is_folder(&child_target);
+                    folders.push((child, child_target, Some(index), merge));
                 } else {
-                    self.push_leaf(child, child_target, Some(index));
+                    self.push_leaf(child, child_target, Some(index), merge);
                 }
             }
             counter.tick(&self.tally);
         }
         Ok(())
     }
+}
+
+/// What a resumed job finds at a file's target.
+enum Already {
+    /// Nothing of its own: the file is written as by any job, and fails if the name is taken.
+    No,
+    /// A copy that is there.
+    Done,
+    /// A move whose copy is complete: only its source has to go.
+    Copied,
+}
+
+/// What a resumed job does with `item`, whose `target` may be there already. A copy takes a file
+/// with the source's size and date for done: copying keeps the date. A move only takes the file
+/// it was writing as it stopped for its own, since nothing else it copied has its source left.
+fn already(kind: Kind, resuming: &Resume, item: &Item, target: &Path) -> Already {
+    let Ok(there) = stamp(target) else {
+        return Already::No;
+    };
+    let was_writing = resuming
+        .writing
+        .as_ref()
+        .is_some_and(|(source, goal)| *source == item.path && goal == target);
+    match kind {
+        // Its final name came only once it was complete and checked; the removal checks again
+        // that the source didn't change.
+        Kind::Move if was_writing => Already::Copied,
+        Kind::Move => Already::No,
+        Kind::Copy if was_writing => Already::Done,
+        Kind::Copy if item.link => {
+            if there.attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+                Already::Done
+            } else {
+                Already::No
+            }
+        }
+        Kind::Copy => match stamp(&item.path) {
+            Ok(source) if source.same_content(&there) => Already::Done,
+            _ => Already::No,
+        },
+    }
+}
+
+/// Whether `path` is a folder, and not a link to one.
+fn is_folder(path: &Path) -> bool {
+    probe(path).is_ok_and(|item| item.is_dir() && !item.link)
 }
 
 /// Reports counting as it goes, and stops it when the job is cancelled.
@@ -161,15 +235,16 @@ impl<'a, 'o> Counter<'a, 'o> {
     }
 }
 
-/// The plan for `job`. Fails if the job can't start.
+/// The plan for `job`, or for the rest of it with `resuming`. Fails if the job can't start.
 pub(super) fn build(
     job: &Job,
     options: Options,
+    resuming: Option<&Resume>,
     control: &Control,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Plan, JerryError> {
     let destination = real_folder(&job.destination)?;
-    let mut plan = Plan::new(job.kind);
+    let mut plan = Plan::new(job.kind, resuming.cloned());
     // All of them first: a job that is blocked must not have counted for nothing.
     let mut items = Vec::with_capacity(job.sources.len());
     for source in &job.sources {
@@ -182,6 +257,12 @@ pub(super) fn build(
                 check_not_into_itself(&item, &destination)?;
                 items.push((item, target));
             }
+            // It was moved before Jerry stopped.
+            Err(error)
+                if resuming.is_some()
+                    && job.kind == Kind::Move
+                    && error.code == ErrorCode::NotFound
+                    && stamp(&target).is_ok() => {}
             Err(error) => plan.failed.push(Failure {
                 source: source.clone(),
                 target,
@@ -211,7 +292,7 @@ pub(super) fn for_retry(
     control: &Control,
     observer: &mut dyn FnMut(Event<'_>),
 ) -> Result<Plan, JerryError> {
-    let mut plan = Plan::new(summary.kind);
+    let mut plan = Plan::new(summary.kind, summary.resuming.clone());
     plan.leftovers.clone_from(&summary.leftovers);
     let root = volume::root(&summary.destination).ok();
     let mut counter = Counter::new(control, observer);

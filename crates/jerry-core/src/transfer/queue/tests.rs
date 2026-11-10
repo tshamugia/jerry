@@ -13,6 +13,7 @@ use windows::core::PCWSTR;
 
 use super::*;
 use crate::transfer::control::Flow;
+use crate::transfer::journal::Writing;
 use crate::transfer::{Kind, Options, Progress};
 
 /// What a fake job does.
@@ -20,6 +21,8 @@ use crate::transfer::{Kind, Options, Progress};
 enum Script {
     /// Reports some progress and ends well.
     Finish,
+    /// Begins a file whose temporary file is this, then ends well.
+    Writes(PathBuf),
     /// Runs until the test says so.
     Hold(Arc<AtomicBool>),
     /// Stopped by its volume going away; the next turn finishes.
@@ -68,6 +71,7 @@ fn summary(status: Status, files: u64, failed: Vec<Failure>) -> Summary {
         options: Options::default(),
         pending: Vec::new(),
         leftovers: Vec::new(),
+        resuming: None,
     }
 }
 
@@ -109,6 +113,15 @@ impl Fake {
             .unwrap_or(Script::Finish);
         let result = match script {
             Script::Finish => self.finish_it(observer),
+            Script::Writes(part) => {
+                Self::report(observer, 1);
+                observer(Event::Writing(&Writing {
+                    source: Path::new(r"\\?\C:\from\b.txt"),
+                    target: Path::new(r"\\?\C:\to\b.txt"),
+                    part: Some(&part),
+                }));
+                self.finish_it(observer)
+            }
             Script::Hold(release) => {
                 Self::report(observer, 1);
                 loop {
@@ -193,6 +206,24 @@ impl Engine for Arc<Fake> {
         self.perform(&name, true, control, observer)
     }
 
+    fn resume(
+        &self,
+        job: &Job,
+        resume: &Resume,
+        control: &Control,
+        observer: &mut dyn FnMut(Event<'_>),
+    ) -> Result<Summary, JerryError> {
+        let name = name_of(&job.destination);
+        let writing = resume
+            .writing
+            .as_ref()
+            .map_or_else(String::new, |(source, _)| {
+                format!(" at {}", name_of(source))
+            });
+        self.note("resume", &format!("{name}{writing}"));
+        self.perform(&name, true, control, observer)
+    }
+
     fn lane(&self, destination: &Path) -> Lane {
         // `disk1\job`: the parent's name says which disk.
         let disk = destination
@@ -220,8 +251,65 @@ fn volume_of(path: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(format!(r"\\?\{letter}:\")))
 }
 
+/// A journal that notes what it hears: `queued 1`, `started 1 3/10`, `writing 1 b.txt.jerrypart
+/// 3/10`, `part gone 1`, `ended 1`. Records count from 1.
+#[derive(Default)]
+struct Notes {
+    lines: Mutex<Vec<String>>,
+    records: Mutex<i64>,
+}
+
+impl Notes {
+    fn lines(&self) -> Vec<String> {
+        lock(&self.lines).clone()
+    }
+
+    fn note(&self, line: String) {
+        lock(&self.lines).push(line);
+    }
+}
+
+impl Journal for Notes {
+    fn queued(&self, _: &Job) -> Option<i64> {
+        let mut records = lock(&self.records);
+        *records += 1;
+        self.note(format!("queued {records}"));
+        Some(*records)
+    }
+
+    fn started(&self, record: i64, counts: &Counts) {
+        let Counts {
+            files_done,
+            files_total,
+            ..
+        } = counts;
+        self.note(format!("started {record} {files_done}/{files_total}"));
+    }
+
+    fn writing(&self, record: i64, writing: &Writing<'_>, counts: &Counts) {
+        let part = writing.part.map_or_else(String::new, name_of);
+        let Counts {
+            files_done,
+            files_total,
+            ..
+        } = counts;
+        self.note(format!(
+            "writing {record} {part} {files_done}/{files_total}"
+        ));
+    }
+
+    fn part_gone(&self, record: i64) {
+        self.note(format!("part gone {record}"));
+    }
+
+    fn ended(&self, record: i64) {
+        self.note(format!("ended {record}"));
+    }
+}
+
 struct Scene {
     fake: Arc<Fake>,
+    journal: Arc<Notes>,
     queue: Queue,
     notices: Arc<Mutex<Vec<Notice>>>,
 }
@@ -233,13 +321,21 @@ const FAST: Timing = Timing {
 
 fn scene(parallel: bool) -> Scene {
     let fake = Arc::new(Fake::default());
+    let journal = Arc::new(Notes::default());
     let notices = Arc::new(Mutex::new(Vec::new()));
     let sink = notices.clone();
-    let queue = Queue::with(fake.clone(), parallel, FAST, move |notice| {
-        lock(&sink).push(notice);
-    });
+    let queue = Queue::with(
+        fake.clone(),
+        parallel,
+        FAST,
+        journal.clone(),
+        move |notice| {
+            lock(&sink).push(notice);
+        },
+    );
     Scene {
         fake,
+        journal,
         queue,
         notices,
     }
@@ -939,7 +1035,7 @@ fn a_drive_that_goes_away_between_files_waits_and_goes_on_when_it_is_back() {
         .collect();
     let mut letter = Letter::over(&disk);
 
-    let queue = Queue::with(System, true, FAST, |_| {});
+    let queue = Queue::with(System, true, FAST, Arc::new(()), |_| {});
     let id = queue.enqueue(Job {
         kind: Kind::Copy,
         sources,
@@ -1004,9 +1100,9 @@ fn a_drive_that_goes_away_between_files_waits_and_goes_on_when_it_is_back() {
     let (parts, files): (Vec<&String>, Vec<&String>) =
         names.iter().partition(|name| name.ends_with(".jerrypart"));
     assert_eq!(files.len(), FILES, "every file, once");
-    // The file being finished as the drive went can't be tidied away without the drive. Only the
-    // journal removes a `.jerrypart` later (#50, data safety rule 7).
-    assert!(parts.len() <= 1, "{parts:?}");
+    // The file being finished as the drive went couldn't be tidied away without the drive; the
+    // turn after Resume removed it (data safety rule 7).
+    assert!(parts.is_empty(), "{parts:?}");
     let done = view().progress;
     assert_eq!(
         (done.files_done, done.files_total),
@@ -1033,7 +1129,7 @@ fn a_real_job_goes_through_the_queue() {
 
     let notices = Arc::new(Mutex::new(Vec::new()));
     let sink = notices.clone();
-    let queue = Queue::start(true, move |notice| lock(&sink).push(notice));
+    let queue = Queue::start(true, Arc::new(()), move |notice| lock(&sink).push(notice));
     let id = queue.enqueue(Job {
         kind: Kind::Move,
         sources: vec![file.clone()],
@@ -1060,4 +1156,179 @@ fn a_real_job_goes_through_the_queue() {
         .expect("it ended");
     assert_eq!(ended.files, 1);
     assert_eq!(ended.failed, []);
+}
+
+impl Scene {
+    fn wait_journal(&self, line: &str) {
+        self.wait_for(line, |scene| {
+            scene.journal.lines().iter().any(|each| each == line)
+        });
+    }
+}
+
+#[test]
+fn a_job_is_written_down_before_it_starts_and_as_it_ends() {
+    let scene = scene(true);
+    let release = scene.hold("a");
+    let id = scene.queue.enqueue(job(1, "a"));
+    scene.wait_log("run a");
+    assert_eq!(scene.journal.lines(), ["queued 1", "started 1 0/0"]);
+    release.store(true, Ordering::SeqCst);
+    scene.wait_state(id, &TransferState::Done);
+    scene.wait_journal("ended 1");
+    assert_eq!(
+        scene.journal.lines(),
+        ["queued 1", "started 1 0/0", "ended 1"]
+    );
+}
+
+#[test]
+fn a_file_a_job_begins_is_written_down_and_a_part_it_leaves_goes() {
+    let scene = scene(true);
+    let dir = tempfile::tempdir().expect("temp folder");
+    let part = crate::path::long_path(dir.path())
+        .expect("long path")
+        .join("b.txt.jerrypart");
+    // As if the engine couldn't remove it.
+    std::fs::write(&part, b"half").expect("write");
+    scene.script("a", Script::Writes(part.clone()));
+    let id = scene.queue.enqueue(job(1, "a"));
+    scene.wait_state(id, &TransferState::Done);
+    scene.wait_journal("ended 1");
+    assert_eq!(
+        scene.journal.lines(),
+        [
+            "queued 1",
+            "started 1 0/0",
+            "writing 1 b.txt.jerrypart 1/3",
+            "part gone 1",
+            "ended 1",
+        ]
+    );
+    assert!(!part.exists());
+}
+
+fn unfinished(record: i64, name: &str, started: bool) -> Unfinished {
+    let counts = Counts {
+        files_done: 3,
+        files_total: 10,
+        bytes_done: 30,
+        bytes_total: 100,
+    };
+    Unfinished {
+        record,
+        job: job(1, name),
+        started,
+        counts: if started { counts } else { Counts::default() },
+        writing: started.then(|| {
+            (
+                PathBuf::from(r"\\?\C:\from\a.txt"),
+                PathBuf::from(format!(r"\\?\C:\disk1\{name}\a.txt")),
+            )
+        }),
+        part: None,
+    }
+}
+
+#[test]
+fn a_job_a_jerry_did_not_finish_waits_for_resume_and_carries_on() {
+    let scene = scene(true);
+    scene
+        .queue
+        .recover(vec![unfinished(7, "a", true), unfinished(8, "b", false)]);
+    let jobs = scene.queue.list().jobs;
+    let (a, b) = (jobs[0].id, jobs[1].id);
+    assert_eq!(jobs[0].state, TransferState::Unfinished);
+    assert_eq!(jobs[1].state, TransferState::Unfinished);
+    let progress = &jobs[0].progress;
+    assert_eq!((progress.files_done, progress.files_total), (3, 10));
+    assert_eq!(progress.file.as_deref(), Some(r"C:\from\a.txt"));
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(scene.log().is_empty(), "nothing starts by itself");
+    assert_eq!(
+        scene.queue.on_volume(Path::new(r"\\?\C:\")),
+        2,
+        "Eject hears of them"
+    );
+
+    scene
+        .queue
+        .control(Action::Resume, Some(a))
+        .expect("resumes");
+    scene.wait_state(a, &TransferState::Done);
+    assert_eq!(scene.log(), ["resume a at a.txt", "end a"]);
+    assert_eq!(scene.ended(a).files, 3 + 3, "before and now");
+    scene.wait_journal("ended 7");
+
+    scene
+        .queue
+        .control(Action::Resume, Some(b))
+        .expect("resumes");
+    scene.wait_state(b, &TransferState::Done);
+    assert_eq!(scene.log()[2], "run b", "it never began: a plain run");
+    scene.wait_journal("ended 8");
+    assert_eq!(
+        scene.journal.lines(),
+        ["started 7 3/10", "ended 7", "started 8 0/0", "ended 8"]
+    );
+}
+
+#[test]
+fn discarding_a_job_a_jerry_did_not_finish_ends_it_as_it_is() {
+    let scene = scene(true);
+    let dir = tempfile::tempdir().expect("temp folder");
+    let part = crate::path::long_path(dir.path())
+        .expect("long path")
+        .join("a.txt.jerrypart");
+    std::fs::write(&part, b"half").expect("write");
+    let mut left = unfinished(7, "a", true);
+    left.part = Some(part.clone());
+    scene.queue.recover(vec![left, unfinished(8, "b", false)]);
+    let ids: Vec<u32> = scene.queue.list().jobs.iter().map(|job| job.id).collect();
+    scene
+        .queue
+        .control(Action::Pause, Some(ids[0]))
+        .expect("does nothing");
+    assert_eq!(scene.state(ids[0]), TransferState::Unfinished);
+    scene
+        .queue
+        .control(Action::Cancel, Some(ids[0]))
+        .expect("discards");
+    assert_eq!(scene.state(ids[0]), TransferState::Cancelled);
+    assert_eq!(scene.ended(ids[0]).files, 3, "what it did stays");
+    assert!(!part.exists(), "its temporary file goes");
+    assert_eq!(scene.journal.lines(), ["part gone 7", "ended 7"]);
+    scene
+        .queue
+        .control(Action::Cancel, Some(ids[1]))
+        .expect("discards");
+    assert_eq!(scene.journal.lines(), ["part gone 7", "ended 7", "ended 8"]);
+    assert!(scene.log().is_empty());
+}
+
+#[test]
+fn the_part_a_jerry_left_goes_as_the_job_resumes() {
+    let scene = scene(true);
+    let dir = tempfile::tempdir().expect("temp folder");
+    let part = crate::path::long_path(dir.path())
+        .expect("long path")
+        .join("a.txt.jerrypart");
+    std::fs::write(&part, b"half").expect("write");
+    let mut left = unfinished(7, "a", true);
+    left.part = Some(part.clone());
+    scene.queue.recover(vec![left]);
+    let id = scene.queue.list().jobs[0].id;
+    assert!(part.exists(), "recover itself touches no file");
+
+    scene
+        .queue
+        .control(Action::Resume, Some(id))
+        .expect("resumes");
+    scene.wait_state(id, &TransferState::Done);
+    assert!(!part.exists());
+    scene.wait_journal("ended 7");
+    assert_eq!(
+        scene.journal.lines(),
+        ["part gone 7", "started 7 3/10", "ended 7"]
+    );
 }

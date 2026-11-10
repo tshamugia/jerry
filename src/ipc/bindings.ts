@@ -121,6 +121,16 @@ export const commands = {
 	 *  Paste without them, as Explorer does.
 	 */
 	clipboardHasFiles: () => __TAURI_INVOKE<boolean>("clipboard_has_files"),
+	/**  Windows' drag threshold (`SM_CXDRAG`, `SM_CYDRAG`), in CSS px. */
+	dragThreshold: () => __TAURI_INVOKE<DragThreshold>("drag_threshold"),
+	/**
+	 *  Drags entries `entries` of listing `listing` out of Jerry, with Windows' drag image, and
+	 *  resolves once the user drops or cancels (the page gets no `pointerup` after a drag). Call it
+	 *  while the mouse button is still down, once the pointer moved past `drag_threshold`; if the
+	 *  button is up by the time Windows gets to it, nothing happens. `NotFound` for an entry, a
+	 *  listing or a file that is gone.
+	 */
+	dragStart: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("drag_start", { listing, entries })),
 	/**
 	 *  Whether deleting `entries` of listing `listing` takes a system folder with it, so the UI asks
 	 *  again. Entries the listing no longer has don't count.
@@ -185,7 +195,8 @@ export const commands = {
 	transferEnqueue: (kind: TransferKind, listing: number, entries: number[], destination: TransferDestination, system: boolean) => typedError<number, JerryError>(__TAURI_INVOKE("transfer_enqueue", { kind, listing, entries, destination, system })),
 	/**
 	 *  Pauses, resumes or cancels job `job`, or every job with null. Resume also carries on a job
-	 *  that waits for its device, once its state says `ready`. `NotFound` for a job that isn't listed.
+	 *  that waits for its device, once its state says `ready`, and one Jerry didn't finish
+	 *  (`unfinished`); Cancel discards that one. `NotFound` for a job that isn't listed.
 	 */
 	transferControl: (action: TransferAction, job: number | null) => typedError<null, JerryError>(__TAURI_INVOKE("transfer_control", { action, job })),
 	/**  Puts the jobs of `order` first, in that order; the others follow as they were. */
@@ -502,6 +513,15 @@ export type Density = "comfortable" | "compact";
 export type DragAction = 
 /**  The Windows rule: move on the same drive, copy to another one. */
 "windows" | "copy" | "move";
+
+/**
+ *  Windows' drag threshold in CSS px: a press that moves farther than this with the button down
+ *  is a drag, not a click.
+ */
+export type DragThreshold = {
+	x: number,
+	y: number,
+};
 
 /**  A drive as the sidebar shows it. */
 export type Drive = {
@@ -1165,6 +1185,12 @@ export type TransferState =
  *  volume is back), so Resume does; Cancel ends it either way.
  */
 { kind: "waiting"; error: JerryError; ready: boolean } | 
+/**
+ *  Jerry closed before it finished (it crashed, or was ended). `progress` says how far it
+ *  came and `progress.file` what it was writing. Resume carries it on from there; Cancel
+ *  discards it, and what it did stays.
+ */
+{ kind: "unfinished" } | 
 /**  Everything was attempted. `progress.failed` says how many items didn't make it. */
 { kind: "done" } | { kind: "cancelled" } | 
 /**  It couldn't start. */

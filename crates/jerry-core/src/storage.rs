@@ -25,11 +25,13 @@ use crate::session::{FolderView, Session};
 use crate::settings::Settings;
 
 mod favorites;
+mod journal;
 
 /// The schema, one entry per version. Append only: a released migration never changes.
 const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("storage/migrations/0001-v0.1.sql")),
     M::up(include_str!("storage/migrations/0002-network-places.sql")),
+    M::up(include_str!("storage/migrations/0003-transfer-journal.sql")),
 ];
 
 /// The schema version this Jerry writes.
@@ -343,6 +345,10 @@ impl Storage {
         if !mode.eq_ignore_ascii_case("wal") {
             tracing::warn!(mode, "jerry.db isn't in WAL mode");
         }
+        // A commit doesn't wait for the disk: the transfer journal writes once per file. A Jerry
+        // that dies loses nothing it committed; a power cut can lose the last commits, never the
+        // file.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", true)?;
 
         let version = user_version(&conn)?;
@@ -561,6 +567,17 @@ mod tests {
         assert_eq!(user_version(&conn).expect("version"), 1);
         assert!(!tables(&conn).contains(&"extra".to_owned()), "rolled back");
         assert!(dir.path().join("jerry.db.v1.bak").exists());
+    }
+
+    #[test]
+    fn commits_dont_wait_for_the_disk() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let storage = Storage::open(&dir.path().join("jerry.db")).expect("opens");
+        let synchronous: i64 = storage
+            .conn
+            .pragma_query_value(None, "synchronous", |row| row.get(0))
+            .expect("reads");
+        assert_eq!(synchronous, 1, "NORMAL");
     }
 
     #[test]

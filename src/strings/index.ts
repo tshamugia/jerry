@@ -7,6 +7,7 @@ import { renameStrings } from "./rename";
 import { sessionStrings } from "./session";
 import { shellStrings } from "./shell";
 import { sidebarStrings } from "./sidebar";
+import { transferStrings } from "./transfers";
 import { updateStrings } from "./updates";
 
 const integer = new Intl.NumberFormat("en-US");
@@ -113,6 +114,8 @@ export const strings = {
     noMatch: "No items match the filter",
     loading: "Loading…",
     retry: "Retry",
+    /** A drag out of the list that couldn't start; the error says why. */
+    dragFailed: "Couldn't drag the files",
     /**
      * The list's context menu (right click, Shift+F10, the Menu key): on the selected items, or
      * on the folder itself (empty space). Its commands bring their titles and shortcuts.
@@ -266,6 +269,8 @@ export const strings = {
   sidebar: sidebarStrings,
   /** The notice about a new version (#46). */
   updates: updateStrings,
+  /** Copying and moving: the transfer queue and what a Jerry before left (v0.2). */
+  transfers: transferStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",

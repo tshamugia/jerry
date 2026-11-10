@@ -16,6 +16,12 @@
 //!   wait for, and Resume can be tried at once.
 //! - **Progress.** The engine reports every chunk; the UI hears at most [`PROGRESS_EVERY`], one
 //!   event for all running jobs.
+//! - **The journal.** Every job is written down as it is queued, as each turn starts and as each
+//!   file begins ([`journal`](super::journal)), always off the queue's lock. A job that a Jerry
+//!   didn't finish comes back with [`Queue::recover`], [`TransferState::Unfinished`]: Resume
+//!   carries it on from where it stopped, Cancel discards it. The temporary file a job leaves (a
+//!   volume went away as it was writing, a Jerry stopped) is removed as its next turn starts, or
+//!   as the turn ends if it can be.
 
 mod view;
 
@@ -33,7 +39,8 @@ pub use view::{
     TransferEnded, TransferFailure, TransferJob, TransferList, TransferProgress, TransferState,
 };
 
-use super::{Control, Event, Failure, Job, Phase, Status, Summary};
+use super::journal::{Counts, Journal, Unfinished, remove_part};
+use super::{Control, Event, Failure, Job, Phase, Resume, Status, Summary};
 use crate::delete::Tally;
 use crate::drives::quiet_errors;
 use crate::error::{ErrorCode, JerryError, display_path};
@@ -86,6 +93,14 @@ trait Engine: Send + Sync + 'static {
         observer: &mut dyn FnMut(Event<'_>),
     ) -> Result<Summary, JerryError>;
 
+    fn resume(
+        &self,
+        job: &Job,
+        resume: &Resume,
+        control: &Control,
+        observer: &mut dyn FnMut(Event<'_>),
+    ) -> Result<Summary, JerryError>;
+
     fn lane(&self, destination: &Path) -> Lane;
 
     /// The root of the volume `path` is on, if it has one now.
@@ -117,6 +132,16 @@ impl Engine for System {
         super::retry(summary, control, observer)
     }
 
+    fn resume(
+        &self,
+        job: &Job,
+        resume: &Resume,
+        control: &Control,
+        observer: &mut dyn FnMut(Event<'_>),
+    ) -> Result<Summary, JerryError> {
+        super::resume(job, resume, control, observer)
+    }
+
     fn lane(&self, destination: &Path) -> Lane {
         volume::lane(destination)
     }
@@ -136,6 +161,7 @@ pub struct Queue(Arc<Shared>);
 
 struct Shared {
     engine: Box<dyn Engine>,
+    journal: Arc<dyn Journal>,
     notify: Box<dyn Fn(Notice) + Send + Sync>,
     timing: Timing,
     state: Mutex<State>,
@@ -172,6 +198,10 @@ struct Entry {
     paused: bool,
     next: Next,
     meter: Meter,
+    /// Its record in the journal, if it could be written.
+    record: Option<i64>,
+    /// The temporary file of the last file it began, while that may still be there.
+    part: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +213,8 @@ enum Stage {
         error: JerryError,
         ready: bool,
     },
+    /// A Jerry before this one didn't finish it: it waits for Resume or Cancel.
+    Unfinished,
     Ended(Ended),
 }
 
@@ -197,6 +229,8 @@ enum Ended {
 enum Next {
     Run,
     Retry(Box<Summary>),
+    /// Carries on a job that a Jerry before this one had started.
+    Resume(Box<Resume>),
     /// Nothing is left to do, or to try again.
     Nothing,
 }
@@ -230,6 +264,43 @@ impl Meter {
         }
     }
 
+    /// A job a Jerry before this one didn't finish, as far as its record says it came.
+    fn recovered(unfinished: &Unfinished) -> Self {
+        let counts = unfinished.counts;
+        Self {
+            phase: if unfinished.started {
+                Phase::Working
+            } else {
+                Phase::Counting
+            },
+            file: unfinished
+                .writing
+                .as_ref()
+                .map(|(source, _)| source.clone()),
+            files_done: counts.files_done,
+            files_total: counts.files_total,
+            bytes_done: counts.bytes_done,
+            bytes_total: counts.bytes_total,
+            speed: 0,
+            failed: 0,
+            finished: Tally {
+                files: counts.files_done,
+                folders: 0,
+                bytes: counts.bytes_done,
+            },
+        }
+    }
+
+    /// What the journal keeps of it.
+    fn counts(&self) -> Counts {
+        Counts {
+            files_done: self.files_done,
+            files_total: self.files_total,
+            bytes_done: self.bytes_done,
+            bytes_total: self.bytes_total,
+        }
+    }
+
     /// A turn starts where the earlier ones stopped. What failed is about to be tried again.
     fn begin_turn(&mut self) {
         self.files_done = self.finished.files;
@@ -257,6 +328,8 @@ impl Meter {
                 }
             }
             Event::Failed(_) => self.failed += 1,
+            // The queue writes it down; the file shows with the progress that follows.
+            Event::Writing(_) => {}
         }
     }
 
@@ -283,6 +356,7 @@ impl Entry {
                 error: error.clone(),
                 ready: *ready,
             },
+            Stage::Unfinished => TransferState::Unfinished,
             Stage::Ended(Ended::Done) => TransferState::Done,
             Stage::Ended(Ended::Cancelled) => TransferState::Cancelled,
             Stage::Ended(Ended::Failed(error)) => TransferState::Failed {
@@ -352,8 +426,10 @@ impl Entry {
                 self.control.resume();
                 self.paused = false;
             }
-            (Action::Resume, Stage::Waiting { ready: true, .. }) => self.queue_again(),
-            (Action::Cancel, Stage::Queued | Stage::Waiting { .. }) => {
+            (Action::Resume, Stage::Waiting { ready: true, .. } | Stage::Unfinished) => {
+                self.queue_again();
+            }
+            (Action::Cancel, Stage::Queued | Stage::Waiting { .. } | Stage::Unfinished) => {
                 self.stage = Stage::Ended(Ended::Cancelled);
                 return true;
             }
@@ -424,12 +500,20 @@ struct Turn {
     job: Arc<Job>,
     control: Arc<Control>,
     next: Next,
+    record: Option<i64>,
+    /// Where the turn starts.
+    counts: Counts,
 }
 
 impl Queue {
-    /// A queue with nothing in it. `notify` hears everything that happens, in order, under the
-    /// queue's lock: it must be quick and must not call back into the queue.
-    pub fn start(parallel: bool, notify: impl Fn(Notice) + Send + Sync + 'static) -> Self {
+    /// A queue with nothing in it that writes its jobs down in `journal`. `notify` hears
+    /// everything that happens, in order, under the queue's lock: it must be quick and must not
+    /// call back into the queue.
+    pub fn start(
+        parallel: bool,
+        journal: Arc<dyn Journal>,
+        notify: impl Fn(Notice) + Send + Sync + 'static,
+    ) -> Self {
         Self::with(
             System,
             parallel,
@@ -437,6 +521,7 @@ impl Queue {
                 progress: PROGRESS_EVERY,
                 watch: WATCH_EVERY,
             },
+            journal,
             notify,
         )
     }
@@ -445,10 +530,12 @@ impl Queue {
         engine: impl Engine,
         parallel: bool,
         timing: Timing,
+        journal: Arc<dyn Journal>,
         notify: impl Fn(Notice) + Send + Sync + 'static,
     ) -> Self {
         Self(Arc::new(Shared {
             engine: Box::new(engine),
+            journal,
             notify: Box::new(notify),
             timing,
             state: Mutex::new(State {
@@ -462,65 +549,103 @@ impl Queue {
     }
 
     /// Puts `job` at the end of the queue and returns its id. Blocking IO: it asks which disk and
-    /// volumes the job is on.
+    /// volumes the job is on, and writes the job down.
     pub fn enqueue(&self, job: Job) -> u32 {
-        let lane = self.0.engine.lane(&job.destination);
-        let roots = self.0.roots(&job);
-        let source = job
-            .sources
-            .first()
-            .map_or_else(String::new, |source| display_path(source));
-        let destination = display_path(&job.destination);
+        let record = self.0.journal.queued(&job);
+        let mut entry = self.0.entry(job, record);
         let mut state = self.0.lock();
-        let id = state.next_id;
+        entry.id = state.next_id;
         state.next_id += 1;
-        state.jobs.push(Entry {
-            id,
-            job: Arc::new(job),
-            lane,
-            roots,
-            source,
-            destination,
-            control: Arc::new(Control::new()),
-            stage: Stage::Queued,
-            paused: false,
-            next: Next::Run,
-            meter: Meter::new(),
-        });
+        let id = entry.id;
+        state.jobs.push(entry);
         self.0.changed(&mut state);
         id
     }
 
+    /// Lists the jobs a Jerry before this one didn't finish, at the end of the queue, as
+    /// [`TransferState::Unfinished`]: Resume carries one on, Cancel discards it. Blocking IO, as
+    /// [`enqueue`](Self::enqueue).
+    pub fn recover(&self, jobs: Vec<Unfinished>) {
+        if jobs.is_empty() {
+            return;
+        }
+        let entries: Vec<Entry> = jobs
+            .into_iter()
+            .map(|unfinished| {
+                let meter = Meter::recovered(&unfinished);
+                let Unfinished {
+                    record,
+                    job,
+                    started,
+                    writing,
+                    part,
+                    ..
+                } = unfinished;
+                let mut entry = self.0.entry(job, Some(record));
+                entry.stage = Stage::Unfinished;
+                entry.meter = meter;
+                entry.part = part;
+                // One that never started has nothing of its own at the destination.
+                if started {
+                    entry.next = Next::Resume(Box::new(Resume { writing }));
+                }
+                entry
+            })
+            .collect();
+        let mut state = self.0.lock();
+        for mut entry in entries {
+            entry.id = state.next_id;
+            state.next_id += 1;
+            state.jobs.push(entry);
+        }
+        self.0.changed(&mut state);
+    }
+
     /// Does `action` on job `job`, or on every job with `None`. What doesn't apply to where a job
     /// is does nothing: a job that ended stays ended. [`ErrorCode::NotFound`] for a job that isn't
-    /// listed.
+    /// listed. Blocking IO: a job that ends here is written down, and the temporary file it left
+    /// is removed.
     pub fn control(&self, action: Action, job: Option<u32>) -> Result<(), JerryError> {
         let mut state = self.0.lock();
-        let ended: Vec<Notice> = match job {
+        let end = |entry: &mut Entry| {
+            let summary = waiting_failures(entry);
+            entry.apply(action).then(|| Ending {
+                notice: entry.ending(&summary),
+                record: entry.record,
+                part: entry.part.take(),
+            })
+        };
+        let ended: Vec<Ending> = match job {
             Some(id) => {
                 let entry = state
                     .find(id)
                     .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
-                let summary = waiting_failures(entry);
-                entry
-                    .apply(action)
-                    .then(|| entry.ending(&summary))
-                    .into_iter()
-                    .collect()
+                end(entry).into_iter().collect()
             }
-            None => state
-                .jobs
-                .iter_mut()
-                .filter_map(|entry| {
-                    let summary = waiting_failures(entry);
-                    entry.apply(action).then(|| entry.ending(&summary))
-                })
-                .collect(),
+            None => state.jobs.iter_mut().filter_map(end).collect(),
         };
-        for notice in ended {
-            (self.0.notify)(notice);
+        let mut left = Vec::new();
+        for ending in ended {
+            (self.0.notify)(ending.notice);
+            left.push((ending.record, ending.part));
         }
         self.0.changed(&mut state);
+        drop(state);
+        for (record, part) in left {
+            let removed = part.is_some_and(|part| {
+                remove_part(&part)
+                    .inspect_err(|error| {
+                        tracing::warn!(code = ?error.code, "a temporary file a job left stays");
+                    })
+                    .is_ok()
+            });
+            if let Some(record) = record {
+                if removed {
+                    self.0.journal.part_gone(record);
+                }
+                self.0.journal.ended(record);
+            }
+        }
         Ok(())
     }
 
@@ -585,6 +710,13 @@ impl Queue {
     }
 }
 
+/// A job that [`Queue::control`] ended: what to tell the UI, and to write down after the lock.
+struct Ending {
+    notice: Notice,
+    record: Option<i64>,
+    part: Option<PathBuf>,
+}
+
 /// The items a waiting job has given up on for now: cancelling it ends the job with these.
 fn waiting_failures(entry: &Entry) -> Vec<Failure> {
     match (&entry.stage, &entry.next) {
@@ -596,6 +728,33 @@ fn waiting_failures(entry: &Entry) -> Vec<Failure> {
 impl Shared {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A new entry for `job`, queued, its id not yet given. Blocking IO: it asks which disk and
+    /// volumes the job is on.
+    fn entry(&self, job: Job, record: Option<i64>) -> Entry {
+        let lane = self.engine.lane(&job.destination);
+        let roots = self.roots(&job);
+        let source = job
+            .sources
+            .first()
+            .map_or_else(String::new, |source| display_path(source));
+        let destination = display_path(&job.destination);
+        Entry {
+            id: 0,
+            job: Arc::new(job),
+            lane,
+            roots,
+            source,
+            destination,
+            control: Arc::new(Control::new()),
+            stage: Stage::Queued,
+            paused: false,
+            next: Next::Run,
+            meter: Meter::new(),
+            record,
+            part: None,
+        }
     }
 
     /// The volumes `job` touches. Most sources share a folder, so each folder is asked once.
@@ -647,14 +806,16 @@ impl Shared {
     }
 
     fn start(self: &Arc<Self>, entry: &mut Entry) {
+        entry.stage = Stage::Active;
+        entry.meter.begin_turn();
         let turn = Turn {
             id: entry.id,
             job: entry.job.clone(),
             control: entry.control.clone(),
             next: std::mem::replace(&mut entry.next, Next::Nothing),
+            record: entry.record,
+            counts: entry.meter.counts(),
         };
-        entry.stage = Stage::Active;
-        entry.meter.begin_turn();
         let shared = self.clone();
         let started = std::thread::Builder::new()
             .name("transfer".into())
@@ -673,20 +834,69 @@ impl Shared {
             job,
             control,
             next,
+            record,
+            counts,
         } = turn;
+        // What an earlier turn, or an earlier Jerry, left half written.
+        self.clear_part(id, record);
+        if let Some(record) = record {
+            self.journal.started(record, &counts);
+        }
         let result = run_job("transfer", || {
             let mut observer = |event: Event<'_>| self.observe(id, event);
             match &next {
                 Next::Retry(summary) => self.engine.retry(summary, &control, &mut observer),
+                Next::Resume(resume) => self.engine.resume(&job, resume, &control, &mut observer),
                 Next::Run | Next::Nothing => self.engine.run(&job, &control, &mut observer),
             }
         });
+        // The engine removes what it doesn't finish, but not from a volume that went away.
+        let gone = match &result {
+            Ok(summary) => matches!(&summary.status, Status::Interrupted(error)
+                if error.code == ErrorCode::DeviceGone),
+            Err(error) => error.code == ErrorCode::DeviceGone,
+        };
+        if !gone {
+            self.clear_part(id, record);
+        }
         self.finish(id, next, result);
     }
 
+    /// Removes the temporary file job `id` left, if it did, and writes down that it is gone.
+    fn clear_part(&self, id: u32, record: Option<i64>) {
+        let Some(part) = self.lock().find(id).and_then(|entry| entry.part.clone()) else {
+            return;
+        };
+        if let Err(error) = remove_part(&part) {
+            tracing::warn!(code = ?error.code, "a temporary file a job left stays for now");
+            return;
+        }
+        if let Some(entry) = self.lock().find(id)
+            && entry.part.as_ref() == Some(&part)
+        {
+            entry.part = None;
+        }
+        if let Some(record) = record {
+            self.journal.part_gone(record);
+        }
+    }
+
     /// One report from a running job. Every one counts; the UI hears of them at most every
-    /// [`PROGRESS_EVERY`], and the job's ending says how it came out.
+    /// [`PROGRESS_EVERY`], and the job's ending says how it came out. A file it begins is written
+    /// down before the job goes on.
     fn observe(&self, id: u32, event: Event<'_>) {
+        if let Event::Writing(writing) = event {
+            let noted = self.lock().find(id).and_then(|entry| {
+                if let Some(part) = writing.part {
+                    entry.part = Some(part.to_owned());
+                }
+                Some((entry.record?, entry.meter.counts()))
+            });
+            if let Some((record, counts)) = noted {
+                self.journal.writing(record, writing, &counts);
+            }
+            return;
+        }
         let mut state = self.lock();
         if let Some(entry) = state.find(id) {
             entry.meter.take(event);
@@ -748,11 +958,15 @@ impl Shared {
             }
         }
         let locations = watch.then(|| entry.locations());
+        let record = entry.record.filter(|_| entry.ended());
         for notice in ended {
             (self.notify)(notice);
         }
         self.changed(&mut state);
         drop(state);
+        if let Some(record) = record {
+            self.journal.ended(record);
+        }
         if let Some(locations) = locations {
             self.watch(id, locations);
         }
@@ -811,7 +1025,7 @@ impl Shared {
 fn can_wait(error: &JerryError, next: &Next) -> bool {
     match error.code {
         ErrorCode::DeviceGone => true,
-        ErrorCode::NoSpace { .. } => matches!(next, Next::Retry(_)),
+        ErrorCode::NoSpace { .. } => matches!(next, Next::Retry(_) | Next::Resume(_)),
         _ => false,
     }
 }
