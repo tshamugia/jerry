@@ -43,6 +43,7 @@ import { findByPrefix, TypeAhead } from "../selection/typeahead";
 import { usePointerSelection } from "../selection/usePointerSelection";
 import { ColumnHeader } from "./ColumnHeader";
 import { columnWidths } from "./cells";
+import { dragOut } from "./dragOut";
 import { FileRow } from "./FileRow";
 import { ListMenu, type ListMenuKind } from "./ListMenu";
 import { useShownRows } from "./rows";
@@ -70,7 +71,8 @@ const RENAME_FIELD = '[data-command-scope="rename"]';
  * A pane's file list in the Details view: the column header and a virtualized list of rows with
  * the density's fixed height (30 / 24 px), so 100 000 entries scroll at 60 fps. Rows show as the
  * folder's batches arrive and follow every change in it. Selection works as in Explorer, with
- * the mouse (`usePointerSelection`) and, while the list has the focus, with the arrows, Home,
+ * the mouse (`usePointerSelection`; dragging a selected item takes the selection out of Jerry,
+ * `dragOut`) and, while the list has the focus, with the arrows, Home,
  * End, PageUp and PageDown (Shift selects a range, Ctrl moves only the focus) and by typing the
  * first letters of a name. A double click (or a single one, by the "click to open" setting)
  * opens the row: a folder in the tab, a file in its program; a middle click opens a folder in a
@@ -142,7 +144,15 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   }, [entries]);
   const slow = useDelayed(status === "loading", LOADING_DELAY_MS);
 
-  const pointer = usePointerSelection({ folder, rows, rowHeight, scroller, body, margin });
+  const pointer = usePointerSelection({
+    folder,
+    rows,
+    rowHeight,
+    scroller,
+    body,
+    margin,
+    onDragOut: () => void dragOut(folder, rows),
+  });
   const typeAhead = useMemo(() => new TypeAhead(), []);
   const rowIds = useId();
 

@@ -182,7 +182,7 @@ pub fn flush_on_exit() {
 }
 
 /// The exact paths of entries `entries` of listing `listing`.
-fn paths_of(
+pub(crate) fn paths_of(
     listings: &Listings,
     listing: u32,
     entries: &[u32],

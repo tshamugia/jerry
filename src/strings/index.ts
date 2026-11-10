@@ -114,6 +114,8 @@ export const strings = {
     noMatch: "No items match the filter",
     loading: "Loading…",
     retry: "Retry",
+    /** A drag out of the list that couldn't start; the error says why. */
+    dragFailed: "Couldn't drag the files",
     /**
      * The list's context menu (right click, Shift+F10, the Menu key): on the selected items, or
      * on the folder itself (empty space). Its commands bring their titles and shortcuts.

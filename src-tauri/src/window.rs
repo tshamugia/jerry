@@ -18,7 +18,7 @@ use tauri::window::Color;
 use tauri::{AppHandle, Manager, State, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_specta::Event;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Controller, ICoreWebView2Settings3,
+    ICoreWebView2Controller, ICoreWebView2Controller4, ICoreWebView2Settings3,
 };
 use windows::core::Interface;
 
@@ -246,13 +246,15 @@ fn set_mica(window: &WebviewWindow, enabled: bool) {
 }
 
 /// Turns off WebView2's browser behavior: its keyboard shortcuts (Ctrl+P prints, Ctrl+F finds,
-/// Ctrl+R and F5 reload; those keys are Jerry's) and its default context menu, which dev builds
-/// keep for "Inspect". Zoom is off already: Tauri's `zoomHotkeysEnabled` defaults to false.
+/// Ctrl+R and F5 reload; those keys are Jerry's), its default context menu, which dev builds
+/// keep for "Inspect", and its own drop target, which would open a file dropped on the page (a
+/// drag out of Jerry let go over Jerry, #58): files dropped on Jerry are Jerry's own target's
+/// (#59). Zoom is off already: Tauri's `zoomHotkeysEnabled` defaults to false.
 fn lock_down(window: &WebviewWindow) {
     let result = window.with_webview(|webview| {
         // SAFETY: Tauri runs this on the main thread with the webview's live controller.
         if let Err(error) = unsafe { lock_down_webview(&webview.controller()) } {
-            tracing::error!(%error, "can't turn off WebView2's browser keys");
+            tracing::error!(%error, "can't turn off WebView2's browser behavior");
         }
     });
     if let Err(error) = result {
@@ -269,7 +271,10 @@ unsafe fn lock_down_webview(controller: &ICoreWebView2Controller) -> windows::co
         settings.SetAreDefaultContextMenusEnabled(cfg!(debug_assertions))?;
         settings
             .cast::<ICoreWebView2Settings3>()?
-            .SetAreBrowserAcceleratorKeysEnabled(false)
+            .SetAreBrowserAcceleratorKeysEnabled(false)?;
+        controller
+            .cast::<ICoreWebView2Controller4>()?
+            .SetAllowExternalDrop(false)
     }
 }
 

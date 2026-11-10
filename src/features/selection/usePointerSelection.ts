@@ -20,9 +20,8 @@ import {
   NO_MODIFIERS,
   rowsCrossed,
 } from "./model";
+import { pastDragThreshold } from "./threshold";
 
-/** Moving this far with the button down makes a press a marquee (Windows' SM_CXDRAG). */
-const DRAG_PX = 4;
 /** Auto-scroll per frame: this much of the distance past the edge, at least 1 px, at most the max. */
 const SCROLL_RATE = 0.4;
 const SCROLL_MAX_PX = 48;
@@ -37,6 +36,8 @@ export interface MarqueeRect {
 
 interface Press {
   pointer: number;
+  /** The button pressed, as `PointerEvent.button` numbers it: 0 left, 2 right. */
+  button: number;
   /** Where it started, on the screen and from the first row's top left. */
   clientX: number;
   clientY: number;
@@ -64,19 +65,34 @@ interface Options {
   body: RefObject<HTMLElement | null>;
   /** From the scroll element's top to the first row's: the column header and the gap under it. */
   margin: number;
+  /**
+   * A press on a row's icon or name moved past Windows' drag threshold with the button still down:
+   * the selection (which holds that row) leaves Jerry in Windows' drag.
+   */
+  onDragOut: () => void;
 }
 
 /**
  * Mouse selection as in Explorer's Details view:
  * - A press on a row's icon or name selects it at once (Ctrl toggles, Shift selects the range);
  *   on a row already selected the click lands on release, so a drag can take the selection.
+ *   Dragged past Windows' drag threshold, with the left or the right button, it drags the
+ *   selected files out (`onDragOut`).
  * - A press anywhere else, in a row's other columns or below the rows, can become a marquee: it
  *   selects the rows it crosses (Ctrl toggles them, Shift adds them) and scrolls the list when
  *   it is dragged past the top or bottom. Released without a drag, it clicks the row, or on empty
  *   space clears the selection.
  * - A right press on a row not selected selects it alone.
  */
-export function usePointerSelection({ folder, rows, rowHeight, scroller, body, margin }: Options) {
+export function usePointerSelection({
+  folder,
+  rows,
+  rowHeight,
+  scroller,
+  body,
+  margin,
+  onDragOut,
+}: Options) {
   const [rect, setRect] = useState<MarqueeRect>();
   const press = useRef<Press | undefined>(undefined);
   const pointer = useRef({ x: 0, y: 0 });
@@ -161,6 +177,7 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
     const row = target.closest<HTMLElement>("[data-id]");
     const id = row ? Number(row.dataset.id) : undefined;
     const index = indexOf(rows, id);
+    const onItem = index !== undefined && target.closest("[data-item]") !== null;
 
     if (event.button === 2) {
       if (index !== undefined && id !== undefined && !selection.selected.has(id)) {
@@ -168,13 +185,16 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
       } else if (index === undefined && !modifiers.ctrl && !modifiers.shift) {
         folder.setSelection(clear(selection));
       }
+      // A right press on an item can drag it out, as in Explorer: Windows asks on the drop.
+      press.current = onItem
+        ? { ...pressAt(event, area), clickOnUp: undefined, canMarquee: false, initial: selection }
+        : undefined;
       return;
     }
     if (event.button !== 0) {
       return;
     }
 
-    const onItem = index !== undefined && target.closest("[data-item]") !== null;
     let clickOnUp: number | undefined;
     if (index !== undefined && id !== undefined) {
       const selected = selection.selected.has(id);
@@ -187,21 +207,7 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
       folder.setSelection(clear(selection));
     }
 
-    const box = area.getBoundingClientRect();
-    press.current = {
-      pointer: event.pointerId,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      x: event.clientX - box.left,
-      y: event.clientY - box.top,
-      modifiers,
-      clickOnUp,
-      canMarquee: !onItem,
-      dragging: false,
-      initial: selection,
-      mode: marqueeMode(modifiers),
-      crossed: [0, -1],
-    };
+    press.current = { ...pressAt(event, area), clickOnUp, canMarquee: !onItem, initial: selection };
     pointer.current = { x: event.clientX, y: event.clientY };
     dragged.current = false;
   };
@@ -213,10 +219,16 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
     }
     pointer.current = { x: event.clientX, y: event.clientY };
     if (!p.dragging) {
-      const far =
-        Math.abs(event.clientX - p.clientX) >= DRAG_PX ||
-        Math.abs(event.clientY - p.clientY) >= DRAG_PX;
-      if (!p.canMarquee || !far) {
+      if (!pastDragThreshold(event.clientX - p.clientX, event.clientY - p.clientY)) {
+        return;
+      }
+      if (!p.canMarquee) {
+        // Windows runs the drag from here on: the page hears no release, so the press ends now,
+        // and a click it deferred to the release (on a row already selected) never comes.
+        if (held(event, p.button)) {
+          end();
+          onDragOut();
+        }
         return;
       }
       p.dragging = true;
@@ -267,6 +279,33 @@ export function usePointerSelection({ folder, rows, rowHeight, scroller, body, m
       onScroll: update,
     },
   };
+}
+
+/** A new press, before what depends on where it landed. */
+function pressAt(
+  event: PointerEvent<HTMLElement>,
+  area: HTMLElement,
+): Omit<Press, "clickOnUp" | "canMarquee" | "initial"> {
+  const box = area.getBoundingClientRect();
+  const modifiers = { ctrl: event.ctrlKey, shift: event.shiftKey };
+  return {
+    pointer: event.pointerId,
+    button: event.button,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    x: event.clientX - box.left,
+    y: event.clientY - box.top,
+    modifiers,
+    dragging: false,
+    mode: marqueeMode(modifiers),
+    crossed: [0, -1],
+  };
+}
+
+/** Whether `button` (0 left, 2 right) is still down during a pointer move. */
+function held(event: PointerEvent, button: number): boolean {
+  const mask = button === 2 ? 2 : 1;
+  return (event.buttons & mask) !== 0;
 }
 
 function isHeader(target: Element): boolean {

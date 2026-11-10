@@ -27,6 +27,7 @@ export type {
   DeleteOutcome,
   Density,
   DragAction,
+  DragThreshold,
   Drive,
   DriveKind,
   DriveList,

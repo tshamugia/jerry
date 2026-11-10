@@ -9,7 +9,9 @@
 
 pub mod appearance;
 pub mod clipboard;
+mod data_object;
 pub mod devices;
+pub mod drag;
 pub mod drives;
 pub mod folders;
 pub mod icons;
