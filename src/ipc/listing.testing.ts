@@ -123,15 +123,15 @@ export function diffMessage(ids: number[], removed: number[], entries: TestEntry
 }
 
 /** All names' UTF-16 units: a string's `length` counts them. */
-function unitCount(entries: TestEntry[]): number {
+export function unitCount(entries: TestEntry[]): number {
   return entries.reduce((count, { name }) => count + name.length, 0);
 }
 
-function entriesBytes(count: number, units: number): number {
+export function entriesBytes(count: number, units: number): number {
   return count * 36 + units * 2;
 }
 
-function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
+export function writeEntries(buffer: ArrayBuffer, at: number, entries: TestEntry[]) {
   const count = entries.length;
   const units: number[] = [];
   const ends: number[] = [];

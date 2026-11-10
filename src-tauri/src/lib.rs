@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod delete;
 #[cfg(debug_assertions)]
 mod dev;
+pub mod drag;
 pub mod drives;
 pub mod favorites;
 pub mod icons;
@@ -15,6 +16,7 @@ pub mod listing;
 pub mod logging;
 pub mod navigation;
 pub mod rename;
+pub mod search;
 pub mod session;
 pub mod shell;
 pub mod storage;
@@ -102,6 +104,8 @@ macro_rules! commands {
             clipboard::clipboard_copy_text,
             clipboard::clipboard_cut_entries,
             clipboard::clipboard_has_files,
+            drag::drag_threshold,
+            drag::drag_start,
             delete::delete_check,
             delete::delete_measure,
             delete::delete_measure_cancel,
@@ -109,6 +113,8 @@ macro_rules! commands {
             delete::delete_permanently,
             rename::create_folder,
             rename::rename,
+            search::search_start,
+            search::search_cancel,
             transfers::transfer_enqueue,
             transfers::transfer_control,
             transfers::transfer_reorder,
@@ -260,6 +266,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(instance::Instance::new(&launch))
         .manage(delete::Deleting::default())
+        .manage(search::Searches::default())
         .manage(updates::Updates::default())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
         .invoke_handler(builder.invoke_handler())

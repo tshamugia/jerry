@@ -1,9 +1,11 @@
 //! Synthetic folders for measuring and benchmarking: `count` entries with mixed extensions,
 //! numbers for natural sort, Georgian names and about 2 % subfolders. Always under the user's
-//! temp folder (`%TEMP%\jerry-synth\<count>`), never in a real user folder.
+//! temp folder (`%TEMP%\jerry-synth\<count>`), never in a real user folder. For search (#65),
+//! a tree: the same entries spread over nested folders (`%TEMP%\jerry-synth\tree-<count>`).
 //!
 //! The content is deterministic: the same `count` always gives the same names, sizes and dates.
-//! `cargo run -p jerry-core --release --example synth` builds the standard sizes.
+//! `cargo run -p jerry-core --release --example synth` builds the standard sizes, `-- --tree`
+//! the search tree.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -14,6 +16,14 @@ use std::time::{Duration, SystemTime};
 
 /// The standard sizes: the PRD's budgets and the benchmarks (#44).
 pub const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
+
+/// The search tree's size: the PRD's budget is first results in 50 000 files (#65).
+pub const TREE_SIZE: usize = 50_000;
+
+/// Entries in each folder of a tree, about.
+const TREE_PER_FOLDER: usize = 40;
+/// Folders in each folder of a tree, at most.
+const TREE_FANOUT: usize = 5;
 
 /// `FILE_WRITE_ATTRIBUTES`: enough to set a folder's modified time.
 const FILE_WRITE_ATTRIBUTES: u32 = 0x100;
@@ -116,22 +126,87 @@ pub fn ensure(count: usize) -> io::Result<PathBuf> {
         std::fs::remove_dir_all(&dir)?;
     }
     std::fs::create_dir_all(&dir)?;
-    let list = entries(count);
+    let placed: Vec<(PathBuf, SynthEntry)> = entries(count)
+        .into_iter()
+        .map(|entry| (dir.clone(), entry))
+        .collect();
+    create_all(&placed)?;
+    File::create(done_marker(count))?;
+    Ok(dir)
+}
+
+/// The tree for `count` entries.
+pub fn tree(count: usize) -> PathBuf {
+    root().join(format!("tree-{count}"))
+}
+
+/// The folders of the tree for `count` entries, as paths from its top: folder 0 is the top
+/// itself, and folder `j` is in folder `(j - 1) / 5`, so the tree is about five levels deep.
+/// Entry `i` of [`entries`] (from 0) goes into folder `i % folders`.
+pub fn tree_folders(count: usize) -> Vec<PathBuf> {
+    let total = (count / TREE_PER_FOLDER).max(1);
+    let mut folders = Vec::with_capacity(total);
+    folders.push(PathBuf::new());
+    for j in 1..total {
+        let name = if j % 2 == 0 {
+            format!("ბლოკი {j}")
+        } else {
+            format!("Block {j}")
+        };
+        let folder = folders[(j - 1) / TREE_FANOUT].join(name);
+        folders.push(folder);
+    }
+    folders
+}
+
+/// Makes sure the tree for `count` exists and is complete, building it if not. Returns its path.
+pub fn ensure_tree(count: usize) -> io::Result<PathBuf> {
+    let dir = tree(count);
+    let done = root().join(format!("tree-{count}.done"));
+    if done.is_file() && dir.is_dir() {
+        return Ok(dir);
+    }
+    if dir.exists() {
+        // An interrupted earlier run: only ever our own folder under %TEMP%\jerry-synth.
+        std::fs::remove_dir_all(&dir)?;
+    }
+    let folders: Vec<PathBuf> = tree_folders(count)
+        .iter()
+        .map(|folder| dir.join(folder))
+        .collect();
+    for folder in &folders {
+        std::fs::create_dir_all(folder)?;
+    }
+    let placed: Vec<(PathBuf, SynthEntry)> = entries(count)
+        .into_iter()
+        .enumerate()
+        .map(|(i, entry)| (folders[i % folders.len()].clone(), entry))
+        .collect();
+    create_all(&placed)?;
+    File::create(done)?;
+    Ok(dir)
+}
+
+/// Creates every entry in its folder, on all cores.
+fn create_all(placed: &[(PathBuf, SynthEntry)]) -> io::Result<()> {
     let threads = std::thread::available_parallelism().map_or(4, NonZero::get);
-    let chunk = list.len().div_ceil(threads).max(1);
+    let chunk = placed.len().div_ceil(threads).max(1);
     std::thread::scope(|scope| {
-        let workers: Vec<_> = list
+        let workers: Vec<_> = placed
             .chunks(chunk)
-            .map(|part| scope.spawn(|| part.iter().try_for_each(|entry| create(&dir, entry))))
+            .map(|part| {
+                scope.spawn(|| {
+                    part.iter()
+                        .try_for_each(|(folder, entry)| create(folder, entry))
+                })
+            })
             .collect();
         workers.into_iter().try_for_each(|worker| {
             worker
                 .join()
                 .unwrap_or_else(|_| Err(io::Error::other("a synth worker panicked")))
         })
-    })?;
-    File::create(done_marker(count))?;
-    Ok(dir)
+    })
 }
 
 fn create(dir: &Path, entry: &SynthEntry) -> io::Result<()> {
@@ -209,6 +284,19 @@ mod tests {
             list.iter()
                 .all(|e| e.name.chars().any(|c| c.is_ascii_digit()))
         );
+    }
+
+    #[test]
+    fn trees_nest_about_five_deep_with_georgian_folders() {
+        let folders = tree_folders(TREE_SIZE);
+        assert_eq!(folders.len(), 1_250);
+        let unique: HashSet<&PathBuf> = folders.iter().collect();
+        assert_eq!(unique.len(), folders.len());
+        let depth = folders.iter().map(|f| f.components().count()).max();
+        assert_eq!(depth, Some(5));
+        assert!(folders[2].starts_with("ბლოკი 2"));
+        assert_eq!(folders[6], PathBuf::from("Block 1").join("ბლოკი 6"));
+        assert!(tree(TREE_SIZE).starts_with(std::env::temp_dir()));
     }
 
     #[test]

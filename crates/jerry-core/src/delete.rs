@@ -39,7 +39,7 @@ pub const MEASURE_PROGRESS: Duration = Duration::from_millis(100);
 /// `IsReparseTagNameSurrogate`: the reparse point stands for another name (a symbolic link, a
 /// junction, a mount point). Cloud files (OneDrive) are reparse points too, but not surrogates:
 /// they are the files themselves.
-const NAME_SURROGATE: u32 = 0x2000_0000;
+pub(crate) const NAME_SURROGATE: u32 = 0x2000_0000;
 
 /// How often removing a folder is tried while Windows still finishes deleting what was in it
 /// (another program, an indexer or a virus scanner, had a file open with delete sharing).

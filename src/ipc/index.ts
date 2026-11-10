@@ -8,7 +8,8 @@
  *   with (an unknown command, a bad argument) is a bug and is thrown. Show the error with
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
- *   listings: `openListing`, kept live by diffs and re-sorted with its `sort`.
+ *   listings: `openListing`, kept live by diffs and re-sorted with its `sort`. Deep search:
+ *   `startSearch`.
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
  *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
@@ -26,10 +27,12 @@ export type {
   ConflictItem,
   CopyText,
   Crumb,
+  DateRange,
   DeleteFailure,
   DeleteOutcome,
   Density,
   DragAction,
+  DragThreshold,
   Drive,
   DriveKind,
   DriveList,
@@ -37,6 +40,7 @@ export type {
   Favorite,
   FavoriteGroup,
   FavoriteList,
+  FileType,
   FolderView,
   FrameState,
   HistoryFolder,
@@ -52,10 +56,14 @@ export type {
   PlaceName,
   RecentFolder,
   ResolvedPath,
+  SearchIn,
+  SearchItems,
+  SearchQuery,
   SessionRestore,
   SessionSave,
   Settings,
   SidebarPlace,
+  SizeRange,
   Sort,
   SortColumn,
   Space,
@@ -102,3 +110,15 @@ export {
   openListing,
 } from "./listing";
 export { type Protocol, protocolUrl } from "./protocol";
+export {
+  decodeSearchMessage,
+  type RunningSearch,
+  type SearchBatch,
+  type SearchCounts,
+  type SearchDone,
+  type SearchFailed,
+  SearchKind,
+  type SearchMessage,
+  type SearchProgress,
+  startSearch,
+} from "./search";

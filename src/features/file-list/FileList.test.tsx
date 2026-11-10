@@ -14,6 +14,7 @@ import {
 import { useSettings } from "../../stores/settings";
 import { defaultSettings } from "../../stores/settings.testing";
 import { Tab } from "../../stores/tabs";
+import { useToasts } from "../../stores/toasts";
 import { useWindow } from "../../stores/window";
 import { FileList } from "./FileList";
 
@@ -305,6 +306,66 @@ test("a marquee with Ctrl toggles the rows it crosses; a press on a name never s
   fireEvent.pointerMove(grid(), { pointerId: 1, clientY: 275 });
   fireEvent.pointerUp(grid(), { pointerId: 1, clientY: 275 });
   expect(selectedNames()).toEqual(["f6.txt"]);
+});
+
+const dragsStarted = (core: FakeListings) =>
+  core.calls.filter((call) => call.cmd === "drag_start").map((call) => call.args);
+
+test("a selected item pressed and moved past the threshold drags the whole selection out", async () => {
+  const { core } = await listed(TEN, [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]);
+  click(nameOf("f4.txt"));
+  click(nameOf("f2.txt"), { shiftKey: true });
+
+  // A move within Windows' threshold (4 px) is still a click.
+  fireEvent.pointerDown(nameOf("f3.txt"), { button: 0, pointerId: 1, clientX: 40, clientY: 65 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 1, clientX: 42, clientY: 67 });
+  expect(dragsStarted(core)).toEqual([]);
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 1, clientX: 46, clientY: 70 });
+  // In display order; paths stay in Rust.
+  expect(dragsStarted(core)).toEqual([{ listing: 1, entries: [4, 3, 2] }]);
+
+  // Windows took the drag: the release a page might still see doesn't click the row.
+  fireEvent.pointerUp(nameOf("f3.txt"), { button: 0, pointerId: 1 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 1, clientX: 90, clientY: 90 });
+  expect(selectedNames()).toEqual(["f4.txt", "f3.txt", "f2.txt"]);
+  expect(dragsStarted(core)).toHaveLength(1);
+  expect(grid().querySelector("[data-marquee]")).toBeNull();
+});
+
+test("a right press drags its item out; a move without the button held drags nothing", async () => {
+  const { core } = await listed(TEN, IN_ORDER);
+  click(nameOf("f1.txt"));
+
+  fireEvent.pointerDown(nameOf("f6.txt"), { button: 2, pointerId: 1, clientY: 185 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 0, clientY: 215 });
+  expect(dragsStarted(core)).toEqual([]);
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 2, clientY: 215 });
+  expect(dragsStarted(core)).toEqual([{ listing: 1, entries: [6] }]);
+
+  // A right press on a row's other columns isn't a drag.
+  fireEvent.pointerDown(dateOf(2), { button: 2, pointerId: 1, clientY: 65 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 2, clientY: 125 });
+  expect(dragsStarted(core)).toHaveLength(1);
+});
+
+test("a drag that can't start says why", async () => {
+  const gone = { code: "NotFound", path: String.raw`C:\Work\f1.txt`, params: {} };
+  await listed(
+    TEN,
+    IN_ORDER,
+    {},
+    {
+      other: (cmd) => (cmd === "drag_start" ? Promise.reject(gone) : null),
+    },
+  );
+  fireEvent.pointerDown(nameOf("f1.txt"), { button: 0, pointerId: 1, clientY: 35 });
+  fireEvent.pointerMove(grid(), { pointerId: 1, buttons: 1, clientY: 45 });
+  await waitFor(() =>
+    expect(useToasts.getState().toasts.at(-1)).toMatchObject({
+      title: "Couldn't drag the files",
+      detail: "“f1.txt” couldn't be found. It may have been moved or deleted.",
+    }),
+  );
 });
 
 test("a small move doesn't make a marquee: the release clicks the row", async () => {
