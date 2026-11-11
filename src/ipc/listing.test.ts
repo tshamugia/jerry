@@ -124,7 +124,7 @@ test("an order decodes into ids and the sort it follows", () => {
   expect(decoded.sort).toEqual({ column: "created", descending: true, foldersFirst: true });
   expect([...decoded.ids]).toEqual([2, 0, 70_000]);
   expect(decoded.ids.buffer).toBe(message);
-  const columns = [0, 1, 2, 3, 4, 5].map((column) => {
+  const columns = [0, 1, 2, 3, 4, 5, 6].map((column) => {
     const order = decodeListingMessage(orderMessage([], { column, foldersFirst: false }));
     return order.kind === "order" ? [order.sort.column, order.sort.foldersFirst] : [];
   });
@@ -135,8 +135,10 @@ test("an order decodes into ids and the sort it follows", () => {
     ["size", false],
     ["created", false],
     ["extension", false],
+    // Search results only (#66).
+    ["location", false],
   ]);
-  expect(() => decodeListingMessage(orderMessage([], { column: 6 }))).toThrow(RangeError);
+  expect(() => decodeListingMessage(orderMessage([], { column: 7 }))).toThrow(RangeError);
 });
 
 test("an unknown message kind is a bug", () => {

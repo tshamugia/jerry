@@ -25,6 +25,7 @@ export const FilterField = memo(function FilterField({
   pane: PaneSide;
 }) {
   const filter = useFolder(folder, (state) => state.filter);
+  const results = useFolder(folder, (state) => state.search !== undefined);
   const shortcut = useShortcut("filter");
   const input = useRef<HTMLInputElement>(null);
 
@@ -60,7 +61,7 @@ export const FilterField = memo(function FilterField({
           autoComplete="off"
           data-filter={pane}
           aria-label={t.filter}
-          placeholder={t.filterPlaceholder}
+          placeholder={results ? strings.search.filterPlaceholder : t.filterPlaceholder}
           className="min-w-0 flex-1 bg-transparent text-fg text-small outline-none placeholder:text-fg-3"
         />
       </label>

@@ -273,7 +273,7 @@ async function timeListing(tab: Tab, target: ListingTarget): Promise<ListingOutc
             Promise.all([firstPaint ?? donePaint, donePaint]).then(([first, all]) => ({
               status: "ok",
               timings: {
-                count: message.count,
+                count: "count" in message ? message.count : message.found,
                 batches,
                 firstBatchMs,
                 firstPaintMs: first - started,

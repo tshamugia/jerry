@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { commands, type JerryError, type ListingMessage } from "../../ipc";
-import type { Folder } from "../../stores/folder";
+import { commands, type JerryError } from "../../ipc";
+import type { Folder, FolderMessage } from "../../stores/folder";
 import { useSettings } from "../../stores/settings";
 import { strings } from "../../strings";
 import { extensionOf } from "../file-list/format";
@@ -282,29 +282,36 @@ function problemOf(current: Editing, text: string): NameProblem | undefined {
   }
   // A change of case only is the entry's own name.
   const folded = foldName(name);
-  if (folded !== foldName(current.original) && takenNames(current.folder).has(folded)) {
+  if (folded !== foldName(current.original) && takenNames(current.folder, current.id).has(folded)) {
     return { kind: "taken", name };
   }
   return undefined;
 }
 
-/** The folder's names, folded (`foldName`), hidden entries' too; kept until the folder changes. */
-const taken = new WeakMap<Folder, { version: number; names: Set<string> }>();
+/**
+ * The names next to entry `id`, folded (`foldName`), hidden entries' too: the folder's, or in
+ * search results those found in the same folder (#66). Kept until the folder changes.
+ */
+const taken = new WeakMap<
+  Folder,
+  { version: number; place: string | undefined; names: Set<string> }
+>();
 
-function takenNames(folder: Folder): Set<string> {
+function takenNames(folder: Folder, id: number): Set<string> {
   const { entries, version } = folder.store.getState();
+  const place = entries.location(id);
   const cached = taken.get(folder);
-  if (cached?.version === version) {
+  if (cached?.version === version && cached.place === place) {
     return cached.names;
   }
   const names = new Set<string>();
-  for (let id = 0; id < entries.count; id++) {
-    const name = entries.names[id];
-    if (name !== undefined && !entries.removed.has(id)) {
+  for (let other = 0; other < entries.count; other++) {
+    const name = entries.names[other];
+    if (name !== undefined && !entries.removed.has(other) && entries.location(other) === place) {
       names.add(foldName(name));
     }
   }
-  taken.set(folder, { version, names });
+  taken.set(folder, { version, place, names });
   return names;
 }
 
@@ -343,7 +350,7 @@ function revealWhenSorted(folder: Folder, listing: number, id: number, name: str
 function waitFor(
   folder: Folder,
   listing: number,
-  check: (message: ListingMessage) => boolean,
+  check: (message: FolderMessage) => boolean,
 ): void {
   const unlisten = folder.listen((message) => {
     if (folder.store.getState().listing !== listing || check(message)) {
@@ -360,7 +367,12 @@ function waitFor(
 /** Whether Ctrl+Shift+N can make a folder in the active pane's folder. */
 export function canCreateFolder(): boolean {
   const state = activeFolder()?.store.getState();
-  return !creating && state?.listing !== undefined && state.status !== "failed";
+  return (
+    !creating &&
+    state?.listing !== undefined &&
+    state.status !== "failed" &&
+    state.search === undefined
+  );
 }
 
 /**

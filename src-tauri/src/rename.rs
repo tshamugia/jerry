@@ -69,6 +69,8 @@ fn rename_entry(
         .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
     rename_path(&path, name)?;
     tracing::info!("renamed");
+    // Search results don't watch their folders: they follow Jerry's own renames.
+    listings.results_renamed(&path, &path.with_file_name(name));
     Ok(())
 }
 

@@ -23,12 +23,14 @@
 //! the search: no batch follows. Everything here is blocking: run it on a background thread.
 
 mod query;
+mod saved;
 mod walk;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 pub use query::{DateRange, FileType, SearchItems, SearchQuery, SizeRange};
+pub use saved::{DateFilter, SavedSearch};
 
 use crate::error::JerryError;
 use crate::listing::Entries;

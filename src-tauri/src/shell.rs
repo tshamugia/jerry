@@ -2,6 +2,7 @@
 //! Explorer, opening a terminal in a folder and copying a folder's path. Paths come from core (an
 //! entry of an open listing, a folder token), never from the UI's text.
 
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
@@ -61,8 +62,9 @@ pub async fn open_entries(
 }
 
 /// Shows entries `entries` of listing `listing` selected in an Explorer window on the listing's
-/// folder: the context menu's "Show in Explorer". Waits for Explorer to take it, at most a few
-/// seconds. `NotFound` for an entry or listing that is gone.
+/// folder: the context menu's "Show in Explorer". Search results from several folders get a
+/// window per folder. Waits for Explorer to take each, at most a few seconds. `NotFound` for an
+/// entry or listing that is gone.
 #[tauri::command]
 #[specta::specta]
 pub async fn show_in_explorer(
@@ -72,27 +74,47 @@ pub async fn show_in_explorer(
 ) -> Result<(), JerryError> {
     let listings = app.state::<Listings>().inner().clone();
     let not_found = || JerryError::new(ErrorCode::NotFound);
-    let folder = listings.folder(listing).ok_or_else(not_found)?;
     let items = entries
         .into_iter()
         .map(|entry| listings.entry(listing, entry).map(|(path, ..)| path))
         .collect::<Option<Vec<_>>>()
         .ok_or_else(not_found)?;
-    jobs::background(
-        "show in Explorer",
-        move || match jerry_win::open::show_in_explorer(folder, items).recv_timeout(OPEN_WAIT) {
-            Ok(outcome) => outcome,
-            Err(RecvTimeoutError::Timeout) => {
-                tracing::info!("Explorer still opening; not waiting");
-                Ok(())
+    let groups = match listings.folder(listing) {
+        Some(folder) => vec![(folder, items)],
+        None => by_folder(items),
+    };
+    jobs::background("show in Explorer", move || {
+        for (folder, items) in groups {
+            match jerry_win::open::show_in_explorer(folder, items).recv_timeout(OPEN_WAIT) {
+                Ok(outcome) => outcome?,
+                Err(RecvTimeoutError::Timeout) => {
+                    tracing::info!("Explorer still opening; not waiting");
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err(JerryError::internal()),
             }
-            Err(RecvTimeoutError::Disconnected) => Err(JerryError::internal()),
-        },
-    )
+        }
+        Ok(())
+    })
     .await
 }
 
-/// Opens a terminal in the folder listing `listing` shows, or in its subfolder `entry`: Windows
+/// `items` grouped by the folder they are in, folders in the order their first item comes.
+fn by_folder(items: Vec<PathBuf>) -> Vec<(PathBuf, Vec<PathBuf>)> {
+    let mut groups: Vec<(PathBuf, Vec<PathBuf>)> = Vec::new();
+    for item in items {
+        let Some(folder) = item.parent().map(Path::to_path_buf) else {
+            continue;
+        };
+        match groups.iter_mut().find(|(each, _)| *each == folder) {
+            Some((_, group)) => group.push(item),
+            None => groups.push((folder, vec![item])),
+        }
+    }
+    groups
+}
+
+/// Opens a terminal in the folder listing `listing` shows, or in its subfolder `entry`, or in
+/// the folder of its file `entry` (search results have no folder of their own): Windows
 /// Terminal, or Windows PowerShell where it isn't installed. `NotFound` for an entry or listing
 /// that is gone.
 #[tauri::command]
@@ -107,8 +129,7 @@ pub async fn open_terminal(
         None => listings.folder(listing),
         Some(entry) => match listings.entry(listing, entry) {
             Some((path, attributes, _)) if attributes & DIRECTORY != 0 => Some(path),
-            // The UI offers it on folders only.
-            Some(_) => return Err(JerryError::internal()),
+            Some((path, ..)) => path.parent().map(Path::to_path_buf),
             None => None,
         },
     }

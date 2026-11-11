@@ -53,6 +53,10 @@ pub enum SortColumn {
     Created,
     /// The extension: what follows the name's last dot. Folders have none.
     Extension,
+    /// The folder an entry is in: search results (#66), which come from many folders, sort by
+    /// their folders' natural order, then by name. A folder listing has one folder, so there it
+    /// sorts as Name.
+    Location,
 }
 
 /// How a list is sorted.
@@ -301,6 +305,13 @@ impl SortIndex {
     /// from, their sizes and dates as they are now; entries added after it are left out. CPU work
     /// in parallel: a few ms for 100 000.
     pub fn order(&self, entries: &Entries, sort: Sort) -> Vec<u32> {
+        self.order_with(entries, sort, &[])
+    }
+
+    /// Like [`SortIndex::order`], with `locations[id]` the rank of entry `id`'s folder for the
+    /// Location column: search results, ranked by their folders' natural order
+    /// ([`natural_ranks`]). An entry without one sorts first.
+    pub fn order_with(&self, entries: &Entries, sort: Sort, locations: &[u32]) -> Vec<u32> {
         // One u128 per entry: group (bit 96) | primary value (bits 32..96) | name rank (bits
         // 0..32). The rank is unique, so sorting the integers gives a total order, and the low
         // bits lead back to the entry. Descending flips value and rank but not the group.
@@ -326,6 +337,7 @@ impl SortIndex {
                     SortColumn::Size => entries.sizes()[id],
                     SortColumn::Created => entries.created()[id],
                     SortColumn::Extension => u64::from(self.extension_rank[id]),
+                    SortColumn::Location => locations.get(id).map_or(0, |&rank| u64::from(rank)),
                 };
                 let (value, rank) = flip(value, rank as u32);
                 (group << 96) | (u128::from(value) << 32) | u128::from(rank)
@@ -383,6 +395,13 @@ fn extension_and_type_ranks(entries: &Entries, types: &dyn TypeNames) -> (Vec<u3
             index => (extension_ranks[index as usize], type_ranks[index as usize]),
         })
         .unzip()
+}
+
+/// The natural order of `texts` (UTF-16) as dense ranks, from 1: `ranks[i]` is text `i`'s, and
+/// texts equal but for case share one. Search results' folders, for the Location column.
+pub fn natural_ranks(texts: &[Vec<u16>]) -> Vec<u32> {
+    let keys: Vec<Vec<u8>> = texts.iter().map(|text| key_of(text)).collect();
+    dense_ranks(&keys)
 }
 
 /// Dense ranks of `keys` in key order, from 1; equal keys share a rank.
@@ -544,6 +563,34 @@ mod tests {
             }
         }
         wrong
+    }
+
+    #[test]
+    fn locations_sort_by_their_folders_then_by_name() {
+        let list = entries(&["b.dwg", "a.dwg", "c.dwg", "Sub\\"]);
+        let folders: Vec<Vec<u16>> = [r"D:\Projects 10", r"D:\Projects 2", r"D:\ახალი"]
+            .iter()
+            .map(|text| text.encode_utf16().collect())
+            .collect();
+        let ranks = natural_ranks(&folders);
+        assert_eq!(ranks, [2, 1, 3], "2 before 10, Latin before Georgian");
+        // b.dwg and Sub in "Projects 10", a.dwg in "ახალი", c.dwg in "Projects 2".
+        let locations = [ranks[0], ranks[2], ranks[1], ranks[0]];
+        let index = SortIndex::build(&list, &PlainTypeNames);
+        let location = by(SortColumn::Location, false);
+        assert_eq!(
+            names_in(&list, &index.order_with(&list, location, &locations)),
+            ["Sub", "c.dwg", "b.dwg", "a.dwg"]
+        );
+        assert_eq!(
+            names_in(
+                &list,
+                &index.order_with(&list, by(SortColumn::Location, true), &locations)
+            ),
+            ["Sub", "a.dwg", "b.dwg", "c.dwg"]
+        );
+        // A folder listing has no locations: Location sorts as Name.
+        assert_eq!(sorted(&list, location), sorted(&list, Sort::default()));
     }
 
     #[test]

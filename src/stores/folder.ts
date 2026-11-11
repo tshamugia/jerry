@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { wildcardMatcher } from "../features/filter/wildcard";
+import { queryOf } from "../features/search/query";
 import {
   commands,
   type JerryError,
@@ -8,13 +9,18 @@ import {
   type ListingOpened,
   type ListingTarget,
   type Look,
-  type OpenListing,
   openListing,
+  type SavedSearch,
+  type SearchCounts,
+  type SearchMessage,
+  type SearchOpened,
   type Sort,
   type SortColumn,
+  startSearch,
 } from "../ipc";
-import { type ColumnLayout, DEFAULT_COLUMNS } from "./columns";
-import { FolderEntries, matchingRows, visibleRows } from "./entries";
+import { type ColumnLayout, DEFAULT_COLUMNS, withLocation, withoutLocation } from "./columns";
+import { FolderEntries, laterRows, matchingRows, visibleRows } from "./entries";
+import { useSettings } from "./settings";
 
 /**
  * Where a folder view is: no folder yet, reading it (rows show as batches arrive), all in (and
@@ -22,14 +28,46 @@ import { FolderEntries, matchingRows, visibleRows } from "./entries";
  */
 export type FolderStatus = "none" | "loading" | "ready" | "failed";
 
+/** What a results tab searched for (#66): the search as the user put it, and where. */
+export interface SearchSpec {
+  search: SavedSearch;
+  /** The folder searched from, as the core's token: with `search.wholeDrive`, its drive. */
+  folder: number;
+  /** That folder's name and its drive (`D:`, a share), as the search window offers them. */
+  name: string;
+  drive: string;
+}
+
+/** A results tab's search: what it looks for and how far it got. */
+export interface SearchState extends SearchCounts {
+  spec: SearchSpec;
+  /** Searching, done, or stopped by the user (the results are what it found until then). */
+  phase: "searching" | "done" | "stopped";
+  /** How long it took, once it ended. */
+  ms: number | undefined;
+}
+
+/** What a folder view hears from the core: a listing's messages, or a search's. */
+export type FolderMessage = ListingMessage | SearchMessage;
+
+/** The open listing or search, as the view drives it. */
+interface Handle {
+  sort: (sort: Sort) => Promise<unknown>;
+  close: () => Promise<void>;
+  /** A search's Stop. */
+  stop?: () => Promise<void>;
+}
+
 export interface FolderState {
   status: FolderStatus;
   /** The folder as display text, once the core has answered. */
   path: string | undefined;
   /** Why it failed. */
   error: JerryError | undefined;
-  /** The open listing's id: entries' icons and subfolders need it. */
+  /** The open listing's id (or search results', #66): entries' icons and subfolders need it. */
   listing: number | undefined;
+  /** A results tab's search; undefined while the view shows a folder. */
+  search: SearchState | undefined;
   /** The sort asked for last; the rows follow it once its order arrives. */
   sort: Sort;
   /** Changed in place: `version` changes with it. */
@@ -112,6 +150,7 @@ function emptyFolder() {
     path: undefined,
     error: undefined,
     listing: undefined,
+    search: undefined,
     entries: new FolderEntries(),
     order: undefined,
     selected: new Set<number>(),
@@ -137,7 +176,7 @@ export class Folder {
    * it back when the tab shows again.
    */
   scrollTop = 0;
-  private current: OpenListing | undefined;
+  private current: Handle | undefined;
   /** Counts opens, so messages and answers for an earlier folder are dropped. */
   private generation = 0;
   private target: ListingTarget | undefined;
@@ -149,7 +188,7 @@ export class Folder {
   private sortAsked = false;
   /** The user changed the view of folder `folder`; it is remembered when `timer` fires. */
   private unsaved: { folder: number; timer: ReturnType<typeof setTimeout> } | undefined;
-  private readonly listeners = new Set<(message: ListingMessage) => void>();
+  private readonly listeners = new Set<(message: FolderMessage) => void>();
   private shownCache:
     | { key: readonly unknown[]; showHidden: boolean; shown: ShownRows }
     | undefined;
@@ -184,12 +223,16 @@ export class Folder {
     this.scrollTop = 0;
     this.waiting = true;
     this.sortAsked = false;
-    const { sort, version } = this.store.getState();
+    const { sort: was, version, columns } = this.store.getState();
+    // A folder has no Location column: a results tab going to a folder drops it.
+    const sort: Sort = was.column === "location" ? { ...was, column: "name" } : was;
     this.store.setState({
       ...emptyFolder(),
       filter: restore?.filter ?? "",
       status: "loading",
       version: version + 1,
+      sort,
+      columns: withoutLocation(columns),
     });
 
     const result = await openListing(this.tab, target, sort, (message) =>
@@ -198,7 +241,7 @@ export class Folder {
     if (result.status === "error") {
       // The core didn't start the new listing, so the previous one is still open there.
       if (previous) {
-        void commands.listingClose(previous.id);
+        void previous.close();
       }
       if (mine === this.generation) {
         this.restore = undefined;
@@ -235,8 +278,11 @@ export class Folder {
    * Opens the folder again, keeping the selection, the focus, the filter and the scroll position
    * by name: Ctrl+R, and Retry after an error.
    */
-  refresh(): Promise<ListingOpened | undefined> {
-    const { listing, entries, selected, focused, filter } = this.store.getState();
+  refresh(): Promise<ListingOpened | SearchOpened | undefined> {
+    const { listing, entries, selected, focused, filter, search } = this.store.getState();
+    if (search) {
+      return this.search(search.spec, filter);
+    }
     if (listing === undefined) {
       return this.target ? this.open(this.target) : Promise.resolve(undefined);
     }
@@ -250,6 +296,74 @@ export class Folder {
         filter,
       },
     );
+  }
+
+  /**
+   * Searches as `spec` says, here in place of what the view shows (#66): the rows are the
+   * results, shown as they are found, with a Location column. `filter` is the quick filter to
+   * keep (a search run again). Resolves once the core has answered: with the folder searched, or
+   * nothing if it failed (the list shows why) or another open came after this one.
+   */
+  async search(spec: SearchSpec, filter = ""): Promise<SearchOpened | undefined> {
+    this.rememberView();
+    const previous = this.current;
+    this.current = undefined;
+    this.folder = undefined;
+    const mine = ++this.generation;
+    this.target = undefined;
+    this.restore = undefined;
+    this.scrollTop = 0;
+    this.waiting = false;
+    this.sortAsked = false;
+    const { sort, version, columns } = this.store.getState();
+    this.store.setState({
+      ...emptyFolder(),
+      filter,
+      status: "loading",
+      version: version + 1,
+      columns: withLocation(columns),
+      search: { spec, phase: "searching", found: 0, checked: 0, skipped: 0, ms: undefined },
+    });
+
+    const showHidden = useSettings.getState().settings?.showHidden ?? false;
+    const within = {
+      kind: spec.search.wholeDrive ? "drive" : "folder",
+      folder: spec.folder,
+    } as const;
+    const query = queryOf(spec.search, showHidden);
+    const result = await startSearch(this.tab, within, query, sort, (message) =>
+      this.receive(mine, message),
+    );
+    if (result.status === "error") {
+      // The core didn't start the search, so what the tab showed is still open there.
+      if (previous) {
+        void previous.close();
+      }
+      if (mine === this.generation) {
+        this.store.setState({ status: "failed", error: result.error });
+      }
+      return undefined;
+    }
+    if (mine !== this.generation) {
+      void result.data.close();
+      return undefined;
+    }
+    this.current = result.data;
+    this.store.setState({ listing: result.data.id, path: result.data.path });
+    // A sort asked for before the core answered.
+    const wanted = this.store.getState().sort;
+    if (!sameSort(wanted, sort)) {
+      void result.data.sort(wanted);
+    }
+    const { id, path, name, folder, crumbs } = result.data;
+    return { id, path, name, folder, crumbs };
+  }
+
+  /** Stop: the search ends with what it found so far, which stays and gets sorted. */
+  stopSearch(): void {
+    if (this.store.getState().search?.phase === "searching") {
+      void this.current?.stop?.();
+    }
   }
 
   /** Asks the list to scroll until entry `id` is in view: a new folder, a renamed entry. */
@@ -377,13 +491,16 @@ export class Folder {
    * the status bar share one pass over the entries.
    */
   shown(showHidden: boolean): ShownRows {
-    const { status, entries, order, version, filter } = this.store.getState();
+    const { status, entries, order, version, filter, search } = this.store.getState();
     const key = [status, entries, order, version, filter, showHidden];
     const cached = this.shownCache;
     if (cached?.key.every((part, i) => part === key[i])) {
       return cached.shown;
     }
-    const all = status === "failed" ? new Uint32Array(0) : visibleRows(entries, order, showHidden);
+    // Results found after their last order show after it, unsorted, until the next one.
+    const ordered = search && order ? laterRows(entries, order) : order;
+    const all =
+      status === "failed" ? new Uint32Array(0) : visibleRows(entries, ordered, showHidden);
     const rows = filter === "" ? all : matchingRows(entries, all, wildcardMatcher(filter));
     const shown = { rows, total: all.length };
     this.shownCache = { key, showHidden, shown };
@@ -402,7 +519,7 @@ export class Folder {
   }
 
   /** Calls `listener` with every message from the core, once the store has it. */
-  listen(listener: (message: ListingMessage) => void): () => void {
+  listen(listener: (message: FolderMessage) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
@@ -442,7 +559,7 @@ export class Folder {
     });
   }
 
-  private receive(mine: number, message: ListingMessage): void {
+  private receive(mine: number, message: FolderMessage): void {
     if (mine !== this.generation) {
       return;
     }
@@ -450,8 +567,18 @@ export class Folder {
     const version = state.version + 1;
     switch (message.kind) {
       case "batch":
-        state.entries.appendBatch(message);
+        if ("folderIds" in message) {
+          state.entries.appendResults(message);
+        } else {
+          state.entries.appendBatch(message);
+        }
         this.store.setState({ version });
+        break;
+      case "progress":
+        if (state.search) {
+          const { found, checked, skipped } = message;
+          this.store.setState({ search: { ...state.search, found, checked, skipped } });
+        }
         break;
       case "order":
         // An order for an earlier sort can still be on its way.
@@ -463,7 +590,11 @@ export class Folder {
         }
         break;
       case "diff": {
-        state.entries.applyDiff(message);
+        if ("folderIds" in message) {
+          state.entries.applyResultsDiff(message);
+        } else {
+          state.entries.applyDiff(message);
+        }
         const gone = new Set(message.removed);
         if (gone.size === 0) {
           this.store.setState({ version });
@@ -499,12 +630,31 @@ export class Folder {
         break;
       }
       case "done":
-        this.store.setState({ status: "ready" });
+        if ("stopped" in message && state.search) {
+          const { found, checked, skipped, rustMs, stopped } = message;
+          this.store.setState({
+            status: "ready",
+            search: {
+              ...state.search,
+              phase: stopped ? "stopped" : "done",
+              found,
+              checked,
+              skipped,
+              ms: rustMs,
+            },
+          });
+        } else {
+          this.store.setState({ status: "ready" });
+        }
         this.giveBack();
         break;
       case "error":
         this.restore = undefined;
-        this.store.setState({ status: "failed", error: message.error });
+        this.store.setState({
+          status: "failed",
+          error: message.error,
+          search: state.search && { ...state.search, phase: "done" },
+        });
         break;
     }
     if (message.kind === "diff") {
