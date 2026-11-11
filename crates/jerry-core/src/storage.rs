@@ -26,12 +26,16 @@ use crate::settings::Settings;
 
 mod favorites;
 mod journal;
+mod search_history;
+
+pub use search_history::SEARCH_HISTORY;
 
 /// The schema, one entry per version. Append only: a released migration never changes.
 const MIGRATIONS: &[M<'static>] = &[
     M::up(include_str!("storage/migrations/0001-v0.1.sql")),
     M::up(include_str!("storage/migrations/0002-network-places.sql")),
     M::up(include_str!("storage/migrations/0003-transfer-journal.sql")),
+    M::up(include_str!("storage/migrations/0004-search-history.sql")),
 ];
 
 /// The schema version this Jerry writes.

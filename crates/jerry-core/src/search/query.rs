@@ -3,7 +3,7 @@
 //! the directory read gives is asked about (name, attributes, size, last write time), so no file
 //! is ever opened: a OneDrive file that lives only in the cloud stays there.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_DIRECTORY;
 
@@ -42,7 +42,7 @@ pub struct SearchQuery {
 }
 
 /// Which kinds of items match.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub enum SearchItems {
     #[default]
@@ -52,7 +52,7 @@ pub enum SearchItems {
 }
 
 /// A type group, or one extension.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum FileType {
     /// Office documents, PDF, plain text.
@@ -70,7 +70,7 @@ pub enum FileType {
 }
 
 /// Bytes, both ends included. A missing end is open.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct SizeRange {
     pub min: Option<f64>,

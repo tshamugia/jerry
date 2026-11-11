@@ -77,6 +77,7 @@ fn a_new_database_has_every_table_in_wal_mode() {
             "keybindings",
             "network_places",
             "recent_folders",
+            "search_history",
             "session",
             "settings",
             "transfer_journal",
