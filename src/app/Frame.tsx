@@ -8,6 +8,7 @@ import {
 } from "react";
 import { useSinglePane } from "../features/navigation/panes";
 import { Sidebar } from "../features/sidebar/Sidebar";
+import { TransferPanel } from "../features/transfers/TransferPanel";
 import type { Settings } from "../ipc";
 import { setSetting } from "../stores/settings";
 import { strings } from "../strings";
@@ -24,18 +25,16 @@ interface Props {
   right?: ReactNode;
   /** The preview panel's content (dev builds: the dev panel, until previews come in v0.3). */
   previewContent?: ReactNode;
-  /** The transfer panel's content; the 56 px zone shows only while a transfer runs. */
-  transfers?: ReactNode;
 }
 
 /**
  * The window's zones, top to bottom: the 40 px title bar (each pane's tabs and the caption
  * buttons), the body (sidebar, two panes or one, preview), the transfer panel while a transfer
- * runs, and the status bar. The sidebar, the pane divider and the preview resize by drag; the
- * sizes are saved in the settings. In a narrow window the preview and then the sidebar hide
- * (`layout.ts`).
+ * runs (`TransferPanel`), and the status bar. The sidebar, the pane divider and the preview
+ * resize by drag; the sizes are saved in the settings. In a narrow window the preview and then
+ * the sidebar hide (`layout.ts`).
  */
-export function Frame({ settings, left, right, previewContent, transfers }: Props) {
+export function Frame({ settings, left, right, previewContent }: Props) {
   const width = useWindowWidth();
   const sidebar = useDraggedSize("sidebarWidth", settings.sidebarWidth);
   const preview = useDraggedSize("previewWidth", settings.previewWidth);
@@ -94,14 +93,7 @@ export function Frame({ settings, left, right, previewContent, transfers }: Prop
           </Preview>
         )}
       </div>
-      {transfers && (
-        <section
-          aria-label={strings.frame.transfers}
-          className="flex h-transfer shrink-0 items-center border-stroke border-t bg-bar"
-        >
-          {transfers}
-        </section>
-      )}
+      <TransferPanel />
       <StatusBar density={settings.density} dual={zones.dual} />
     </div>
   );
