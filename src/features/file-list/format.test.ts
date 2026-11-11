@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { dateText, extensionOf, nameText, sizeCell, typeName } from "./format";
+import { dateText, extensionOf, locationText, nameText, sizeCell, typeName } from "./format";
 
 test("dates are DD.MM.YYYY HH:mm in local time, or as the date format setting says", () => {
   const ms = new Date(2026, 0, 31, 9, 5).getTime();
@@ -42,4 +42,19 @@ test("names lose their extension only when extensions are hidden", () => {
   expect(nameText("plan.rev.dwg", false, false)).toBe("plan.rev");
   expect(nameText(".gitignore", false, false)).toBe(".gitignore");
   expect(nameText("v1.2", true, false)).toBe("v1.2");
+});
+
+test("a result's Location runs from the folder searched down", () => {
+  const root = String.raw`D:\Work\Projects`;
+  expect(locationText(String.raw`D:\Work\Projects\BMW\Drawings`, root)).toBe(
+    String.raw`Projects\BMW\Drawings`,
+  );
+  expect(locationText(root, root)).toBe("Projects");
+  // A whole drive: the drive starts it.
+  expect(locationText(String.raw`C:\Users\TS`, "C:\\")).toBe(String.raw`C:\Users\TS`);
+  expect(locationText("C:\\", "C:\\")).toBe("C:\\");
+  // Not under it (a name that only starts the same): as it is.
+  expect(locationText(String.raw`D:\Work\Projects 2\a`, root)).toBe(
+    String.raw`D:\Work\Projects 2\a`,
+  );
 });

@@ -129,7 +129,7 @@ pub async fn folder_space(
     listings: State<'_, Listings>,
     listing: u32,
 ) -> Result<Option<Space>, JerryError> {
-    let Some(folder) = listings.folder(listing) else {
+    let Some(folder) = listings.place(listing) else {
         return Ok(None);
     };
     let reader = drives.0.space.clone();

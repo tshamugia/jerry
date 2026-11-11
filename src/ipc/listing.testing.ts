@@ -1,6 +1,6 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
-import type { ListingOpened, ListingTarget, Sort } from "./bindings";
+import type { ListingOpened, ListingTarget, SearchOpened, SearchQuery, Sort } from "./bindings";
 import { HEADER_BYTES } from "./channel";
 
 /**
@@ -38,6 +38,7 @@ export function fakeListings({
   opened = () => ({}),
   other = () => null,
   events = false,
+  searches = () => [],
 }: {
   messages?: (target: ListingTarget) => ArrayBuffer[];
   sorted?: (sort: Sort) => ArrayBuffer | undefined;
@@ -46,6 +47,12 @@ export function fakeListings({
   other?: (cmd: string, args: Record<string, unknown>) => unknown;
   /** Events too: `emit` from `@tauri-apps/api/event` reaches the page's listeners. */
   events?: boolean;
+  /**
+   * What `search_start` streams for `query` (`./search.testing`). Its results take the next listing
+   * id, and it answers with `path` as the folder searched: the token asked for, or for a whole
+   * drive 100 + id.
+   */
+  searches?: (query: SearchQuery) => ArrayBuffer[];
 } = {}): FakeListings {
   const calls: Call[] = [];
   // Each listing's stream, by id - 1.
@@ -73,6 +80,21 @@ export function fakeListings({
           look: { kind: "tab" },
         };
         return { ...answer, ...opened(payload.target as ListingTarget, id) };
+      }
+      if (cmd === "search_start") {
+        const stream = payload.onMessage as Channel<ArrayBuffer>;
+        streams.push(stream);
+        const queued = searches(payload.query as SearchQuery);
+        setTimeout(() => {
+          for (const message of queued) stream.onmessage(message);
+        }, 0);
+        const id = streams.length;
+        const name = path.split("\\").filter(Boolean).at(-1) ?? path;
+        // As the core: a folder's search answers with that folder's token.
+        const within = payload.within as { kind: string; folder: number };
+        const folder = within.kind === "folder" ? within.folder : 100 + id;
+        const answer: SearchOpened = { id, path, name, folder, crumbs: [{ name, folder }] };
+        return answer;
       }
       if (cmd === "listing_sort") {
         const order = sorted(payload.sort as Sort);

@@ -61,6 +61,7 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::ipc::{Bytes, message_buffer};
 use crate::jobs;
+use crate::results::ResultSet;
 use crate::storage::Db;
 use crate::views::{self, Look};
 
@@ -95,6 +96,9 @@ pub enum ListingTarget {
     Nearest { folder: u32 },
     /// The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set.
     Home,
+    /// The folder entry `entry` of the open listing or search results `listing` is in: Open
+    /// containing folder (Ctrl+Shift+E, #66).
+    Containing { listing: u32, entry: u32 },
 }
 
 /// An opened listing: its id, its folder, and how the tab shows it.
@@ -140,8 +144,9 @@ pub struct Crumb {
     pub folder: u32,
 }
 
-/// The open listings, by id. Clones share them. A tab has at most one: opening another folder
-/// for a tab closes the tab's previous listing.
+/// The open listings and search results (#66), by id. Clones share them. A tab has at most one
+/// of either: opening another folder or searching again for a tab closes the tab's previous one.
+/// Results take the same ids, so every command on a listing's entries takes theirs too.
 #[derive(Clone, Default)]
 pub struct Listings(Arc<Shared>);
 
@@ -153,6 +158,8 @@ type Visits = Box<dyn Fn(&Path) + Send + Sync>;
 struct Shared {
     last_id: AtomicU32,
     open: Mutex<HashMap<u32, Open>>,
+    /// Search results, by the same ids as the listings (`crate::results`).
+    results: Mutex<HashMap<u32, Arc<ResultSet>>>,
     watchers: Watchers,
     /// The volumes listings are on, by root (`jerry_core::volume::root`).
     volumes: Mutex<HashMap<PathBuf, Volume>>,
@@ -486,12 +493,14 @@ impl Listings {
                 }
                 long_path(&path)
             }
-            ListingTarget::Entry { listing, entry } => {
-                let open = self.open();
-                open.get(&listing)
-                    .and_then(|open| open.state.read().path(entry as usize))
-                    .ok_or_else(|| JerryError::new(ErrorCode::NotFound))
-            }
+            ListingTarget::Entry { listing, entry } => self
+                .entry(listing, entry)
+                .map(|(path, ..)| path)
+                .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
+            ListingTarget::Containing { listing, entry } => self
+                .entry(listing, entry)
+                .and_then(|(path, ..)| path.parent().map(Path::to_path_buf))
+                .ok_or_else(|| JerryError::new(ErrorCode::NotFound)),
             ListingTarget::Listing { listing } => self
                 .open()
                 .get(&listing)
@@ -731,10 +740,14 @@ impl Listings {
         self.0.watchers.gone(root);
     }
 
-    /// Sorts listing `id` by `sort` from now on. Once the whole folder is in, its order goes out
+    /// Sorts listing or search results `id` by `sort` from now on. Once the whole folder is in, its order goes out
     /// through the stream, after any diff before it; while the folder is still being read, the
     /// stream's own Order follows the new sort. CPU work: call it on a background thread.
     fn sort(&self, id: u32, sort: Sort) -> Result<(), JerryError> {
+        if let Some(results) = self.results(id) {
+            results.sort(sort);
+            return Ok(());
+        }
         let state = self
             .open()
             .get(&id)
@@ -757,15 +770,76 @@ impl Listings {
         Ok(())
     }
 
-    /// Stops listing `id` if it still runs and forgets it. No message follows.
+    /// Stops listing or search `id` if it still runs and forgets it. No message follows.
     pub fn close(&self, id: u32) {
         let closed = self.open().remove(&id);
         if let Some(open) = closed {
             open.stop();
         }
+        let results = self.all_results().remove(&id);
+        if let Some(results) = results {
+            results.close();
+        }
     }
 
-    /// The folder the open listing `listing` shows, exactly: where a new folder goes (#36).
+    /// Starts keeping search results of `root` for `tab`, sorted by `sort`, with their messages going to
+    /// `channel`, in place of the tab's listing or earlier results. Returns their id.
+    pub fn start_results(
+        &self,
+        tab: u32,
+        root: PathBuf,
+        sort: Sort,
+        channel: Channel<Bytes>,
+    ) -> (u32, Arc<ResultSet>) {
+        self.close_tab(tab);
+        let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
+        let results = Arc::new(ResultSet::new(tab, root, sort, channel));
+        self.all_results().insert(id, results.clone());
+        (id, results)
+    }
+
+    /// Search results `id`, while they are open.
+    pub fn results(&self, id: u32) -> Option<Arc<ResultSet>> {
+        self.all_results().get(&id).cloned()
+    }
+
+    /// Jerry deleted or moved `paths` away: every search's results at them, or in them, go.
+    pub fn results_removed(&self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        for results in self.every_results() {
+            results.removed(paths);
+        }
+    }
+
+    /// Jerry renamed `from` to `to`: every search's results follow.
+    pub fn results_renamed(&self, from: &Path, to: &Path) {
+        for results in self.every_results() {
+            results.renamed(from, to);
+        }
+    }
+
+    /// Where listing `listing` is: its folder, or the folder search results `listing` come from.
+    /// For the status bar's free space.
+    pub fn place(&self, listing: u32) -> Option<PathBuf> {
+        self.folder(listing)
+            .or_else(|| Some(self.results(listing)?.root().to_path_buf()))
+    }
+
+    fn every_results(&self) -> Vec<Arc<ResultSet>> {
+        self.all_results().values().cloned().collect()
+    }
+
+    fn all_results(&self) -> MutexGuard<'_, HashMap<u32, Arc<ResultSet>>> {
+        self.0
+            .results
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The folder the open listing `listing` shows, exactly: where a new folder goes (#36). Search
+    /// results have none.
     pub fn folder(&self, listing: u32) -> Option<PathBuf> {
         self.open()
             .get(&listing)
@@ -773,9 +847,12 @@ impl Listings {
     }
 
     /// The exact path, attributes and last write time (FILETIME) of entry `entry` of the open
-    /// listing `listing`: for the `icon://` protocol, which asks for an entry's own icon by id.
+    /// listing or search results `listing`: what every command on entries acts on, and the
+    /// `icon://` protocol, which asks for an entry's own icon by id.
     pub fn entry(&self, listing: u32, entry: u32) -> Option<(PathBuf, u32, u64)> {
-        let state = self.open().get(&listing)?.state.clone();
+        let Some(state) = self.open().get(&listing).map(|open| open.state.clone()) else {
+            return self.results(listing)?.entry(entry);
+        };
         let listing = state.read();
         let id = entry as usize;
         let entries = listing.entries();
@@ -819,6 +896,14 @@ impl Listings {
             let keep = listing.tab != tab;
             if !keep {
                 listing.stop();
+            }
+            keep
+        });
+        drop(open);
+        self.all_results().retain(|_, results| {
+            let keep = results.tab() != tab;
+            if !keep {
+                results.close();
             }
             keep
         });
@@ -1004,6 +1089,12 @@ pub(crate) fn push_entries(out: &mut Vec<u8>, entries: &Entries) {
 
 /// Entry ids in display order as one order message (see the module docs).
 fn order_message(sort: Sort, order: &[u32]) -> Bytes {
+    order_message_of(ORDER, sort, order)
+}
+
+/// An order message of kind `kind`: a listing's, or search results' (`crate::results`), whose
+/// Location column is 6.
+pub(crate) fn order_message_of(kind: u32, sort: Sort, order: &[u32]) -> Bytes {
     let column = match sort.column {
         SortColumn::Name => 0,
         SortColumn::Modified => 1,
@@ -1011,9 +1102,10 @@ fn order_message(sort: Sort, order: &[u32]) -> Bytes {
         SortColumn::Size => 3,
         SortColumn::Created => 4,
         SortColumn::Extension => 5,
+        SortColumn::Location => 6,
     };
     let flags = u32::from(sort.descending) | u32::from(sort.folders_first) << 1;
-    let mut out = message_buffer([ORDER, order.len() as u32, column, flags], order.len() * 4);
+    let mut out = message_buffer([kind, order.len() as u32, column, flags], order.len() * 4);
     for &id in order {
         out.extend_from_slice(&id.to_le_bytes());
     }
@@ -1155,9 +1247,9 @@ pub async fn listing_sort(app: AppHandle, id: u32, sort: Sort) -> Result<(), Jer
     jobs::background("sort", move || listings.sort(id, sort)).await
 }
 
-/// Stops listing `id` if it still runs and forgets it: no message follows, and the folder's
-/// watcher stops unless another tab has the folder open. Closing a listing that is already
-/// closed does nothing.
+/// Stops listing or search results `id` if it still runs and forgets it: no message follows, and
+/// a folder's watcher stops unless another tab has the folder open. Closing a listing that is
+/// already closed does nothing.
 #[tauri::command]
 #[specta::specta]
 pub async fn listing_close(app: AppHandle, id: u32) {

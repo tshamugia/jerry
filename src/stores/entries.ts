@@ -1,4 +1,11 @@
-import type { ListingBatch, ListingDiff, ListingEntries } from "../ipc";
+import type {
+  ListingBatch,
+  ListingDiff,
+  ListingEntries,
+  ResultFolders,
+  SearchBatch,
+  SearchDiff,
+} from "../ipc";
 
 /** The `FILE_ATTRIBUTE_*` flags the file list reads. */
 export const Attribute = { hidden: 0x2, system: 0x4, directory: 0x10 } as const;
@@ -22,6 +29,12 @@ export class FolderEntries {
   iconKeys = new Uint32Array(0);
   /** Ids diffs removed; they never come back. */
   readonly removed = new Set<number>();
+  /**
+   * Search results only (#66): each result's folder, by id in `folders` (display text). Empty for
+   * a folder's entries.
+   */
+  folderIds = new Uint32Array(0);
+  folders: string[] = [];
 
   /** Puts a batch's entries in at `firstId` on. */
   appendBatch(batch: ListingBatch): void {
@@ -52,6 +65,27 @@ export class FolderEntries {
     }
   }
 
+  /** Puts a search batch's results in, with their folders. */
+  appendResults(batch: SearchBatch): void {
+    this.appendBatch(batch);
+    this.putFolders(batch, batch.firstId, batch.names.length);
+  }
+
+  /** Puts a search diff in: renamed results, results in renamed folders, removed ones. */
+  applyResultsDiff(diff: SearchDiff): void {
+    this.applyDiff(diff);
+    this.reserveFolders();
+    for (let i = 0; i < diff.ids.length; i++) {
+      this.folderIds[diff.ids[i] ?? 0] = diff.folderIds[i] ?? 0;
+    }
+    this.addFolders(diff);
+  }
+
+  /** Where search result `id` is, as display text; undefined for a folder's entry. */
+  location(id: number): string | undefined {
+    return id < this.folderIds.length ? this.folders[this.folderIds[id] ?? 0] : undefined;
+  }
+
   isFolder(id: number): boolean {
     return ((this.attributes[id] ?? 0) & Attribute.directory) !== 0;
   }
@@ -59,6 +93,25 @@ export class FolderEntries {
   /** Hidden or system: shown, dimmed, only with "Show hidden and system files" on. */
   isHidden(id: number): boolean {
     return ((this.attributes[id] ?? 0) & (Attribute.hidden | Attribute.system)) !== 0;
+  }
+
+  private putFolders(from: ResultFolders, firstId: number, count: number): void {
+    this.reserveFolders();
+    this.folderIds.set(from.folderIds.subarray(0, count), firstId);
+    this.addFolders(from);
+  }
+
+  private addFolders({ firstFolder, folders }: ResultFolders): void {
+    for (let i = 0; i < folders.length; i++) {
+      this.folders[firstFolder + i] = folders[i] ?? "";
+    }
+  }
+
+  /** The folder ids grow with the other columns, for search results only. */
+  private reserveFolders(): void {
+    if (this.folderIds.length < this.sizes.length) {
+      this.folderIds = grown(this.folderIds, new Uint32Array(this.sizes.length));
+    }
   }
 
   private put(id: number, from: ListingEntries, i: number): void {
@@ -114,6 +167,31 @@ export function visibleRows(
   let at = 0;
   for (const id of ids) {
     if (!entries.isHidden(id)) rows[at++] = id;
+  }
+  return rows;
+}
+
+/**
+ * Search results' `order` with the results found since it came after it, in arrival order: an
+ * order covers what was found when it was made (#66).
+ */
+export function laterRows(entries: FolderEntries, order: Uint32Array): Uint32Array {
+  let last = -1;
+  for (const id of order) {
+    if (id > last) last = id;
+  }
+  let later = 0;
+  for (let id = last + 1; id < entries.count; id++) {
+    if (!entries.removed.has(id)) later += 1;
+  }
+  if (later === 0) {
+    return order;
+  }
+  const rows = new Uint32Array(order.length + later);
+  rows.set(order);
+  let at = order.length;
+  for (let id = last + 1; id < entries.count; id++) {
+    if (!entries.removed.has(id)) rows[at++] = id;
   }
   return rows;
 }

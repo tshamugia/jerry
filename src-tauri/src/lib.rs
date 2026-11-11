@@ -16,6 +16,7 @@ pub mod listing;
 pub mod logging;
 pub mod navigation;
 pub mod rename;
+pub mod results;
 pub mod search;
 pub mod session;
 pub mod shell;
@@ -116,6 +117,9 @@ macro_rules! commands {
             rename::rename,
             search::search_start,
             search::search_cancel,
+            search::search_history_list,
+            search::search_history_add,
+            search::search_history_remove,
             transfers::transfer_enqueue,
             transfers::transfer_control,
             transfers::transfer_reorder,

@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
-import type { Crumb, ListingOpened, ListingTarget } from "../ipc";
-import { Folder, type Restore } from "./folder";
+import { searchKey, searchTitle } from "../features/search/query";
+import type { Crumb, ListingOpened, ListingTarget, SearchOpened } from "../ipc";
+import { Folder, type Restore, type SearchSpec } from "./folder";
 import type { PaneSide } from "./window";
 
 /** A folder in a tab's history. */
@@ -18,6 +19,11 @@ export interface HistoryEntry {
   crumbs: readonly Crumb[];
   /** The entry that had the focus when the tab left the folder: it gets it back on return. */
   focus?: string;
+  /**
+   * Search results (#66): the tab searched `folder` (and what is in it, or its drive) as this
+   * says. Going back to it searches again.
+   */
+  search?: SearchSpec;
 }
 
 export interface TabState {
@@ -43,6 +49,27 @@ const entryOf = (opened: ListingOpened): HistoryEntry => ({
   parent: opened.parent,
   crumbs: opened.crumbs,
 });
+
+/** A results tab's step: the folder searched, named for the search; Up goes to the folder. */
+const searchEntryOf = (opened: SearchOpened, spec: SearchSpec): HistoryEntry => ({
+  folder: opened.folder,
+  path: opened.path,
+  name: searchTitle(spec.search),
+  parent: opened.folder,
+  crumbs: opened.crumbs,
+  search: spec,
+});
+
+/** Whether `a` and `b` are one step: the same folder, or the same search of the same folder. */
+function sameStep(a: HistoryEntry | undefined, b: HistoryEntry): boolean {
+  if (!a || a.folder !== b.folder) {
+    return false;
+  }
+  if (a.search && b.search) {
+    return searchKey(a.search.search) === searchKey(b.search.search);
+  }
+  return !a.search && !b.search;
+}
 
 /**
  * A tab: its own folder view (`folder`: listing, sort, columns, filter, selection, scroll) and
@@ -91,10 +118,37 @@ export class Tab {
     if (!opened || mine !== this.navigation) {
       return;
     }
+    this.step(entryOf(opened));
+  }
+
+  /**
+   * Searches as `spec` says, here, as a new step in the history (#66): the tab shows the results
+   * as they are found, and Back goes to what it showed before.
+   */
+  async search(spec: SearchSpec): Promise<void> {
+    const mine = ++this.navigation;
+    this.rememberFocus();
+    const opened = await this.folder.search(spec);
+    if (!opened || mine !== this.navigation) {
+      return;
+    }
+    this.step(searchEntryOf(opened, spec));
+  }
+
+  /** Shows history entry `entry` again: its folder, or its search run again. */
+  show(entry: HistoryEntry, restore?: Restore): void {
+    if (entry.search) {
+      void this.folder.search(entry.search, restore?.filter);
+    } else {
+      void this.folder.open({ kind: "folder", folder: entry.folder }, restore);
+    }
+  }
+
+  /** `entry` as the next step after the one shown; the steps after it go. */
+  private step(entry: HistoryEntry): void {
     const { history, index } = this.store.getState();
-    const entry = entryOf(opened);
     // Opening the folder shown again (its path typed, say) isn't a step.
-    if (history[index]?.folder === entry.folder) {
+    if (sameStep(history[index], entry)) {
       this.store.setState({ history: history.with(index, entry) });
       return;
     }
@@ -113,7 +167,7 @@ export class Tab {
     this.navigation++;
     // At once, so Back held down steps back once per repeat.
     this.store.setState({ index });
-    void this.folder.open({ kind: "folder", folder: entry.folder }, { focus: entry.focus });
+    this.show(entry, { focus: entry.focus });
   }
 
   /** Alt+←, Backspace. */
@@ -126,11 +180,12 @@ export class Tab {
     this.go(this.store.getState().index + 1);
   }
 
-  /** Alt+↑: the folder this one is in, with this one focused, as in Explorer. */
+  /** Alt+↑: the folder this one is in, with this one focused, as in Explorer; from results, the folder searched. */
   up(): void {
     const current = this.current();
     if (current?.parent != null) {
-      void this.open({ kind: "folder", folder: current.parent }, { focus: current.name });
+      const focus = current.search ? undefined : current.name;
+      void this.open({ kind: "folder", folder: current.parent }, { focus });
     }
   }
 
@@ -147,6 +202,11 @@ export class Tab {
   restore(moved?: (gone: HistoryEntry, shown: HistoryEntry) => void): void {
     const entry = this.current();
     if (!entry) {
+      return;
+    }
+    if (entry.search) {
+      this.navigation++;
+      this.show(entry);
       return;
     }
     const mine = ++this.navigation;
@@ -346,6 +406,22 @@ export function openInNewTab(
   return tab;
 }
 
+/**
+ * Searches as `spec` says in a new tab right after `pane`'s active one, which shows (#66): the
+ * results open in a tab of their own, with their own Location column.
+ */
+export function searchInNewTab(pane: PaneSide, spec: SearchSpec): Tab {
+  const { tabs, active } = useTabs.getState()[pane];
+  const at = tabs.findIndex((tab) => tab.id === active);
+  const tab = addTab(pane, {
+    index: at + 1,
+    activate: true,
+    from: { look: activeTab(pane)?.look() },
+  });
+  void tab.search(spec);
+  return tab;
+}
+
 /** Shows `id` in `pane`. */
 export function activateTab(pane: PaneSide, id: number): void {
   const current = useTabs.getState()[pane];
@@ -399,7 +475,7 @@ export function reopenClosedTab(): Tab | undefined {
   });
   const entry = tab.current();
   if (entry) {
-    void tab.folder.open({ kind: "folder", folder: entry.folder }, { focus: entry.focus });
+    tab.show(entry, { focus: entry.focus });
   }
   return tab;
 }
@@ -473,10 +549,7 @@ export function duplicateTab(pane: PaneSide, id: number): Tab | undefined {
     activate: true,
     from: { look: source.look(), history, index: at },
   });
-  void tab.folder.open(
-    { kind: "folder", folder: entry.folder },
-    { filter: source.folder.store.getState().filter, focus: history[at]?.focus },
-  );
+  tab.show(entry, { filter: source.folder.store.getState().filter, focus: history[at]?.focus });
   return tab;
 }
 

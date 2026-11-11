@@ -13,6 +13,7 @@ export const WIDTH_CLASS: Record<ColumnId, string> = {
   size: "w-(--col-size) shrink-0",
   created: "w-(--col-created) shrink-0",
   extension: "w-(--col-extension) shrink-0",
+  location: "w-(--col-location) shrink-0",
 };
 
 /** The design's widths (tokens), until the user drags a column. */
@@ -22,6 +23,7 @@ const DEFAULT_WIDTHS: Record<Exclude<ColumnId, "name">, string> = {
   size: "var(--jerry-col-size-w)",
   created: "var(--jerry-col-date-w)",
   extension: "var(--jerry-col-ext-w)",
+  location: "var(--jerry-col-location-w)",
 };
 
 /** The width variables `WIDTH_CLASS` reads, for the list's `style`. */

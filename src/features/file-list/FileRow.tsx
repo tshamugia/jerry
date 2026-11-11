@@ -18,6 +18,12 @@ export interface FileRowProps {
   /** The columns that show, in order. */
   columns: readonly ColumnId[];
   name: string;
+  /**
+   * Search results: the folder the entry is in, as display text (the Location column's tooltip),
+   * and as the column shows it, from the folder searched down.
+   */
+  location: string | undefined;
+  locationShown: string | undefined;
   size: number;
   modified: number;
   created: number;
@@ -82,6 +88,7 @@ export const FileRow = memo(function FileRow(props: FileRowProps) {
           <div
             key={column}
             role="gridcell"
+            title={column === "location" ? props.location : undefined}
             className={`${WIDTH_CLASS[column]} truncate text-fg-2 text-small ${faded} ${at === 0 ? "" : "pl-2"} ${column === "size" ? "text-right" : ""} ${NUMERIC.has(column) ? "tabular-nums" : ""}`}
           >
             {cellText(column, props, folder)}
@@ -146,6 +153,8 @@ function cellText(column: ColumnId, row: FileRowProps, folder: boolean): string 
       return sizeCell(row.size, folder);
     case "extension":
       return extensionOf(row.name, folder);
+    case "location":
+      return row.locationShown ?? "";
     case "name":
       return row.name;
   }

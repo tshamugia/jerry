@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use jerry_core::delete::takes_system_folder;
-use jerry_core::path::plain_path;
+use jerry_core::path::{long_path, plain_path};
 use jerry_core::{ErrorCode, JerryError};
 use jerry_win::clipboard::{self, Op};
 use serde::{Deserialize, Serialize};
@@ -117,6 +117,21 @@ pub async fn clipboard_paste(
         aborted = pasted.aborted,
         "pasted"
     );
+    if op == Op::Cut {
+        // Search results don't watch their folders: what moved away leaves them.
+        let listings = app.state::<Listings>().inner().clone();
+        let sources = files.paths.clone();
+        jobs::background("paste moved", move || {
+            let moved: Vec<PathBuf> = sources
+                .iter()
+                .filter_map(|source| long_path(source).ok())
+                .filter(|source| std::fs::symlink_metadata(source).is_err())
+                .collect();
+            listings.results_removed(&moved);
+            Ok(())
+        })
+        .await?;
+    }
     if op == Op::Cut && !pasted.aborted {
         jobs::on_main("clipboard finish cut", move || {
             clipboard::finish_cut(&files);
@@ -155,7 +170,12 @@ pub async fn clipboard_cut_entries(app: AppHandle, listing: u32) -> Result<Vec<u
     jobs::background("clipboard cut entries", move || {
         let cut = clipboard::cut_paths();
         let Some(folder) = listings.folder(listing) else {
-            return Ok(Vec::new());
+            // Search results: by their paths.
+            let cut: HashSet<PathBuf> = cut.into_iter().collect();
+            return Ok(listings
+                .results(listing)
+                .map(|results| results.entries_at(&cut))
+                .unwrap_or_default());
         };
         let names: HashSet<Vec<u16>> = cut
             .iter()

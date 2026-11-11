@@ -1,54 +1,16 @@
 import type { Channel } from "@tauri-apps/api/core";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { expect, test } from "vitest";
-import { decodeSearchMessage, type SearchMessage, type SearchQuery, startSearch } from ".";
+import {
+  decodeSearchMessage,
+  type SearchMessage,
+  type SearchOpened,
+  type SearchQuery,
+  type Sort,
+  startSearch,
+} from ".";
 import { HEADER_BYTES } from "./channel";
-import { entriesBytes, type TestEntry, unitCount, writeEntries } from "./listing.testing";
-
-/** A batch message laid out as `src-tauri/src/search.rs` writes it. */
-function searchBatch(
-  firstId: number,
-  entries: TestEntry[],
-  folderIds: number[],
-  firstFolder: number,
-  folders: string[],
-): ArrayBuffer {
-  const units = unitCount(entries);
-  const folderUnits = folders.reduce((count, folder) => count + folder.length, 0);
-  const words = entries.length + folders.length;
-  const entriesAt = HEADER_BYTES * 2 + (words + (words % 2)) * 4;
-  const buffer = new ArrayBuffer(entriesAt + entriesBytes(entries.length, units) + folderUnits * 2);
-  new Uint32Array(buffer, 0, 8).set([
-    1,
-    entries.length,
-    firstId,
-    units,
-    folders.length,
-    firstFolder,
-    folderUnits,
-    0,
-  ]);
-  const ends: number[] = [];
-  for (const folder of folders) ends.push((ends.at(-1) ?? 0) + folder.length);
-  new Uint32Array(buffer, HEADER_BYTES * 2, words).set([...folderIds, ...ends]);
-  writeEntries(buffer, entriesAt, entries);
-  const text = folders.join("");
-  const at = buffer.byteLength - folderUnits * 2;
-  new Uint16Array(buffer, at, folderUnits).set(stringUnits(text));
-  return buffer;
-}
-
-/** UTF-16 code units, as Rust writes them. */
-function stringUnits(text: string): number[] {
-  return Array.from({ length: text.length }, (_, i) => text.charCodeAt(i));
-}
-
-function counts(kind: number, found: number, checked: number, skipped: number, ms?: number) {
-  const buffer = new ArrayBuffer(HEADER_BYTES + (ms === undefined ? 0 : 8));
-  new Uint32Array(buffer, 0, 4).set([kind, found, checked, skipped]);
-  if (ms !== undefined) new Float64Array(buffer, HEADER_BYTES, 1).set([ms]);
-  return buffer;
-}
+import { searchBatch, searchDiff, searchDone, searchOrder, searchProgress } from "./search.testing";
 
 /** A drive's root as display text. */
 const DRIVE = "C:\\";
@@ -62,6 +24,16 @@ const query: SearchQuery = {
   hidden: false,
   followLinks: false,
   systemFolders: false,
+};
+
+const sort: Sort = { column: "name", descending: false, foldersFirst: true };
+
+const opened: SearchOpened = {
+  id: 5,
+  path: String.raw`C:\Work`,
+  name: "Work",
+  folder: 12,
+  crumbs: [],
 };
 
 test("a batch carries results, their folder ids and the new folders", () => {
@@ -119,20 +91,53 @@ test("an odd number of words is padded and several folders split by their ends",
   expect(decodedOdd.names).toEqual(["a.txt", "b.txt"]);
 });
 
-test("progress, done and error decode", () => {
-  expect(decodeSearchMessage(counts(2, 48, 5000, 1))).toEqual({
+test("a diff carries renamed results with their folders, and removed ones", () => {
+  const message = searchDiff(
+    [1, 4],
+    [2],
+    [{ name: "ნახაზი v2.dwg" }, { name: "b.pdf" }],
+    [0, 7],
+    7,
+    [String.raw`D:\Work\ბ`],
+  );
+
+  const decoded = decodeSearchMessage(message);
+
+  if (decoded.kind !== "diff") throw new Error("not a diff");
+  expect([...decoded.ids]).toEqual([1, 4]);
+  expect([...decoded.removed]).toEqual([2]);
+  expect(decoded.names).toEqual(["ნახაზი v2.dwg", "b.pdf"]);
+  expect([...decoded.folderIds]).toEqual([0, 7]);
+  expect(decoded.firstFolder).toBe(7);
+  expect(decoded.folders).toEqual([String.raw`D:\Work\ბ`]);
+
+  const removedOnly = decodeSearchMessage(searchDiff([], [3, 5], [], []));
+  if (removedOnly.kind !== "diff") throw new Error("not a diff");
+  expect([...removedOnly.removed]).toEqual([3, 5]);
+  expect(removedOnly.names).toEqual([]);
+});
+
+test("progress, order, done and error decode", () => {
+  expect(decodeSearchMessage(searchProgress(48, 5000, 1))).toEqual({
     kind: "progress",
     found: 48,
     checked: 5000,
     skipped: 1,
   });
-  expect(decodeSearchMessage(counts(3, 50, 6000, 1, 12.5))).toEqual({
+  expect(decodeSearchMessage(searchDone(50, 12.5))).toEqual({
     kind: "done",
     found: 50,
-    checked: 6000,
-    skipped: 1,
+    checked: 500,
+    skipped: 0,
     rustMs: 12.5,
+    stopped: false,
   });
+  expect(decodeSearchMessage(searchDone(3, 1, true))).toMatchObject({ stopped: true });
+  const order = decodeSearchMessage(searchOrder([2, 0, 1], { column: 6, descending: true }));
+  if (order.kind !== "order") throw new Error("not an order");
+  expect(order.sort).toEqual({ column: "location", descending: true, foldersFirst: true });
+  expect([...order.ids]).toEqual([2, 0, 1]);
+
   const json = new TextEncoder().encode(
     JSON.stringify({ code: "AccessDenied", path: String.raw`C:\ნახაზები` }),
   );
@@ -143,42 +148,54 @@ test("progress, done and error decode", () => {
     kind: "error",
     error: { code: "AccessDenied", path: String.raw`C:\ნახაზები` },
   });
-  expect(() => decodeSearchMessage(counts(9, 0, 0, 0))).toThrow(RangeError);
+  const unknown = new ArrayBuffer(HEADER_BYTES);
+  new Uint32Array(unknown, 0, 1).set([9]);
+  expect(() => decodeSearchMessage(unknown)).toThrow(RangeError);
 });
 
-test("startSearch streams decoded messages until it is cancelled", async () => {
+test("startSearch streams decoded messages, stops, sorts and closes by the results' id", async () => {
   const calls: [string, unknown][] = [];
   let channel: Channel<ArrayBuffer> | undefined;
   mockIPC((cmd, args) => {
     calls.push([cmd, args]);
     if (cmd === "search_start") {
       channel = (args as { onMessage: Channel<ArrayBuffer> }).onMessage;
-      return 5;
+      return opened;
     }
     return null;
   });
   const seen: SearchMessage["kind"][] = [];
 
-  const result = await startSearch({ kind: "folder", folder: 12 }, query, (message) =>
+  const result = await startSearch(7, { kind: "folder", folder: 12 }, query, sort, (message) =>
     seen.push(message.kind),
   );
   if (result.status !== "ok") throw new Error(result.error.code);
   channel?.onmessage(searchBatch(0, [{ name: "ნახაზი.dwg" }], [0], 0, [DRIVE]));
-  channel?.onmessage(counts(2, 1, 10, 0));
-  await result.data.cancel();
-  channel?.onmessage(counts(3, 1, 20, 0, 1));
+  channel?.onmessage(searchProgress(1, 10));
+  await result.data.stop();
+  channel?.onmessage(searchOrder([0]));
+  channel?.onmessage(searchDone(1, 2, true));
+  await result.data.sort({ ...sort, column: "location" });
+  await result.data.close();
+  channel?.onmessage(searchOrder([0]));
 
-  expect(result.data.id).toBe(5);
-  expect(seen).toEqual(["batch", "progress"]);
-  expect(calls.map(([cmd]) => cmd)).toEqual(["search_start", "search_cancel"]);
-  expect(calls[0]?.[1]).toMatchObject({ within: { kind: "folder", folder: 12 }, query });
+  expect(result.data).toMatchObject(opened);
+  expect(seen).toEqual(["batch", "progress", "order", "done"]);
+  expect(calls.map(([cmd]) => cmd)).toEqual([
+    "search_start",
+    "search_cancel",
+    "listing_sort",
+    "listing_close",
+  ]);
+  expect(calls[0]?.[1]).toMatchObject({ tab: 7, within: { kind: "folder", folder: 12 }, query });
   expect(calls[1]?.[1]).toEqual({ id: 5 });
+  expect(calls[3]?.[1]).toEqual({ id: 5 });
 });
 
 test("startSearch passes a JerryError through", async () => {
   mockIPC(() => Promise.reject({ code: "NotFound", path: null }));
 
-  const result = await startSearch({ kind: "drive", folder: 99 }, query, () => {});
+  const result = await startSearch(1, { kind: "drive", folder: 99 }, query, sort, () => {});
 
   expect(result).toEqual({ status: "error", error: { code: "NotFound", path: null } });
 });

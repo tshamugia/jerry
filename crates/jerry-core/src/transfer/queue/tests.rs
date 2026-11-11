@@ -874,7 +874,13 @@ fn progress_reaches_the_ui_at_most_ten_times_a_second() {
     assert!(reports.len() >= 2, "it does report: {}", reports.len());
     // One event for both jobs, not one each.
     assert!(reports.iter().any(|running| running.len() == 2));
-    let report = reports[0][0].clone();
+    // A report lists every running job, so one whose engine has said nothing
+    // yet has no file. Check a job that has.
+    let report = reports
+        .iter()
+        .flat_map(|running| running.iter())
+        .find(|progress| progress.file.is_some())
+        .expect("a report names a file");
     assert_eq!(
         report.file.as_deref(),
         Some(r"C:\ნახაზი.dwg"),

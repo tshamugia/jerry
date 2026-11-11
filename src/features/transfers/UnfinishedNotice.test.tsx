@@ -3,7 +3,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import type { TransferJob, TransferList, TransferProgress, TransferState } from "../../ipc";
-import { syncTransfers, useTransfers } from "../../stores/transfers";
+import { resetTransfers, syncTransfers, useTransfers } from "../../stores/transfers";
 import { lastName, UnfinishedNotice } from "./UnfinishedNotice";
 
 const MB = 1024 * 1024;
@@ -57,7 +57,7 @@ function fakeCore(listed: TransferList = { generation: 0, jobs: [] }): string[] 
 }
 
 afterEach(() => {
-  useTransfers.setState({ list: { generation: -1, jobs: [] } });
+  resetTransfers();
 });
 
 test("nothing unfinished, no notice", () => {
