@@ -199,7 +199,11 @@ describe("the shortcut table", () => {
       {
         group: "search",
         title: "Search",
-        rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
+        rows: [
+          { id: "filter", title: "Filter", keys: ["Ctrl+F"] },
+          { id: "search", title: "Search", keys: ["Ctrl+Shift+F"] },
+          { id: "openFileLocation", title: "Open file location", keys: ["Ctrl+Shift+E"] },
+        ],
       },
       {
         group: "other",
@@ -346,7 +350,11 @@ describe("the shortcut table", () => {
       {
         group: "search",
         title: "Search",
-        rows: [{ id: "filter", title: "Filter", keys: ["Ctrl+F"] }],
+        rows: [
+          { id: "filter", title: "Filter", keys: ["Ctrl+F"] },
+          { id: "search", title: "Search", keys: ["Ctrl+Shift+F"] },
+          { id: "openFileLocation", title: "Open file location", keys: ["Ctrl+Shift+E"] },
+        ],
       },
       // Keyboard shortcuts is left out: its only shortcut was removed.
       {

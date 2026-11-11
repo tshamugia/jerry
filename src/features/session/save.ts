@@ -1,4 +1,5 @@
 import { commands, type PaneSave, type SessionSave } from "../../ipc";
+import { withoutLocation } from "../../stores/columns";
 import { tabById, useTabs } from "../../stores/tabs";
 import { type PaneSide, useWindow } from "../../stores/window";
 
@@ -84,10 +85,17 @@ export function snapshot(): SessionSave {
       if (id === active) {
         shown = saved.length;
       }
-      const { sort, columns } = tab.folder.store.getState();
+      const state = tab.folder.store.getState();
+      // Search results aren't kept (#66): their step comes back as the folder searched.
+      const columns = withoutLocation(state.columns);
+      const sort =
+        state.sort.column === "location" ? { ...state.sort, column: "name" as const } : state.sort;
       saved.push({
         pinned,
-        history: history.map(({ folder, focus }) => ({ folder, focus: focus ?? null })),
+        history: history.map(({ folder, focus, search }) => ({
+          folder,
+          focus: search ? null : (focus ?? null),
+        })),
         index: Math.max(index, 0),
         // v0.1 shows only Details (List and Grid come in v0.3).
         view: {

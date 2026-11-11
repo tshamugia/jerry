@@ -186,7 +186,7 @@ impl Entries {
 
     /// Gives every entry in `names` its new name, in one pass over all names, so the names stay
     /// back to back.
-    fn rename(&mut self, names: &HashMap<usize, &[u16]>) {
+    pub fn rename(&mut self, names: &HashMap<usize, &[u16]>) {
         if names.is_empty() {
             return;
         }

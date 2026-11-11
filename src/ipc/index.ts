@@ -9,7 +9,7 @@
  *   `errorText` from `src/strings`.
  * - Streams (`Channel`): `stream(onMessage)`; binary messages start with `messageHeader`. Folder
  *   listings: `openListing`, kept live by diffs and re-sorted with its `sort`. Deep search:
- *   `startSearch`.
+ *   `startSearch`, its results kept for the tab like a listing.
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
  *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
@@ -27,6 +27,7 @@ export type {
   ConflictItem,
   CopyText,
   Crumb,
+  DateFilter,
   DateRange,
   DeleteFailure,
   DeleteOutcome,
@@ -56,8 +57,10 @@ export type {
   PlaceName,
   RecentFolder,
   ResolvedPath,
+  SavedSearch,
   SearchIn,
   SearchItems,
+  SearchOpened,
   SearchQuery,
   SessionRestore,
   SessionSave,
@@ -115,9 +118,11 @@ export {
 export { type Protocol, protocolUrl } from "./protocol";
 export {
   decodeSearchMessage,
-  type RunningSearch,
+  type OpenSearch,
+  type ResultFolders,
   type SearchBatch,
   type SearchCounts,
+  type SearchDiff,
   type SearchDone,
   type SearchFailed,
   SearchKind,

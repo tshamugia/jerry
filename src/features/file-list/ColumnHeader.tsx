@@ -8,6 +8,7 @@ import {
   canMoveColumn,
   DEFAULT_COLUMNS,
   moveColumn,
+  RESULT_COLUMNS,
   resizeColumn,
   toggleColumn,
 } from "../../stores/columns";
@@ -45,6 +46,8 @@ export const ColumnHeader = memo(function ColumnHeader({
   loading,
 }: Props) {
   const [menuColumn, setMenuColumn] = useState<ColumnId>();
+  // Search results have a Location column (#66); a folder has none.
+  const defaults = layout.order.includes("location") ? RESULT_COLUMNS : DEFAULT_COLUMNS;
   const nameAt = columns.indexOf("name");
   const change = (next: (current: ColumnLayout) => ColumnLayout) =>
     folder.setColumns(next(folder.store.getState().columns));
@@ -56,7 +59,7 @@ export const ColumnHeader = memo(function ColumnHeader({
 
   const menu = (
     <>
-      {DEFAULT_COLUMNS.order.map((column) => (
+      {defaults.order.map((column) => (
         <MenuCheckbox
           key={column}
           checked={!layout.hidden.includes(column)}
@@ -80,7 +83,7 @@ export const ColumnHeader = memo(function ColumnHeader({
         {strings.fileList.moveRight}
       </MenuItem>
       <MenuSeparator />
-      <MenuItem onSelect={() => folder.setColumns(DEFAULT_COLUMNS)}>
+      <MenuItem onSelect={() => folder.setColumns(defaults)}>
         {strings.fileList.resetColumns}
       </MenuItem>
     </>

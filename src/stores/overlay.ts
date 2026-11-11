@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /** The overlays: modal dialogs over the window. The palette and Go to folder join later. */
-export type Overlay = "shortcuts" | "selectByPattern";
+export type Overlay = "shortcuts" | "selectByPattern" | "search";
 
 interface OverlayState {
   /** The open overlay; at most one at a time. */

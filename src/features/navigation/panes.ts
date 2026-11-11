@@ -63,10 +63,16 @@ export function useSinglePane(dual: boolean): void {
  * history). The active pane stays as it is, as in two-pane file managers.
  */
 export function openInOtherPane(pane: PaneSide, tab: Tab): void {
-  const folder = tab.current()?.folder;
+  const current = tab.current();
   const other = activeTab(otherPane(pane));
-  if (folder !== undefined && other) {
-    void other.open({ kind: "folder", folder });
+  if (!current || !other) {
+    return;
+  }
+  // Search results: the same search there.
+  if (current.search) {
+    void other.search(current.search);
+  } else {
+    void other.open({ kind: "folder", folder: current.folder });
   }
 }
 

@@ -306,6 +306,7 @@ pub async fn delete_recycle(
 ) -> Result<DeleteOutcome, JerryError> {
     let (deleting, listings) = state(&app);
     let guarding = deleting.clone();
+    let results = listings.clone();
     let (found, mut failed) = jobs::background("delete guard", move || {
         let (found, mut failed) = resolve(&listings, listing, &entries);
         let found = guard_system(&guarding, found, system, &mut failed);
@@ -335,10 +336,12 @@ pub async fn delete_recycle(
 
     let mut outcome = DeleteOutcome::default();
     let mut recycled = Vec::new();
+    let mut gone = Vec::new();
     for ((entry, original), result) in found.into_iter().zip(outcomes) {
         match result {
             Outcome::Recycled { in_bin } => {
                 outcome.deleted += 1;
+                gone.push(original.clone());
                 if let Some(in_bin) = in_bin {
                     recycled.push(Recycled { original, in_bin });
                 }
@@ -354,6 +357,8 @@ pub async fn delete_recycle(
         "recycled"
     );
     deleting.record(recycled);
+    // Search results don't watch their folders: they follow Jerry's own deletes.
+    results.results_removed(&gone);
     outcome.failed = failed;
     Ok(outcome)
 }
@@ -388,12 +393,17 @@ fn permanently(
     let found = guard_system(deleting, found, system, &mut failed);
     let paths: Vec<PathBuf> = found.iter().map(|(_, path)| path.clone()).collect();
     let mut outcome = DeleteOutcome::default();
-    for ((entry, _), result) in found.into_iter().zip(delete_for_good(&paths)) {
+    let mut gone = Vec::new();
+    for ((entry, path), result) in found.into_iter().zip(delete_for_good(&paths)) {
         match result {
-            Ok(()) => outcome.deleted += 1,
+            Ok(()) => {
+                outcome.deleted += 1;
+                gone.push(path);
+            }
             Err(error) => failed.push(DeleteFailure { entry, error }),
         }
     }
+    listings.results_removed(&gone);
     tracing::info!(
         deleted = outcome.deleted,
         failed = failed.len(),

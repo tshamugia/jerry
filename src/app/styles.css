@@ -103,6 +103,7 @@
   --spacing-transfer-what: 380px;
   --spacing-statusbar: var(--jerry-statusbar-h);
   --spacing-palette: var(--jerry-palette-w);
+  --spacing-palette-row: var(--jerry-palette-row-h);
   --spacing-toast: var(--jerry-toast-w);
   /*
    * The toasts' distance from the window's bottom: 96 px (design), or 12 px above the transfer

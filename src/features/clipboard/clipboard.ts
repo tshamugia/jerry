@@ -63,9 +63,10 @@ export function canCopy(): boolean {
   );
 }
 
-/** Whether Paste has a folder to paste into: the active pane's. */
+/** Whether Paste has a folder to paste into: the active pane's (search results have none). */
 export function canPaste(): boolean {
-  return activeFolder()?.store.getState().listing !== undefined;
+  const state = activeFolder()?.store.getState();
+  return state?.listing !== undefined && state.search === undefined;
 }
 
 /** Ctrl+C, or Ctrl+X with `cut`. */

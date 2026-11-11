@@ -28,6 +28,8 @@ const SORT_COLUMNS: readonly SortColumn[] = [
   "size",
   "created",
   "extension",
+  // Search results only (#66).
+  "location",
 ];
 
 /** Order flags: bit 0 descending, bit 1 folders first. */
@@ -167,7 +169,7 @@ export function decodeListingMessage(message: ArrayBuffer): ListingMessage {
     case ListingKind.diff:
       return decodeDiff(message, a, b, c);
     case ListingKind.order:
-      return decodeOrder(message);
+      return decodeOrder(message, ListingKind.order);
     case ListingKind.done:
       return {
         kind: "done",
@@ -184,10 +186,11 @@ export function decodeListingMessage(message: ArrayBuffer): ListingMessage {
   }
 }
 
-function decodeOrder(message: ArrayBuffer): ListingOrder {
+/** An order message of kind `expected`: a listing's, or search results' (`./search`). */
+export function decodeOrder(message: ArrayBuffer, expected: number): ListingOrder {
   const [kind, count = 0, column = 0, flags = 0] = messageHeader(message);
   const sortColumn = SORT_COLUMNS[column];
-  if (kind !== ListingKind.order || sortColumn === undefined) {
+  if (kind !== expected || sortColumn === undefined) {
     throw new RangeError(`Not an order message: kind ${kind}, column ${column}`);
   }
   return {

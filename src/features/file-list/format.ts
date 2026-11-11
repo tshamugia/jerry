@@ -55,6 +55,20 @@ export function typeName(name: string, folder: boolean): string {
   return strings.fileList.typeOf(extension.replace(/[a-z]+/g, (latin) => latin.toUpperCase()));
 }
 
+/**
+ * Search results' Location column (#66): the folder a result is in, from the folder searched down
+ * ("Projects\BMW\Drawings"), which a narrow pane still shows; a folder elsewhere as it is. `root`
+ * is the folder searched, as display text.
+ */
+export function locationText(folder: string, root: string): string {
+  const base = root.endsWith("\\") ? root.slice(0, -1) : root;
+  if (folder !== base && !folder.startsWith(`${base}\\`)) {
+    return folder;
+  }
+  const name = base.slice(base.lastIndexOf("\\") + 1) || base;
+  return name + folder.slice(base.length);
+}
+
 /** The Name column: without the extension when "Show file name extensions" is off. */
 export function nameText(name: string, folder: boolean, showExtensions: boolean): string {
   const dot = name.lastIndexOf(".");

@@ -234,6 +234,15 @@ export function ChevronIcon() {
   );
 }
 
+/** A button that drops a menu: an arrow down. */
+export function DropIcon() {
+  return (
+    <Icon size={10} stroke={1.6}>
+      <path d="M4 6l4 4 4-4" />
+    </Icon>
+  );
+}
+
 /** Segments left out of a narrow address bar. */
 export function MoreIcon() {
   return (
@@ -268,6 +277,16 @@ export function SectionIcon({ folded }: { folded: boolean }) {
   return (
     <Icon size={12} stroke={1.6}>
       <path d={folded ? "M6 3.5L10.5 8 6 12.5" : "M3.5 6L8 10.5 12.5 6"} />
+    </Icon>
+  );
+}
+
+/** Search: a magnifier. */
+export function SearchIcon() {
+  return (
+    <Icon>
+      <circle cx="7" cy="7" r="4.5" />
+      <path d="M10.3 10.3L14 14" />
     </Icon>
   );
 }

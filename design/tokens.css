@@ -113,6 +113,8 @@
   /* Not in the canvas: the optional Extension column, and how narrow Name gets before the list
      scrolls sideways. Date created shares Date modified's width. */
   --jerry-col-ext-w: 60px;
+  /* Not in the canvas either: search results' Location column (#66), the folder each one is in. */
+  --jerry-col-location-w: 160px;
   --jerry-col-name-min-w: 80px;
   --jerry-transfer-h: 56px;
   --jerry-statusbar-h: 28px;
