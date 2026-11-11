@@ -1,4 +1,4 @@
-import { protocolUrl } from "./protocol";
+import { pageLoad, protocolUrl } from "./protocol";
 
 /**
  * Icons from Jerry's `icon://` protocol (`src-tauri/src/icons.rs`): listing entries by the icon
@@ -22,12 +22,6 @@ export type Place =
 /** Icon sizes the core serves, in device pixels. */
 const MIN_PX = 8;
 const MAX_PX = 256;
-
-/**
- * Unique to this page load. Keys are numbered per process, so an icon URL must never be served
- * from a cache filled by an earlier run; the core ignores it.
- */
-const pageLoad = crypto.randomUUID().slice(0, 8);
 
 /** `cssPx` in device pixels at `ratio`, within what the core serves. */
 export function iconPixels(cssPx: number, ratio = globalThis.devicePixelRatio || 1): number {

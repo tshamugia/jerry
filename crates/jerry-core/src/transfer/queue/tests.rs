@@ -1400,11 +1400,32 @@ fn a_job_that_asks_leaves_its_disk_to_the_next_one() {
             "a date that can't be read"
         );
         assert!(!conflict.no_recycle_bin);
+        // The files themselves, for the window's thumbnails.
+        let existing = scene.queue.conflict_file(a, ConflictSide::Existing);
+        assert_eq!(
+            existing,
+            Some(ConflictFile {
+                path: PathBuf::from(r"\\?\C:\to\a.txt"),
+                attributes: 0x20,
+                modified: 0,
+            })
+        );
+        let incoming = scene.queue.conflict_file(a, ConflictSide::Incoming);
+        assert_eq!(
+            incoming.map(|file| file.path),
+            Some(PathBuf::from(r"\\?\C:\from\a.txt"))
+        );
+        assert_eq!(scene.queue.conflict_file(b, ConflictSide::Existing), None);
 
         scene
             .queue
             .resolve(a, answer(Choice::Skip))
             .expect("answered");
+        assert_eq!(
+            scene.queue.conflict_file(a, ConflictSide::Existing),
+            None,
+            "answered"
+        );
         scene.wait_state(a, &TransferState::Done);
         assert!(scene.log().contains(&"answered a Skip".to_owned()));
     }

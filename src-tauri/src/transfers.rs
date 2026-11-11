@@ -17,7 +17,8 @@ use jerry_core::delete::takes_system_folder;
 use jerry_core::storage::Storage;
 use jerry_core::transfer::journal::{StorageJournal, Store};
 use jerry_core::transfer::queue::{
-    Action, Notice, Queue, Shell, TransferEnded, TransferList, TransferProgress,
+    Action, ConflictFile, ConflictSide, Notice, Queue, Shell, TransferEnded, TransferList,
+    TransferProgress,
 };
 use jerry_core::transfer::{Answer, Bin, Job, Kind};
 use jerry_core::{ErrorCode, JerryError};
@@ -96,6 +97,12 @@ impl Transfers {
     pub fn on_drive(&self, letter: u8) -> u32 {
         self.0
             .on_volume(Path::new(&format!(r"\\?\{}:\", char::from(letter))))
+    }
+
+    /// The file on `side` of the conflict job `id` waits on, for the conflict window's
+    /// thumbnails (`thumb://`).
+    pub fn conflict_file(&self, id: u32, side: ConflictSide) -> Option<ConflictFile> {
+        self.0.conflict_file(id, side)
     }
 }
 

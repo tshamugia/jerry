@@ -20,6 +20,7 @@ pub mod search;
 pub mod session;
 pub mod shell;
 pub mod storage;
+pub mod thumbnails;
 pub mod title_bar;
 pub mod transfers;
 pub mod updates;
@@ -268,7 +269,9 @@ pub fn run() -> tauri::Result<()> {
         .manage(delete::Deleting::default())
         .manage(search::Searches::default())
         .manage(updates::Updates::default())
+        .manage(jerry_win::thumbnails::Thumbnails::new())
         .register_asynchronous_uri_scheme_protocol(icons::SCHEME, icons::protocol)
+        .register_asynchronous_uri_scheme_protocol(thumbnails::SCHEME, thumbnails::protocol)
         .invoke_handler(builder.invoke_handler())
         .on_window_event(|window, event| match event {
             WindowEvent::Moved(_) | WindowEvent::Resized(_) if window.label() == window::MAIN => {
