@@ -10,7 +10,7 @@
 
 pub mod keys;
 mod render;
-mod shell;
+pub(crate) mod shell;
 
 use std::collections::HashMap;
 use std::path::PathBuf;

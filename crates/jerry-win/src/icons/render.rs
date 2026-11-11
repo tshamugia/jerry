@@ -7,23 +7,18 @@
 
 use jerry_core::JerryError;
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_ContainerFormatPng, GUID_WICPixelFormat32bppBGRA,
-    IWICBitmapSource, IWICImagingFactory, WICBitmapEncoderNoCache,
-    WICBitmapInterpolationModeHighQualityCubic,
-};
-use windows::Win32::System::Com::StructuredStorage::IPropertyBag2;
-use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, CoCreateInstance, IStream, STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET,
+    IWICBitmapSource, WICBitmapInterpolationModeHighQualityCubic,
 };
 use windows::Win32::UI::Controls::{IImageList, ILD_TRANSPARENT};
 use windows::Win32::UI::Shell::{
-    IDO_SHGIOI_LINK, SHCreateMemStream, SHGetIconOverlayIndexW, SHGetImageList, SHIL_EXTRALARGE,
-    SHIL_JUMBO, SHIL_LARGE, SHIL_SMALL,
+    IDO_SHGIOI_LINK, SHGetIconOverlayIndexW, SHGetImageList, SHIL_EXTRALARGE, SHIL_JUMBO,
+    SHIL_LARGE, SHIL_SMALL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, HICON};
 use windows::core::{Interface, PCWSTR};
 
 use super::shell::Glyph;
+use crate::wic;
 
 /// `glyph` at `px` × `px` as a PNG (32-bit, straight alpha).
 pub fn png(glyph: Glyph, px: u32) -> Result<Vec<u8>, JerryError> {
@@ -34,9 +29,7 @@ pub fn png(glyph: Glyph, px: u32) -> Result<Vec<u8>, JerryError> {
     }
     // SAFETY: a system image list and an index from the Shell; the icon is destroyed on drop.
     let icon = Icon(unsafe { list.GetIcon(glyph.index, flags) }?);
-    // SAFETY: COM is initialized on this thread (a Shell pool worker).
-    let factory: IWICImagingFactory =
-        unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER) }?;
+    let factory = wic::factory()?;
     // SAFETY: a valid icon; WIC copies its pixels (alpha, or the mask for old icons).
     let bitmap = unsafe { factory.CreateBitmapFromHICON(icon.0) }?;
     let source: IWICBitmapSource = if size == px {
@@ -48,7 +41,7 @@ pub fn png(glyph: Glyph, px: u32) -> Result<Vec<u8>, JerryError> {
         unsafe { scaler.Initialize(&bitmap, px, px, WICBitmapInterpolationModeHighQualityCubic) }?;
         scaler.cast()?
     };
-    encode(&factory, &source, px)
+    wic::png(&factory, &source, px, px)
 }
 
 /// The smallest system image list at least `px` big, or the biggest, with its size.
@@ -76,50 +69,6 @@ fn link_overlay() -> u32 {
     // SAFETY: no icon path; asks for the standard link overlay.
     let overlay = unsafe { SHGetIconOverlayIndexW(PCWSTR::null(), IDO_SHGIOI_LINK as i32) };
     u32::try_from(overlay).unwrap_or(0) & 0xF
-}
-
-fn encode(
-    factory: &IWICImagingFactory,
-    source: &IWICBitmapSource,
-    px: u32,
-) -> Result<Vec<u8>, JerryError> {
-    // SAFETY: an empty in-memory stream.
-    let stream = unsafe { SHCreateMemStream(None) }.ok_or_else(JerryError::internal)?;
-    // SAFETY: the PNG container; no preferred vendor.
-    let encoder = unsafe { factory.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null()) }?;
-    // SAFETY: the stream above.
-    unsafe { encoder.Initialize(&stream, WICBitmapEncoderNoCache) }?;
-    let mut frame = None;
-    // SAFETY: a writable frame slot; no encoder options.
-    unsafe { encoder.CreateNewFrame(&mut frame, std::ptr::null_mut()) }?;
-    let frame = frame.ok_or_else(JerryError::internal)?;
-    // SAFETY: the calls below follow WIC's frame protocol: initialize, size, format, pixels,
-    // commit.
-    unsafe {
-        frame.Initialize(None::<&IPropertyBag2>)?;
-        frame.SetSize(px, px)?;
-        let mut format = GUID_WICPixelFormat32bppBGRA;
-        frame.SetPixelFormat(&mut format)?;
-        frame.WriteSource(source, std::ptr::null())?;
-        frame.Commit()?;
-        encoder.Commit()?;
-    }
-    read_all(&stream)
-}
-
-fn read_all(stream: &IStream) -> Result<Vec<u8>, JerryError> {
-    let mut stat = STATSTG::default();
-    // SAFETY: a writable STATSTG; no name is asked for, so nothing needs freeing.
-    unsafe { stream.Stat(&mut stat, STATFLAG_NONAME) }?;
-    let length = u32::try_from(stat.cbSize).map_err(|_| JerryError::internal())?;
-    // SAFETY: rewinds our own stream.
-    unsafe { stream.Seek(0, STREAM_SEEK_SET, None) }?;
-    let mut bytes = vec![0_u8; length as usize];
-    let mut read = 0;
-    // SAFETY: `bytes` has room for `length` bytes.
-    unsafe { stream.Read(bytes.as_mut_ptr().cast(), length, Some(&mut read)) }.ok()?;
-    bytes.truncate(read as usize);
-    Ok(bytes)
 }
 
 /// An icon handle, destroyed on drop.
