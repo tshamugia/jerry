@@ -8,7 +8,7 @@ import {
   isEnabled,
   runCommand,
 } from "../../commands/registry";
-import { DEFAULT_COLUMNS } from "../../stores/columns";
+import { DEFAULT_COLUMNS, RESULT_COLUMNS } from "../../stores/columns";
 import { type Folder, useFolder } from "../../stores/folder";
 import { useKeymap } from "../../stores/keymap";
 import { useSetting } from "../../stores/settings";
@@ -43,6 +43,8 @@ interface Entry {
   run?: (modifiers: MenuModifiers) => void;
   /** Off for now, on top of the command's own `enabled`. */
   off?: boolean;
+  /** Whether it can run, in place of the command's own `enabled`: the menu's target differs. */
+  enabled?: boolean;
   /** Opens a field: runs once the menu has closed (`MenuItem`'s `afterClose`). */
   afterClose?: boolean;
   /** Shown, grayed out, before it is built: the place of "Windows options…" (v1.0). */
@@ -62,7 +64,11 @@ type Item = Entry | { sub: "view" | "sortBy" };
 export function ListMenu({ kind, folder }: { kind: ListMenuKind; folder: Folder }) {
   const keymap = useKeymap((state) => state.keymap);
   const files = useClipboardHasFiles();
-  const groups = (kind === "items" ? itemGroups(folder, files) : folderGroups(files))
+  // Search results (#66) have no folder of their own: no new folder, paste or terminal there.
+  const results = useFolder(folder, (state) => state.search !== undefined);
+  const groups = (
+    kind === "items" ? itemGroups(folder, files, results) : folderGroups(files, results)
+  )
     .map((group) => group.filter(shown))
     .filter((group) => group.length > 0);
   return groups.map((group, at) => (
@@ -91,8 +97,11 @@ function MenuGroup({ first, children }: { first: boolean; children: ReactNode })
   );
 }
 
-/** The menu on items: the chosen rows of the active pane (the selected ones). */
-function itemGroups(folder: Folder, files: boolean | undefined): Item[][] {
+/**
+ * The menu on items: the chosen rows of the active pane (the selected ones). In search results,
+ * Open file location too, and Paste only into a folder among them.
+ */
+function itemGroups(folder: Folder, files: boolean | undefined, results: boolean): Item[][] {
   const ids = chosenItems(folder, shownRows(folder));
   const { entries } = folder.store.getState();
   const folders = ids.filter((id) => entries.isFolder(id));
@@ -105,12 +114,18 @@ function itemGroups(folder: Folder, files: boolean | undefined): Item[][] {
       ...(folders.length > 0 && folders.length === ids.length
         ? [{ id: "openInNewTab" } as const]
         : []),
+      ...(results ? [{ id: "openFileLocation" } as const] : []),
       { id: "quickLook" },
     ],
     [
       { id: "cut" },
       { id: "copy" },
-      { id: "paste", off: files !== true, run: () => void pasteEntries(oneFolder ?? null) },
+      {
+        id: "paste",
+        off: files !== true,
+        ...(results ? { enabled: oneFolder !== undefined } : {}),
+        run: () => void pasteEntries(oneFolder ?? null),
+      },
     ],
     [
       { id: "rename", afterClose: true },
@@ -130,8 +145,11 @@ function itemGroups(folder: Folder, files: boolean | undefined): Item[][] {
   ];
 }
 
-/** The menu on the folder the list shows (a right click on empty space). */
-function folderGroups(files: boolean | undefined): Item[][] {
+/** The menu on the folder the list shows (a right click on empty space); search results have none. */
+function folderGroups(files: boolean | undefined, results: boolean): Item[][] {
+  if (results) {
+    return [[{ sub: "view" }, { sub: "sortBy" }, { id: "refresh" }]];
+  }
   return [
     [{ id: "newFolder" }, { id: "newFile" }],
     [{ id: "paste", off: files !== true }],
@@ -159,7 +177,9 @@ function CommandItem({ entry, keymap }: { entry: Entry; keymap: Keymap<Command> 
   if (!command) {
     return null;
   }
-  const enabled = isEnabled(command) && entry.off !== true;
+  const enabled =
+    (entry.enabled === undefined ? isEnabled(command) : entry.enabled && isBuilt(command)) &&
+    entry.off !== true;
   return (
     <MenuItem
       shortcut={shortcutsOf(keymap, entry.id)[0]}
@@ -214,7 +234,8 @@ function ViewMenu({ keymap }: { keymap: Keymap<Command> }) {
 /** Sort by: a column, then the direction; the folder remembers it, as a header click. */
 function SortMenu({ folder }: { folder: Folder }) {
   const sort = useFolder(folder, (state) => state.sort);
-  const columns = DEFAULT_COLUMNS.order;
+  const results = useFolder(folder, (state) => state.search !== undefined);
+  const columns = (results ? RESULT_COLUMNS : DEFAULT_COLUMNS).order;
   return (
     <MenuSub label={t.sortBy}>
       <MenuRadioGroup

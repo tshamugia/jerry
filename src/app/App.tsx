@@ -8,6 +8,7 @@ import { PaneList } from "../features/file-list/PaneList";
 import { OpenManyDialog } from "../features/navigation/OpenManyDialog";
 import { ShellDialog } from "../features/navigation/ShellDialog";
 import { RenameDialogs } from "../features/rename/RenameDialogs";
+import { SearchDialog } from "../features/search/SearchDialog";
 import { SelectByPattern } from "../features/selection/SelectByPattern";
 import { ConflictDialog } from "../features/transfers/ConflictDialog";
 import { UnfinishedNotice } from "../features/transfers/UnfinishedNotice";
@@ -50,6 +51,7 @@ export function App() {
       <Frame settings={settings} left={left} right={right} previewContent={dev} />
       <ShortcutTable />
       <SelectByPattern />
+      <SearchDialog />
       <OpenManyDialog />
       <DeleteDialog />
       <ConflictDialog />

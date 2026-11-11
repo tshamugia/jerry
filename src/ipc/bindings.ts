@@ -41,9 +41,9 @@ export const commands = {
 	 */
 	listingSort: (id: number, sort: Sort) => typedError<null, JerryError>(__TAURI_INVOKE("listing_sort", { id, sort })),
 	/**
-	 *  Stops listing `id` if it still runs and forgets it: no message follows, and the folder's
-	 *  watcher stops unless another tab has the folder open. Closing a listing that is already
-	 *  closed does nothing.
+	 *  Stops listing or search results `id` if it still runs and forgets it: no message follows, and
+	 *  a folder's watcher stops unless another tab has the folder open. Closing a listing that is
+	 *  already closed does nothing.
 	 */
 	listingClose: (id: number) => __TAURI_INVOKE<void>("listing_close", { id }),
 	/**
@@ -75,12 +75,14 @@ export const commands = {
 	openEntries: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("open_entries", { listing, entries })),
 	/**
 	 *  Shows entries `entries` of listing `listing` selected in an Explorer window on the listing's
-	 *  folder: the context menu's "Show in Explorer". Waits for Explorer to take it, at most a few
-	 *  seconds. `NotFound` for an entry or listing that is gone.
+	 *  folder: the context menu's "Show in Explorer". Search results from several folders get a
+	 *  window per folder. Waits for Explorer to take each, at most a few seconds. `NotFound` for an
+	 *  entry or listing that is gone.
 	 */
 	showInExplorer: (listing: number, entries: number[]) => typedError<null, JerryError>(__TAURI_INVOKE("show_in_explorer", { listing, entries })),
 	/**
-	 *  Opens a terminal in the folder listing `listing` shows, or in its subfolder `entry`: Windows
+	 *  Opens a terminal in the folder listing `listing` shows, or in its subfolder `entry`, or in
+	 *  the folder of its file `entry` (search results have no folder of their own): Windows
 	 *  Terminal, or Windows PowerShell where it isn't installed. `NotFound` for an entry or listing
 	 *  that is gone.
 	 */
@@ -174,17 +176,24 @@ export const commands = {
 	 */
 	rename: (listing: number, entry: number, name: string) => typedError<null, JerryError>(__TAURI_INVOKE("rename", { listing, entry, name })),
 	/**
-	 *  Starts searching `within` for `query` and returns the search's id at once, before anything is
-	 *  read. Results, progress and the end come through `on_message` as binary messages (decoded by
-	 *  `src/ipc/search.ts`), and so does what is wrong with the folder (`NotFound`, `AccessDenied`,
-	 *  `DeviceGone`). Fails only with `NotFound` for a folder token Jerry never gave.
+	 *  Searches `within` for `query`, for tab `tab` in place of what it showed, and returns at once,
+	 *  before anything is read, with the results' id and the folder searched. Results, progress and
+	 *  the end come through `on_message` as binary messages (decoded by `src/ipc/search.ts`), sorted
+	 *  by `sort` once the search is done, and so does what is wrong with the folder (`NotFound`,
+	 *  `AccessDenied`, `DeviceGone`). Fails only with `NotFound` for a folder token Jerry never gave.
 	 */
-	searchStart: (within: SearchIn, query: SearchQuery, onMessage: Channel<ArrayBuffer>) => typedError<number, JerryError>(__TAURI_INVOKE("search_start", { within, query, onMessage })),
+	searchStart: (tab: number, within: SearchIn, query: SearchQuery, sort: Sort, onMessage: Channel<ArrayBuffer>) => typedError<SearchOpened, JerryError>(__TAURI_INVOKE("search_start", { tab, within, query, sort, onMessage })),
 	/**
-	 *  Stops search `id` if it still runs: nothing more comes through its stream. Stopping one that
-	 *  has ended does nothing.
+	 *  Stops search `id` if it still runs. What it found stays, sorted: an order and the done message
+	 *  follow. Stopping one that has ended does nothing.
 	 */
 	searchCancel: (id: number) => __TAURI_INVOKE<void>("search_cancel", { id }),
+	/**  The last searches, newest first (at most 20). */
+	searchHistoryList: () => typedError<SavedSearch[], JerryError>(__TAURI_INVOKE("search_history_list")),
+	/**  Puts `search` at the top of the search history, once; past 20, the oldest goes. */
+	searchHistoryAdd: (search: SavedSearch) => typedError<null, JerryError>(__TAURI_INVOKE("search_history_add", { search })),
+	/**  Takes `search` out of the search history. */
+	searchHistoryRemove: (search: SavedSearch) => typedError<null, JerryError>(__TAURI_INVOKE("search_history_remove", { search })),
 	/**
 	 *  Copies or moves `entries` of listing `listing` into `destination`, at the end of the queue,
 	 *  and returns the job's id. Entries the listing no longer has are left out; with none left it
@@ -506,6 +515,16 @@ export type Crumb = {
 	/**  A token for `ListingTarget::Folder`. */
 	folder: number,
 };
+
+/**  When an item was last changed. */
+export type DateFilter = { kind: "today" } | 
+/**  Since Monday. */
+{ kind: "thisWeek" } | { kind: "thisMonth" } | 
+/**
+ *  Days the user chose, as `DateRange` takes them: ms since the Unix epoch, `from` included,
+ *  `to` left out. A missing end is open.
+ */
+{ kind: "range"; from: number | null; to: number | null };
 
 /**
  *  Milliseconds since the Unix epoch, from `from` (included) to `to` (left out): today is
@@ -835,7 +854,12 @@ export type ListingTarget =
  */
 { kind: "nearest"; folder: number } | 
 /**  The user's own folder (`C:\Users\name`): where a tab opens when nothing else is set. */
-{ kind: "home" };
+{ kind: "home" } | 
+/**
+ *  The folder entry `entry` of the open listing or search results `listing` is in: Open
+ *  containing folder (Ctrl+Shift+E, #66).
+ */
+{ kind: "containing"; listing: number; entry: number };
 
 /**  How a tab shows a folder it opens. */
 export type Look = 
@@ -902,6 +926,18 @@ export type ResolvedPath = {
 	select: string | null,
 };
 
+/**  A search: its name text and filters, and whether it takes the whole drive. */
+export type SavedSearch = {
+	/**  The name text as typed: words, `*` and `?` (`SearchQuery::name`). */
+	name: string,
+	fileType: FileType | null,
+	size: SizeRange | null,
+	modified: DateFilter | null,
+	items: SearchItems,
+	/**  The whole drive the folder is on, from its root, not only the folder and what is in it. */
+	wholeDrive: boolean,
+};
+
 /**  Where to search. */
 export type SearchIn = 
 /**  Folder token `folder` (`ListingOpened::folder`) and everything in it. */
@@ -911,6 +947,23 @@ export type SearchIn =
 
 /**  Which kinds of items match. */
 export type SearchItems = "all" | "files" | "folders";
+
+/**  A search started: its results' id and the folder it searches, as a tab shows a folder. */
+export type SearchOpened = {
+	/**
+	 *  The results' id, a listing's kind of id: for every command on entries, `listing_sort`,
+	 *  `listing_close`.
+	 */
+	id: number,
+	/**  The folder searched (a drive's root for a whole drive) as display text. */
+	path: string,
+	/**  Its name for a tab. */
+	name: string,
+	/**  Its token, for `ListingTarget::Folder`. */
+	folder: number,
+	/**  The address bar's segments, from the root to it. */
+	crumbs: Crumb[],
+};
 
 /**  What to look for. Every filter that is set must match; with none set, everything matches. */
 export type SearchQuery = {
@@ -1064,7 +1117,13 @@ export type SortColumn = "name" |
 /**  Date created. */
 "created" | 
 /**  The extension: what follows the name's last dot. Folders have none. */
-"extension";
+"extension" | 
+/**
+ *  The folder an entry is in: search results (#66), which come from many folders, sort by
+ *  their folders' natural order, then by name. A folder listing has one folder, so there it
+ *  sorts as Name.
+ */
+"location";
 
 /**  A volume's size and the space free on it for the user, in bytes. */
 export type Space = {

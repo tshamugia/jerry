@@ -2,6 +2,8 @@ import { memo } from "react";
 import { useStore } from "zustand";
 import { FilterField } from "../features/filter/FilterField";
 import { AddressBar } from "../features/navigation/AddressBar";
+import { useAddressEdit } from "../features/navigation/address";
+import { SearchBar } from "../features/search/SearchBar";
 import { useCommandLabel } from "../stores/keymap";
 import { type Tab, useActiveTab } from "../stores/tabs";
 import type { PaneSide } from "../stores/window";
@@ -75,6 +77,7 @@ export const PaneToolbar = memo(function PaneToolbar({ pane }: { pane: PaneSide 
 function Navigation({ tab, pane }: { tab: Tab; pane: PaneSide }) {
   const history = useStore(tab.store, (state) => state.history);
   const index = useStore(tab.store, (state) => state.index);
+  const editing = useAddressEdit((state) => state.pane === pane);
   const labels = {
     back: useCommandLabel("back"),
     forward: useCommandLabel("forward"),
@@ -125,7 +128,12 @@ function Navigation({ tab, pane }: { tab: Tab; pane: PaneSide }) {
         aria-label={t.address}
         className="ml-1 flex h-address min-w-0 flex-1 items-center gap-1 rounded-ctrl border border-ctrl-border bg-ctrl pr-1 pl-1 focus-within:outline-2 focus-within:outline-focus focus-within:-outline-offset-2"
       >
-        <AddressBar key={tab.id} tab={tab} pane={pane} />
+        {/* Search results show their search where a folder's address would be; Ctrl+L still types one. */}
+        {current?.search && !editing ? (
+          <SearchBar folder={tab.folder} />
+        ) : (
+          <AddressBar key={tab.id} tab={tab} pane={pane} />
+        )}
         <IconButton
           label={labels.refresh}
           onClick={() => tab.refresh()}

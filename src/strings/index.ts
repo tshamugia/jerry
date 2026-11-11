@@ -4,6 +4,7 @@ import type { SortColumn } from "../ipc";
 import { clipboardStrings } from "./clipboard";
 import { deleteStrings } from "./delete";
 import { renameStrings } from "./rename";
+import { searchStrings } from "./search";
 import { sessionStrings } from "./session";
 import { shellStrings } from "./shell";
 import { sidebarStrings } from "./sidebar";
@@ -21,6 +22,7 @@ const sortColumns: Record<SortColumn, string> = {
   size: "Size",
   created: "Date created",
   extension: "Extension",
+  location: "Location",
 };
 
 export const strings = {
@@ -226,6 +228,7 @@ export const strings = {
     filter: "Filter",
     search: "Search",
     openFileLocation: "Open file location",
+    stopSearch: "Stop search",
     quickLook: "Quick Look",
     undo: "Undo",
     redo: "Redo",
@@ -271,6 +274,8 @@ export const strings = {
   updates: updateStrings,
   /** Copying and moving: the transfer queue and what a Jerry before left (v0.2). */
   transfers: transferStrings,
+  /** Deep search (Ctrl+Shift+F) and its results tabs. */
+  search: searchStrings,
   /** Select by pattern (Ctrl+Shift+A). */
   selectByPattern: {
     title: "Select by pattern",

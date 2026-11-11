@@ -42,6 +42,14 @@ import {
   startRename,
 } from "../features/rename/rename";
 import {
+  canOpenContainingFolder,
+  canSearch,
+  canStopSearch,
+  openContainingFolder,
+  openSearch,
+  stopSearch,
+} from "../features/search/search";
+import {
   clearSelection,
   invertSelection,
   selectAllRows,
@@ -422,8 +430,32 @@ export const COMMANDS: readonly Command[] = [
 
   // Search.
   { id: "filter", group: "search", keys: ["Ctrl+F"], context: "global", run: focusFilter },
-  { id: "search", group: "search", keys: ["Ctrl+Shift+F"], context: "global" },
-  { id: "openFileLocation", group: "search", keys: ["Ctrl+Shift+E"], context: "list" },
+  {
+    id: "search",
+    group: "search",
+    keys: ["Ctrl+Shift+F"],
+    context: "global",
+    enabled: canSearch,
+    run: openSearch,
+  },
+  // Search results only: the folder of each chosen result, in a new tab, with it selected.
+  {
+    id: "openFileLocation",
+    group: "search",
+    keys: ["Ctrl+Shift+E"],
+    context: "list",
+    enabled: canOpenContainingFolder,
+    run: openContainingFolder,
+  },
+  // No shortcut in the PRD: the results bar has the button, and the palette (v1.0).
+  {
+    id: "stopSearch",
+    group: "search",
+    keys: [],
+    context: "global",
+    enabled: canStopSearch,
+    run: stopSearch,
+  },
 
   // Preview.
   { id: "quickLook", group: "preview", keys: ["Space"], context: "list" },

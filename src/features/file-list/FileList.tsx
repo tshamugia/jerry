@@ -45,6 +45,7 @@ import { ColumnHeader } from "./ColumnHeader";
 import { columnWidths } from "./cells";
 import { dragOut } from "./dragOut";
 import { FileRow } from "./FileRow";
+import { locationText } from "./format";
 import { ListMenu, type ListMenuKind } from "./ListMenu";
 import { useShownRows } from "./rows";
 
@@ -87,6 +88,8 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
   const entries = useFolder(folder, (state) => state.entries);
   const filter = useFolder(folder, (state) => state.filter);
   const listing = useFolder(folder, (state) => state.listing);
+  const searching = useFolder(folder, (state) => state.search !== undefined);
+  const root = useFolder(folder, (state) => (state.search ? state.path : undefined));
   const sort = useFolder(folder, (state) => state.sort);
   const layout = useFolder(folder, (state) => state.columns);
   const selected = useFolder(folder, (state) => state.selected);
@@ -356,9 +359,17 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
     ) : rows.length > 0 ? null : filter !== "" && total > 0 ? (
       strings.fileList.noMatch
     ) : status === "ready" ? (
-      strings.fileList.empty
+      searching ? (
+        strings.search.nothingFound
+      ) : (
+        strings.fileList.empty
+      )
     ) : slow ? (
-      strings.fileList.loading
+      searching ? (
+        strings.search.nothingYet
+      ) : (
+        strings.fileList.loading
+      )
     ) : null;
 
   const items = virtualizer.getVirtualItems();
@@ -424,6 +435,7 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
                 const id = rows[item.index] ?? 0;
                 const key = entries.iconKeys[id] ?? IconKey.file;
                 const modified = entries.modified[id] ?? 0;
+                const location = entries.location(id);
                 return (
                   <FileRow
                     key={id}
@@ -433,6 +445,12 @@ export const FileList = memo(function FileList({ tab, pane }: { tab: Tab; pane: 
                     top={item.top}
                     columns={stableColumns}
                     name={entries.names[id] ?? ""}
+                    location={location}
+                    locationShown={
+                      location === undefined || root === undefined
+                        ? location
+                        : locationText(location, root)
+                    }
                     size={entries.sizes[id] ?? 0}
                     modified={modified}
                     created={entries.created[id] ?? 0}

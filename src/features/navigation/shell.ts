@@ -33,9 +33,17 @@ export function canShowInExplorer(): boolean {
   );
 }
 
-/** Whether Open in Terminal has a folder: the active pane's. */
+/**
+ * Whether Open in Terminal has a folder: the active pane's, or in search results (which have no
+ * folder of their own) a chosen item's.
+ */
 export function canOpenTerminal(): boolean {
-  return activeFolder()?.store.getState().listing !== undefined;
+  const folder = activeFolder();
+  const state = folder?.store.getState();
+  if (!folder || state?.listing === undefined) {
+    return false;
+  }
+  return state.search === undefined || chosenItems(folder, shownRows(folder)).length > 0;
 }
 
 /** Show in Explorer: the active pane's chosen rows, selected in Explorer in their folder. */
@@ -62,10 +70,14 @@ export async function openInTerminal(here = false): Promise<void> {
   if (!folder || state?.listing === undefined) {
     return;
   }
-  const ids = here ? [] : chosenItems(folder, shownRows(folder));
+  const ids = chosenItems(folder, shownRows(folder));
   const [only] = ids;
-  const entry =
-    ids.length === 1 && only !== undefined && state.entries.isFolder(only) ? only : null;
+  // Search results have no folder of their own: the first chosen item's (a folder itself).
+  const entry = state.search
+    ? (only ?? null)
+    : !here && ids.length === 1 && only !== undefined && state.entries.isFolder(only)
+      ? only
+      : null;
   const result = await commands.openTerminal(state.listing, entry);
   if (result.status === "error") {
     fail("openInTerminal", result.error, () => void openInTerminal(here));

@@ -1,8 +1,12 @@
-//! Deep search for the UI (#65): `search_start` searches a folder and everything in it, or its
-//! whole drive, on a background job (`jerry_core::search`) and streams what it finds through a
+//! Deep search for the UI (#65, #66): `search_start` searches a folder and everything in it, or
+//! its whole drive, on a background job (`jerry_core::search`) and streams what it finds through a
 //! `Channel` as binary messages (ADR-0001); `search_cancel` stops it. Windows, Program Files and
 //! ProgramData are left out unless the query asks for them (`jerry_win::folders::search_excluded`).
-//! The results tab is #66.
+//!
+//! The results stay for the tab that searched (`crate::results`), under an id of the listings'
+//! kind: every command on a listing's entries takes them, `listing_sort` sorts them and
+//! `listing_close` forgets them. The search history is here too: the last 20 searches
+//! (`search_history`).
 //!
 //! Messages are little-endian and start with the 16-byte header `[kind, a, b, c]`:
 //! - Batch (1): `[1, count, firstId, nameUnits]`, then the row `[folderCount, firstFolder,
@@ -15,33 +19,41 @@
 //!   new folder ids are `firstFolder + i`. A result's folder came in this batch or an earlier one.
 //! - Progress (2): `[2, found, checked, skipped]`: results so far, files and folders read, and
 //!   folders that couldn't be read. After each batch, and every 50 ms while it changes.
-//! - Done (3): `[3, found, checked, skipped]`, then the `f64` ms the search took: the last
-//!   message.
+//! - Done (3): `[3, found, checked, skipped]`, then the `f64` ms the search took and a `u32`, 1 if
+//!   it was stopped (`search_cancel`), and 4 zero bytes. The search's last message: diffs and
+//!   orders follow while the results are open.
 //! - Error (4): `[4, jsonBytes, 0, 0]`, then the `JerryError` as UTF-8 JSON: the folder couldn't be
 //!   searched (`NotFound`, `AccessDenied`, `DeviceGone`). The last message.
+//! - Order (5): `[5, count, column, flags]`, then `u32 id[count]`: the results there are, in
+//!   display order, laid out as a listing's order (column 6 is Location). One comes right before
+//!   Done, one for every `listing_sort` (while the walk goes on, of the results found so far: later
+//!   ones follow unsorted), and one after every diff once the search is done.
+//! - Diff (6): `[6, count, removedCount, nameUnits]`, then the row as in a batch, `u32 id[count]`,
+//!   `u32 removed[removedCount]`, `u32 folder[count]`, `u32 folderEnd[folderCount]`, padding to 8
+//!   bytes, the `count` results as in a batch and the new folders' texts: results Jerry renamed
+//!   (they keep their ids; one in a renamed folder gets the folder's new id) and removed (deleted,
+//!   moved away). Removed ids never come back.
 //!
-//! After `search_cancel` nothing more comes. The UI's decoder is `src/ipc/search.ts`; both sides
-//! test this layout.
+//! The UI's decoder is `src/ipc/search.ts`; both sides test this layout.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use jerry_core::error::display_path;
-use jerry_core::search::{SearchBatch, SearchProgress, SearchQuery, search};
+use jerry_core::search::{SavedSearch, SearchProgress, SearchQuery, search};
+use jerry_core::sort::Sort;
 use jerry_core::{ErrorCode, JerryError};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
 use crate::ipc::{Bytes, message_buffer};
 use crate::jobs;
-use crate::listing::{Listings, entries_bytes, push_entries};
+use crate::listing::{Crumb, Listings};
+use crate::results::ResultSet;
+use crate::storage::{Db, now_ms};
 
-const BATCH: u32 = 1;
 const PROGRESS: u32 = 2;
 const DONE: u32 = 3;
 const ERROR: u32 = 4;
@@ -56,107 +68,131 @@ pub enum SearchIn {
     Drive { folder: u32 },
 }
 
-/// The searches running, by id, with their cancel flags. Clones share them.
-#[derive(Clone, Default)]
-pub struct Searches(Arc<Inner>);
-
-#[derive(Default)]
-struct Inner {
-    last_id: AtomicU32,
-    running: Mutex<HashMap<u32, Arc<AtomicBool>>>,
-    /// The folders a search leaves out, from the Shell, read once.
-    excluded: OnceLock<Vec<PathBuf>>,
+/// A search started: its results' id and the folder it searches, as a tab shows a folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct SearchOpened {
+    /// The results' id, a listing's kind of id: for every command on entries, `listing_sort`,
+    /// `listing_close`.
+    pub id: u32,
+    /// The folder searched (a drive's root for a whole drive) as display text.
+    pub path: String,
+    /// Its name for a tab.
+    pub name: String,
+    /// Its token, for `ListingTarget::Folder`.
+    pub folder: u32,
+    /// The address bar's segments, from the root to it.
+    pub crumbs: Vec<Crumb>,
 }
+
+/// The search commands' state: the folders a search leaves out, from the Shell, read once.
+/// Clones share it.
+#[derive(Clone, Default)]
+pub struct Searches(Arc<OnceLock<Vec<PathBuf>>>);
 
 impl Searches {
-    /// A new search: its id and its cancel flag.
-    fn start(&self) -> (u32, Arc<AtomicBool>) {
-        let id = self.0.last_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.running().insert(id, cancel.clone());
-        (id, cancel)
-    }
-
-    fn finish(&self, id: u32) {
-        self.running().remove(&id);
-    }
-
-    fn cancel(&self, id: u32) {
-        if let Some(cancel) = self.running().remove(&id) {
-            cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
     /// Windows, Program Files and ProgramData. A Shell call: on a background job.
     fn excluded(&self) -> &[PathBuf] {
-        self.0
-            .excluded
-            .get_or_init(jerry_win::folders::search_excluded)
-    }
-
-    fn running(&self) -> MutexGuard<'_, HashMap<u32, Arc<AtomicBool>>> {
-        self.0
-            .running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.0.get_or_init(jerry_win::folders::search_excluded)
     }
 }
 
-/// Starts searching `within` for `query` and returns the search's id at once, before anything is
-/// read. Results, progress and the end come through `on_message` as binary messages (decoded by
-/// `src/ipc/search.ts`), and so does what is wrong with the folder (`NotFound`, `AccessDenied`,
-/// `DeviceGone`). Fails only with `NotFound` for a folder token Jerry never gave.
+/// Searches `within` for `query`, for tab `tab` in place of what it showed, and returns at once,
+/// before anything is read, with the results' id and the folder searched. Results, progress and
+/// the end come through `on_message` as binary messages (decoded by `src/ipc/search.ts`), sorted
+/// by `sort` once the search is done, and so does what is wrong with the folder (`NotFound`,
+/// `AccessDenied`, `DeviceGone`). Fails only with `NotFound` for a folder token Jerry never gave.
 #[tauri::command]
 #[specta::specta]
 pub async fn search_start(
     app: AppHandle,
+    tab: u32,
     within: SearchIn,
     query: SearchQuery,
+    sort: Sort,
     on_message: Channel<Bytes>,
-) -> Result<u32, JerryError> {
+) -> Result<SearchOpened, JerryError> {
     let (SearchIn::Folder { folder } | SearchIn::Drive { folder }) = within;
-    let path = app
-        .state::<Listings>()
+    let listings = app.state::<Listings>().inner().clone();
+    let path = listings
         .folder_path(folder)
         .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
     let root = match within {
         SearchIn::Folder { .. } => path,
         SearchIn::Drive { .. } => drive_root(&path),
     };
+    let entry = listings.entry_for(&root);
+    let (id, results) = listings.start_results(tab, root.clone(), sort, on_message);
     let searches = app.state::<Searches>().inner().clone();
-    let (id, cancel) = searches.start();
     tauri::async_runtime::spawn(async move {
-        let (job, job_cancel, channel) = (searches.clone(), cancel.clone(), on_message.clone());
-        let result = jobs::background("search", move || {
-            run(&job, &root, &query, &job_cancel, &channel)
-        })
-        .await;
-        searches.finish(id);
-        if let Err(error) = result
-            && error.code != ErrorCode::Cancelled
-            && !cancel.load(Ordering::Relaxed)
-        {
-            deliver(&on_message, error_message(&error));
+        let job = results.clone();
+        let outcome = jobs::background("search", move || run(&searches, &root, &query, &job)).await;
+        if let Err(error) = outcome {
+            results.end(error_message(&error), false);
         }
     });
-    Ok(id)
+    Ok(SearchOpened {
+        id,
+        path: entry.path,
+        name: entry.name,
+        folder: entry.folder,
+        crumbs: entry.crumbs,
+    })
 }
 
-/// Stops search `id` if it still runs: nothing more comes through its stream. Stopping one that
-/// has ended does nothing.
+/// Stops search `id` if it still runs. What it found stays, sorted: an order and the done message
+/// follow. Stopping one that has ended does nothing.
 #[tauri::command]
 #[specta::specta]
 pub async fn search_cancel(app: AppHandle, id: u32) {
-    app.state::<Searches>().cancel(id);
+    if let Some(results) = app.state::<Listings>().results(id) {
+        results.stop();
+    }
 }
 
-/// The search job: streams batches and progress, then the done message.
+/// The last searches, newest first (at most 20).
+#[tauri::command]
+#[specta::specta]
+pub async fn search_history_list(db: State<'_, Db>) -> Result<Vec<SavedSearch>, JerryError> {
+    let db = Db::clone(&db);
+    jobs::background("search history", move || {
+        db.with(|storage| storage.search_history())
+    })
+    .await
+}
+
+/// Puts `search` at the top of the search history, once; past 20, the oldest goes.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_history_add(db: State<'_, Db>, search: SavedSearch) -> Result<(), JerryError> {
+    let db = Db::clone(&db);
+    let at = now_ms();
+    jobs::background("add search", move || {
+        db.with(|storage| storage.add_search(&search, at))
+    })
+    .await
+}
+
+/// Takes `search` out of the search history.
+#[tauri::command]
+#[specta::specta]
+pub async fn search_history_remove(
+    db: State<'_, Db>,
+    search: SavedSearch,
+) -> Result<(), JerryError> {
+    let db = Db::clone(&db);
+    jobs::background("remove search", move || {
+        db.with(|storage| storage.remove_search(&search).map(|_| ()))
+    })
+    .await
+}
+
+/// The search job: keeps and streams results and progress, then the order and the done message,
+/// also when it was stopped. Fails with what is wrong with `root`.
 fn run(
     searches: &Searches,
     root: &Path,
     query: &SearchQuery,
-    cancel: &AtomicBool,
-    channel: &Channel<Bytes>,
+    results: &ResultSet,
 ) -> Result<(), JerryError> {
     let started = Instant::now();
     let excluded = if query.system_folders {
@@ -164,66 +200,48 @@ fn run(
     } else {
         searches.excluded()
     };
+    let cancel = results.cancel_flag();
     let mut told = SearchProgress::default();
-    let progress = search(root, query, excluded, cancel, |batch, progress| {
+    let outcome = search(root, query, excluded, &cancel, |batch, progress| {
         if !batch.is_empty() {
-            deliver(channel, batch_message(batch));
+            results.add(batch);
         }
         if progress != told {
-            deliver(channel, counts_message(PROGRESS, progress, &[]));
+            results.send(counts_message(PROGRESS, progress, &[]));
             told = progress;
         }
-    })?;
-    if !cancel.load(Ordering::Relaxed) {
-        let ms = started.elapsed().as_secs_f64() * 1000.0;
-        deliver(channel, counts_message(DONE, progress, &ms.to_le_bytes()));
-    }
+    });
+    let (progress, stopped) = match outcome {
+        Ok(progress) => (progress, false),
+        Err(error) if error.code == ErrorCode::Cancelled => (
+            SearchProgress {
+                found: results.count() as u64,
+                ..told
+            },
+            true,
+        ),
+        Err(error) => return Err(error),
+    };
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    tracing::info!(
+        found = progress.found,
+        checked = progress.checked,
+        skipped = progress.skipped,
+        stopped,
+        ms,
+        "search ended"
+    );
+    let mut body = Vec::with_capacity(16);
+    body.extend_from_slice(&ms.to_le_bytes());
+    body.extend_from_slice(&u32::from(stopped).to_le_bytes());
+    body.extend_from_slice(&[0; 4]);
+    results.end(counts_message(DONE, progress, &body), true);
     Ok(())
 }
 
 /// The root of the drive or share `folder` is on: `\\?\C:\`, `\\?\UNC\server\share\`.
 fn drive_root(folder: &Path) -> PathBuf {
     folder.ancestors().last().unwrap_or(folder).to_path_buf()
-}
-
-/// One batch of results (see the module docs).
-fn batch_message(batch: &SearchBatch) -> Bytes {
-    let count = batch.entries.len();
-    let units = batch.entries.name_units().len();
-    let folders: Vec<Vec<u16>> = batch
-        .folders
-        .iter()
-        .map(|folder| display_path(folder).encode_utf16().collect())
-        .collect();
-    let folder_units: usize = folders.iter().map(Vec::len).sum();
-    let words = count + folders.len();
-    let padding = words % 2 * 4;
-    // A batch holds at most `MAX_BATCH` results, and a search fewer than 2^32: these fit.
-    let header = [BATCH, count as u32, batch.first as u32, units as u32];
-    let mut out = message_buffer(
-        header,
-        16 + words * 4 + padding + entries_bytes(count, units) + folder_units * 2,
-    );
-    let row = [
-        folders.len() as u32,
-        batch.first_folder as u32,
-        folder_units as u32,
-        0,
-    ];
-    for word in row.into_iter().chain(batch.folders_of.iter().copied()) {
-        out.extend_from_slice(&word.to_le_bytes());
-    }
-    let mut end = 0;
-    for folder in &folders {
-        end += folder.len();
-        out.extend_from_slice(&(end as u32).to_le_bytes());
-    }
-    out.resize(out.len() + padding, 0);
-    push_entries(&mut out, &batch.entries);
-    for unit in folders.iter().flatten() {
-        out.extend_from_slice(&unit.to_le_bytes());
-    }
-    Bytes(out)
 }
 
 /// A progress or done message: the counts in the header, then `body`.
@@ -250,15 +268,12 @@ fn error_message(error: &JerryError) -> Bytes {
     Bytes(out)
 }
 
-fn deliver(channel: &Channel<Bytes>, message: Bytes) {
-    if let Err(error) = channel.send(message) {
-        tracing::warn!(%error, "search message not delivered");
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use jerry_core::listing::Entries;
+    use std::sync::mpsc::{Receiver, channel};
+    use std::time::Duration;
+
+    use jerry_core::sort::SortColumn;
 
     use super::*;
 
@@ -270,96 +285,30 @@ mod tests {
         f64::from_le_bytes(bytes[at..at + 8].try_into().expect("8 bytes"))
     }
 
-    fn utf16(bytes: &[u8]) -> String {
-        let (pairs, rest) = bytes.as_chunks::<2>();
-        assert!(rest.is_empty());
-        String::from_utf16_lossy(
-            &pairs
-                .iter()
-                .map(|&pair| u16::from_le_bytes(pair))
-                .collect::<Vec<_>>(),
-        )
+    fn test_channel() -> (Channel<Bytes>, Receiver<Vec<u8>>) {
+        let (sender, receiver) = channel();
+        let channel = Channel::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Raw(bytes) = body {
+                let _ = sender.send(bytes);
+            }
+            Ok(())
+        });
+        (channel, receiver)
     }
 
-    #[test]
-    fn batches_carry_results_their_folder_ids_and_new_folders() {
-        let mut entries = Entries::default();
-        for (name, size) in [("ნახაზი.dwg", 7_u64), ("a.pdf", 1 << 40), ("b", 0)] {
-            let units: Vec<u16> = name.encode_utf16().collect();
-            entries.push(
-                &units,
-                size,
-                116_444_736_000_000_000,
-                134_116_992_000_000_000,
-                0x20,
-            );
+    /// Every message until the done or error message.
+    fn until_end(receiver: &Receiver<Vec<u8>>) -> Vec<Vec<u8>> {
+        let mut messages = Vec::new();
+        loop {
+            let message = receiver
+                .recv_timeout(Duration::from_secs(10))
+                .expect("a message");
+            let kind = word(&message, 0);
+            messages.push(message);
+            if kind == DONE || kind == ERROR {
+                return messages;
+            }
         }
-        let batch = SearchBatch {
-            first: 10,
-            entries,
-            folders_of: vec![3, 4, 3],
-            first_folder: 4,
-            folders: vec![PathBuf::from(r"\\?\C:\Work\ახალი")],
-        };
-
-        let Bytes(bytes) = batch_message(&batch);
-
-        assert_eq!(
-            (0..4).map(|i| word(&bytes, i * 4)).collect::<Vec<_>>(),
-            [BATCH, 3, 10, 10 + 5 + 1]
-        );
-        let folder_units = r"C:\Work\ახალი".encode_utf16().count() as u32;
-        assert_eq!(
-            (4..8).map(|i| word(&bytes, i * 4)).collect::<Vec<_>>(),
-            [1, 4, folder_units, 0]
-        );
-        assert_eq!(
-            [word(&bytes, 32), word(&bytes, 36), word(&bytes, 40)],
-            [3, 4, 3]
-        );
-        assert_eq!(word(&bytes, 44), folder_units, "the new folder's end");
-        // 3 + 1 words: no padding, so the entries start at 48, on 8 bytes.
-        let entries_at = 48;
-        assert_eq!(
-            [float(&bytes, entries_at), float(&bytes, entries_at + 8)],
-            [7.0, (1_u64 << 40) as f64]
-        );
-        assert_eq!(
-            float(&bytes, entries_at + 24),
-            1_767_225_600_000.0,
-            "modified"
-        );
-        let ends_at = entries_at + 3 * 24 + 3 * 4 * 2;
-        assert_eq!(
-            [
-                word(&bytes, ends_at),
-                word(&bytes, ends_at + 4),
-                word(&bytes, ends_at + 8)
-            ],
-            [10, 15, 16]
-        );
-        let names_at = ends_at + 12;
-        assert_eq!(utf16(&bytes[names_at..names_at + 32]), "ნახაზი.dwga.pdfb");
-        assert_eq!(utf16(&bytes[names_at + 32..]), r"C:\Work\ახალი");
-    }
-
-    #[test]
-    fn batches_pad_after_an_odd_number_of_words() {
-        let mut entries = Entries::default();
-        entries.push(&[u16::from(b'x')], 1, 0, 0, 0x20);
-        entries.push(&[u16::from(b'y')], 2, 0, 0, 0x20);
-        let batch = SearchBatch {
-            first: 0,
-            entries,
-            folders_of: vec![0, 0],
-            first_folder: 0,
-            folders: vec![PathBuf::from(r"\\?\UNC\server\share")],
-        };
-        let Bytes(bytes) = batch_message(&batch);
-        // 2 + 1 words, then 4 bytes of padding: the sizes start at 48.
-        assert_eq!(word(&bytes, 44), 0);
-        assert_eq!([float(&bytes, 48), float(&bytes, 56)], [1.0, 2.0]);
-        assert!(utf16(&bytes[bytes.len() - 2 * 14..]).ends_with(r"\\server\share"));
     }
 
     #[test]
@@ -403,15 +352,93 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_stops_and_forgets_a_search() {
-        let searches = Searches::default();
-        let (first, cancel) = searches.start();
-        let (second, _) = searches.start();
-        assert_ne!(first, second);
-        searches.cancel(first);
-        assert!(cancel.load(Ordering::Relaxed));
-        searches.cancel(first);
-        searches.finish(second);
-        assert!(searches.running().is_empty());
+    fn a_search_streams_its_results_then_their_order_and_done() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let deep = dir.path().join("ნახაზები").join("2026");
+        std::fs::create_dir_all(&deep).expect("folders");
+        for path in [
+            dir.path().join("b.dwg"),
+            deep.join("a.dwg"),
+            deep.join("notes.txt"),
+        ] {
+            std::fs::write(path, b"x").expect("write");
+        }
+        let root = jerry_core::path::long_path(dir.path()).expect("long path");
+        let (channel, receiver) = test_channel();
+        let results = ResultSet::new(1, root.clone(), Sort::default(), channel);
+        let query = SearchQuery {
+            name: "*.dwg".to_owned(),
+            system_folders: true,
+            ..SearchQuery::default()
+        };
+
+        run(&Searches::default(), &root, &query, &results).expect("searches");
+        let messages = until_end(&receiver);
+        let kinds: Vec<u32> = messages.iter().map(|message| word(message, 0)).collect();
+        assert!(kinds.contains(&1), "a batch");
+        assert_eq!(&kinds[kinds.len() - 2..], [5, DONE], "the order, then done");
+        let done = messages.last().expect("done");
+        assert_eq!(word(done, 4), 2, "found");
+        assert_eq!(word(done, 24), 0, "not stopped");
+        let order = &messages[messages.len() - 2];
+        assert_eq!(word(order, 4), 2);
+        assert_eq!(word(order, 8), 0, "by name");
+
+        let paths: Vec<PathBuf> = (0..2)
+            .map(|id| results.entry(id).expect("a result").0)
+            .collect();
+        assert!(paths.contains(&root.join("b.dwg")));
+        assert!(paths.contains(&root.join("ნახაზები").join("2026").join("a.dwg")));
+
+        // Sorted by Location once done: the root's b.dwg, then the deeper a.dwg.
+        results.sort(Sort {
+            column: SortColumn::Location,
+            descending: false,
+            folders_first: true,
+        });
+        let order = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("order");
+        let ids = [word(&order, 16), word(&order, 20)];
+        assert_eq!(
+            results.entry(ids[0]).map(|(path, ..)| path),
+            Some(root.join("b.dwg"))
+        );
+    }
+
+    #[test]
+    fn a_stopped_search_keeps_what_it_found_sorted() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        std::fs::write(dir.path().join("a.dwg"), b"x").expect("write");
+        let root = jerry_core::path::long_path(dir.path()).expect("long path");
+        let (channel, receiver) = test_channel();
+        let results = ResultSet::new(1, root.clone(), Sort::default(), channel);
+        results.stop();
+        let query = SearchQuery {
+            system_folders: true,
+            ..SearchQuery::default()
+        };
+        run(&Searches::default(), &root, &query, &results).expect("ends");
+        let messages = until_end(&receiver);
+        let done = messages.last().expect("done");
+        assert_eq!(word(done, 0), DONE);
+        assert_eq!(word(done, 24), 1, "stopped");
+        assert_eq!(word(&messages[messages.len() - 2], 0), 5, "an order first");
+    }
+
+    #[test]
+    fn a_folder_that_is_gone_fails_the_search() {
+        let dir = tempfile::tempdir().expect("temp folder");
+        let gone = jerry_core::path::long_path(&dir.path().join("gone")).expect("long path");
+        let (channel, _receiver) = test_channel();
+        let results = ResultSet::new(1, gone.clone(), Sort::default(), channel);
+        let error = run(
+            &Searches::default(),
+            &gone,
+            &SearchQuery::default(),
+            &results,
+        )
+        .expect_err("no folder");
+        assert_eq!(error.code, ErrorCode::NotFound);
     }
 }

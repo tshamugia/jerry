@@ -27,6 +27,35 @@ export const DEFAULT_COLUMNS: ColumnLayout = {
   widths: {},
 };
 
+/**
+ * A results tab's columns (#66): the tab's own with Location, the folder each result is in,
+ * right after Name. A folder has no Location column.
+ */
+export function withLocation(layout: ColumnLayout): ColumnLayout {
+  if (layout.order.includes("location")) {
+    return layout;
+  }
+  const at = layout.order.indexOf("name") + 1;
+  const order = [...layout.order.slice(0, at), "location" as const, ...layout.order.slice(at)];
+  return { ...layout, order };
+}
+
+/** A folder's columns, from a results tab's: without Location. */
+export function withoutLocation(layout: ColumnLayout): ColumnLayout {
+  if (!layout.order.includes("location")) {
+    return layout;
+  }
+  const { location: _, ...widths } = layout.widths;
+  return {
+    order: layout.order.filter((id) => id !== "location"),
+    hidden: layout.hidden.filter((id) => id !== "location"),
+    widths,
+  };
+}
+
+/** Search results' columns, until the user changes them. */
+export const RESULT_COLUMNS: ColumnLayout = withLocation(DEFAULT_COLUMNS);
+
 /** The columns that show, in display order. */
 export function shownColumns(layout: ColumnLayout): ColumnId[] {
   return layout.order.filter((id) => !layout.hidden.includes(id));

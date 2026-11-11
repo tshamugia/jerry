@@ -28,9 +28,10 @@ import { activatePane, type PaneSide, useWindow } from "../../stores/window";
 import { strings } from "../../strings";
 import { ContextMenu, MenuItem, MenuSeparator } from "../../ui/ContextMenu";
 import { IconButton } from "../../ui/IconButton";
-import { CloseIcon, FolderIcon, PinIcon, PlusIcon } from "../../ui/icons";
+import { CloseIcon, FolderIcon, PinIcon, PlusIcon, SearchIcon } from "../../ui/icons";
 import { focusListSoon } from "../filter/focus";
 import { openInOtherPane } from "../navigation/panes";
+import { dateField, filtersText } from "../search/query";
 import { newTab } from "./commands";
 
 const t = strings.titleBar;
@@ -151,6 +152,17 @@ function TabView({
   const dual = useSetting("dualPane") ?? true;
   const label = entry?.name ?? t.noFolder;
   const close = () => closeTab(pane, tab.id);
+  // Search results (#66): what was searched, and where.
+  const tooltip = entry?.search
+    ? strings.search.tooltip(label, filtersText(entry.search.search, dateField), entry.path)
+    : entry?.path;
+  const icon = entry?.search ? (
+    <span className="shrink-0 text-fg-2">
+      <SearchIcon />
+    </span>
+  ) : (
+    <FolderIcon />
+  );
 
   // Tabs switch on press, as in browsers; the keyboard uses Enter or Space.
   const press = (event: PointerEvent) => {
@@ -207,7 +219,7 @@ function TabView({
   const common = {
     ref: drag?.ref,
     style: drag?.style,
-    title: entry?.path,
+    title: tooltip,
     onPointerDown: press,
     onMouseDown: mouseDown,
     onAuxClick: auxClick,
@@ -226,7 +238,7 @@ function TabView({
             aria-label={t.pinnedTab(label)}
             className={`no-drag relative flex h-tab w-10 shrink-0 items-center justify-center rounded-tab ${look}`}
           >
-            <FolderIcon />
+            {icon}
             <PinIcon className="absolute top-1.75 right-1.75 text-fg-2" />
           </div>
         </ContextMenu>
@@ -248,7 +260,7 @@ function TabView({
           shown ? "w-tab-active min-w-16" : "w-tab-inactive min-w-10"
         } ${look}`}
       >
-        <FolderIcon />
+        {icon}
         <span
           className={`min-w-0 flex-1 truncate text-small ${shown && activePane ? "text-fg" : "text-fg-2"}`}
         >
