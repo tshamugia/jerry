@@ -97,10 +97,22 @@
   --spacing-col-header: var(--jerry-col-header-h);
   --spacing-col-name: var(--jerry-col-name-min-w);
   --spacing-transfer: var(--jerry-transfer-h);
+  /* The transfer panel's queue and failed items, above its row: taller lists scroll. */
+  --spacing-transfer-list: 240px;
+  /* The panel row's left block (icon, what, the current file), from the design. */
+  --spacing-transfer-what: 380px;
   --spacing-statusbar: var(--jerry-statusbar-h);
   --spacing-palette: var(--jerry-palette-w);
   --spacing-palette-row: var(--jerry-palette-row-h);
   --spacing-toast: var(--jerry-toast-w);
+  /*
+   * The toasts' distance from the window's bottom: 96 px (design), or 12 px above the transfer
+   * panel and its open queue (`--jerry-transfer-panel-h`, set while the panel shows).
+   */
+  --spacing-toasts: max(
+    96px,
+    calc(var(--jerry-transfer-panel-h, 0px) + var(--jerry-statusbar-h) + 12px)
+  );
   --spacing-row: var(--jerry-row-h);
   --spacing-nav: var(--jerry-nav-h);
   --spacing-drive-pad: var(--jerry-drive-pad);

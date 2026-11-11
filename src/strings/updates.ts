@@ -17,4 +17,15 @@ export const updateStrings = {
   installing: "Installing. Jerry will restart.",
   failed: "Couldn't update Jerry",
   failedHint: "Check your connection and try again.",
+  /** Update was pressed while transfers run (#52): Jerry closes to update. */
+  transfersRunning: (count: number) =>
+    count === 1
+      ? "A transfer is still running"
+      : `${integer.format(count)} transfers are still running`,
+  transfersHint: (count: number) =>
+    count === 1
+      ? "Jerry closes to update, and it stops. When Jerry opens again, you can resume it where it stopped."
+      : "Jerry closes to update, and they stop. When Jerry opens again, you can resume them where they stopped.",
+  updateAnyway: "Update anyway",
+  notNow: "Not now",
 };

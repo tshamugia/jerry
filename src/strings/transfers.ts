@@ -54,8 +54,102 @@ const conflict = {
   close: "Esc",
 };
 
+/** What a copy or a move did to an item: "copied", "moved". */
+function past(kind: TransferKind): string {
+  return kind === "copy" ? "copied" : "moved";
+}
+
+/** The transfer panel (#52): the job it shows, the queue above it, and summaries. */
+const panel = {
+  /** The current file: "ELV-010 CCTV Layout Rev 0.dwg · item 126 of 214". */
+  item: (name: string, item: number, total: number) =>
+    `${name} · item ${integer.format(item)} of ${integer.format(total)}`,
+  counting: "Counting…",
+  checkingSpace: "Checking free space…",
+  /** "1.4 GB of 2.4 GB". */
+  bytes: (done: number, total: number) => `${sizeText(done)} of ${sizeText(total)}`,
+  percent: (value: number) => `${integer.format(value)}%`,
+  /** "42.6 MB/s". */
+  speed: (bytesPerSecond: number) => `${sizeText(bytesPerSecond)}/s`,
+  /** "About 24 s left", "About 3 min left", "About 2 h 5 min left". */
+  timeLeft: (seconds: number) => {
+    if (seconds < 60) {
+      return `About ${integer.format(Math.max(1, Math.ceil(seconds)))} s left`;
+    }
+    const minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) {
+      return `About ${integer.format(minutes)} min left`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0
+      ? `About ${integer.format(hours)} h left`
+      : `About ${integer.format(hours)} h ${integer.format(rest)} min left`;
+  },
+  /** The bar, for screen readers. */
+  progress: (kind: TransferKind) => (kind === "copy" ? "Copy progress" : "Move progress"),
+  /** Where a job is, when it isn't going. */
+  queued: "Queued",
+  paused: "Paused",
+  asking: "Needs your answer",
+  /** "ნახაზი.dwg is already there": the conflict window asks what to do. */
+  askingDetail: (name: string) => `${name} is already there`,
+  waiting: "Waiting for the drive",
+  ready: "Ready to resume",
+  unfinished: "Not finished",
+  unfinishedDetail: "Jerry closed before it finished",
+  pause: "Pause",
+  resume: "Resume",
+  cancel: "Cancel",
+  discard: "Discard",
+  pauseAll: "Pause all",
+  resumeAll: "Resume all",
+  cancelAll: "Cancel all",
+  /** The queue's caption: "4 transfers". */
+  count: (count: number) => `${integer.format(count)} ${count === 1 ? "transfer" : "transfers"}`,
+  /** The button that opens the queue: "Queue · 2". */
+  queue: (count: number) => `Queue · ${integer.format(count)}`,
+  showQueue: (count: number) => `Show transfer queue, ${integer.format(count)} waiting`,
+  hideQueue: "Hide transfer queue",
+  /** The queued jobs, for screen readers. */
+  queueLabel: "Transfer queue",
+  /** Closes the panel; the transfers go on. */
+  hide: "Hide transfers",
+  /** The status bar's way back to the panel. */
+  show: "Show transfers",
+  /** "3 files could not be copied". */
+  failed: (count: number, kind: TransferKind) =>
+    `${integer.format(count)} ${count === 1 ? "file" : "files"} could not be ${past(kind)}`,
+  /** A job that couldn't start: "Couldn't copy 3 items to Archive". */
+  couldntStart: (kind: TransferKind, sources: number, first: string, destination: string) => {
+    const what = sources === 1 ? first : `${integer.format(sources)} items`;
+    return `Couldn't ${kind} ${what} to ${destination}`;
+  },
+  /** Under a summary: "211 files copied to Archive". */
+  finished: (files: number, kind: TransferKind, destination: string) =>
+    `${integer.format(files)} ${files === 1 ? "file" : "files"} ${past(kind)} to ${destination}`,
+  /** A move's copy that is complete, whose original stays: before the reason. */
+  copiedOnly: "Copied, but the original stays.",
+  showFailures: "Show list",
+  hideFailures: "Hide list",
+  /** The failed items, for screen readers. */
+  failures: "Items that failed",
+  retry: "Retry",
+  dismiss: "Dismiss",
+  /** Reordering the queue by drag (dnd-kit). */
+  dragInstructions:
+    "To move a transfer in the queue, press Space, then the arrow keys. Space puts it down, Escape cancels.",
+  pickedUp: (name: string) => `Picked up ${name}.`,
+  movedOver: (name: string, over: string) => `${name} is now where ${over} was.`,
+  putDown: (name: string) => `${name} put down.`,
+  dragCancelled: (name: string) => `Moving ${name} cancelled.`,
+  /** The grip a row is dragged by. */
+  reorder: (name: string) => `Move ${name} in the queue`,
+};
+
 export const transferStrings = {
   conflict,
+  panel,
   /** The notice about jobs the Jerry before didn't finish (#50). */
   unfinished: (count: number) =>
     count === 1

@@ -9,7 +9,7 @@ function Icon({
   stroke = 1.2,
   children,
 }: {
-  size?: 10 | 12 | 14 | 16;
+  size?: 10 | 11 | 12 | 14 | 16 | 20;
   stroke?: number;
   children: ReactNode;
 }) {
@@ -307,5 +307,95 @@ export function EjectIcon() {
     <Icon size={14} stroke={1.3}>
       <path d="M8 3.5l4.5 5h-9zM3.5 12h9" />
     </Icon>
+  );
+}
+
+/** A copy, as the transfer panel shows it: two sheets (design: 20 px, 1.1 stroke). */
+export function CopyIcon({ size = 20 }: { size?: 16 | 20 }) {
+  return (
+    <Icon size={size} stroke={1.1}>
+      <rect x="5.5" y="5.5" width="8.5" height="8.5" rx="1.2" />
+      <path d="M3.5 10.5H3A1 1 0 0 1 2 9.5V3a1 1 0 0 1 1-1h6.5a1 1 0 0 1 1 1v.5" />
+    </Icon>
+  );
+}
+
+/** A move: an arrow into a sheet. */
+export function MoveIcon({ size = 20 }: { size?: 16 | 20 }) {
+  return (
+    <Icon size={size} stroke={1.1}>
+      <path d="M8.5 2.5h4a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-4" />
+      <path d="M2 8h8.5M7.5 5l3 3-3 3" />
+    </Icon>
+  );
+}
+
+/** Pause: two bars (design: 12 px, 1.8 stroke). */
+export function PauseIcon() {
+  return (
+    <Icon size={12} stroke={1.8}>
+      <path d="M5.5 3.5v9M10.5 3.5v9" />
+    </Icon>
+  );
+}
+
+/** Resume: a triangle pointing on. */
+export function ResumeIcon() {
+  return (
+    <Icon size={12} stroke={1.5}>
+      <path d="M5 3.2v9.6L12.5 8z" />
+    </Icon>
+  );
+}
+
+/** Cancel: a cross (design: 11 px, 1.8 stroke). */
+export function CancelIcon() {
+  return (
+    <Icon size={11} stroke={1.8}>
+      <path d="M3 3l10 10M13 3L3 13" />
+    </Icon>
+  );
+}
+
+/** The queue's arrow: up while it can open above the panel, down while it is open. */
+export function QueueIcon({ open }: { open: boolean }) {
+  return (
+    <Icon size={10} stroke={1.6}>
+      <path d={open ? "M3.5 6L8 10.5 12.5 6" : "M3.5 10L8 5.5l4.5 4.5"} />
+    </Icon>
+  );
+}
+
+/** The grip a row is dragged by: six dots. */
+export function GripIcon() {
+  return (
+    <svg width={16} height={16} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <circle cx="6" cy="4" r="1" />
+      <circle cx="10" cy="4" r="1" />
+      <circle cx="6" cy="8" r="1" />
+      <circle cx="10" cy="8" r="1" />
+      <circle cx="6" cy="12" r="1" />
+      <circle cx="10" cy="12" r="1" />
+    </svg>
+  );
+}
+
+/** Something went wrong: an "!" in a circle, 20 px, for a summary. It takes the text color. */
+export function ErrorIcon({ size = 20 }: { size?: 16 | 20 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.2}
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="8" cy="8" r="6.5" />
+      <path d="M8 4.6v4.2" />
+      <circle cx="8" cy="11.2" r="0.4" fill="currentColor" />
+    </svg>
   );
 }

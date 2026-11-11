@@ -2,7 +2,8 @@ import { emit } from "@tauri-apps/api/event";
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import type { UpdateOffer, UpdateStage } from "../../ipc";
+import type { TransferJob, TransferState, UpdateOffer, UpdateStage } from "../../ipc";
+import { resetTransfers, useTransfers } from "../../stores/transfers";
 import { syncUpdates, useUpdates } from "../../stores/updates";
 import { UpdateNotice } from "./UpdateNotice";
 
@@ -32,7 +33,31 @@ function fakeCore(current: UpdateOffer | null = null): string[] {
 
 afterEach(() => {
   useUpdates.setState({ offer: null, later: false });
+  resetTransfers();
 });
+
+/** A transfer in `state`, listed by the core. */
+function transfer(id: number, state: TransferState): TransferJob {
+  return {
+    id,
+    kind: "copy",
+    state,
+    source: String.raw`C:\Projects`,
+    sources: 3,
+    destination: String.raw`D:\Archive`,
+    progress: {
+      id,
+      phase: "working",
+      file: null,
+      filesDone: 1,
+      filesTotal: 3,
+      bytesDone: 1,
+      bytesTotal: 3,
+      speed: 0,
+      failed: 0,
+    },
+  };
+}
 
 test("no offer, no notice", () => {
   const { container } = render(<UpdateNotice />);
@@ -86,6 +111,44 @@ test("the install says Jerry will restart", () => {
   shown({ kind: "installing" });
   expect(screen.getByText("Installing. Jerry will restart.")).toBeInTheDocument();
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+test("while transfers run, Update first says Jerry closes and stops them", () => {
+  const calls = fakeCore();
+  useTransfers.setState({
+    list: {
+      generation: 1,
+      jobs: [transfer(1, { kind: "running" }), transfer(2, { kind: "paused" })],
+    },
+  });
+  shown();
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  expect(calls).toEqual([]);
+  const notice = screen.getByRole("status");
+  expect(notice).toHaveTextContent("2 transfers are still running");
+  expect(notice).toHaveTextContent("Jerry 0.2.0 is available");
+  expect(notice).toHaveTextContent("you can resume them where they stopped");
+
+  fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+  expect(screen.getByRole("button", { name: "Update" })).toBeInTheDocument();
+  expect(calls).toEqual([]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  fireEvent.click(screen.getByRole("button", { name: "Update anyway" }));
+  expect(calls).toEqual(["update_install"]);
+});
+
+test("jobs that ended, or an earlier Jerry left, don't hold Update up", () => {
+  const calls = fakeCore();
+  useTransfers.setState({
+    list: {
+      generation: 1,
+      jobs: [transfer(1, { kind: "done" }), transfer(2, { kind: "unfinished" })],
+    },
+  });
+  shown();
+  fireEvent.click(screen.getByRole("button", { name: "Update" }));
+  expect(calls).toEqual(["update_install"]);
 });
 
 test("a failure says so and offers Retry", () => {

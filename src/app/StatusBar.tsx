@@ -1,6 +1,7 @@
-import { memo, type ReactNode, useMemo } from "react";
+import { memo, useMemo } from "react";
 import { useShownRows } from "../features/file-list/rows";
 import { toggleDualPane } from "../features/navigation/panes";
+import { TransferIndicator } from "../features/transfers/TransferIndicator";
 import type { Density } from "../ipc";
 import { type Folder, useFolder } from "../stores/folder";
 import { useCommandLabel } from "../stores/keymap";
@@ -24,12 +25,9 @@ const t = strings.status;
 export const StatusBar = memo(function StatusBar({
   density,
   dual,
-  transfer,
 }: {
   density: Density;
   dual: boolean;
-  /** The transfer indicator, while transfers run with their panel closed (v0.2). */
-  transfer?: ReactNode;
 }) {
   const densityLabel = useCommandLabel("toggleDensity");
   const panesLabel = useCommandLabel("dualPane");
@@ -40,7 +38,7 @@ export const StatusBar = memo(function StatusBar({
       {folder && <Items folder={folder} />}
       {folder && <Selected folder={folder} />}
       <span className="flex-1" />
-      {transfer}
+      <TransferIndicator />
       {folder && <FreeSpace folder={folder} />}
       <fieldset aria-label={panesLabel} className="flex shrink-0 gap-0.5">
         <IconButton
