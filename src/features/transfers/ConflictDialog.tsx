@@ -7,13 +7,21 @@ import {
   useRef,
   useState,
 } from "react";
-import { type ConflictChoice, type ConflictItem, commands, typeIconUrl } from "../../ipc";
+import {
+  type ConflictChoice,
+  type ConflictItem,
+  type ConflictSide,
+  commands,
+  conflictThumbUrl,
+  typeIconUrl,
+} from "../../ipc";
 import { useSetting } from "../../stores/settings";
 import { type Asking, firstConflict, resolveConflict, useTransfers } from "../../stores/transfers";
 import { sizeText, strings } from "../../strings";
 import { Dialog } from "../../ui/Dialog";
 import { DialogButton } from "../../ui/DialogButton";
 import { Kbd } from "../../ui/Kbd";
+import { Thumbnail } from "../../ui/Thumbnail";
 import { dateText } from "../file-list/format";
 import { lastName } from "./UnfinishedNotice";
 
@@ -33,12 +41,16 @@ const APPLY_TO_ALL = { code: "KeyA", label: "A" };
 /** The icons' size, CSS px. */
 const ICON_PX = 32;
 
+/** The box a thumbnail fits in, CSS px (`size-16`). */
+const THUMB_PX = 64;
+
 /**
  * The conflict window (#51, PRD «კონფლიქტები»): a name a copy or move writes is taken, and its
  * job waits for the answer while the others go on. It shows the first such job in queue order:
- * both items with their size, date modified and icon, the newer one marked, and the choices the
- * core offers for them. A letter key or Enter on the focused choice answers; A ticks Apply to
- * all, ↑↓ move between the choices, and Esc cancels the transfer, as closing Explorer's does.
+ * both items with their size, date modified and thumbnail (#67; the type icon where there is
+ * none), the newer one marked, and the choices the core offers for them. A letter key or Enter
+ * on the focused choice answers; A ticks Apply to all, ↑↓ move between the choices, and Esc
+ * cancels the transfer, as closing Explorer's does.
  * Where Replace would delete for good (no Recycle Bin), Skip has the focus.
  */
 export function ConflictDialog() {
@@ -94,6 +106,7 @@ export function ConflictDialog() {
         <Question
           key={question}
           asking={shown}
+          question={question}
           focusFirst={focusFirst}
           onAnswer={answer}
           onCancel={cancel}
@@ -105,11 +118,14 @@ export function ConflictDialog() {
 
 function Question({
   asking,
+  question,
   focusFirst,
   onAnswer,
   onCancel,
 }: {
   asking: Asking;
+  /** Tells this question from the next one the job asks. */
+  question: string;
   focusFirst: RefObject<HTMLButtonElement | null>;
   onAnswer: (choice: ConflictChoice, all: boolean) => void;
   onCancel: () => void;
@@ -122,6 +138,8 @@ function Question({
   const { choices } = conflict;
   const first: ConflictChoice | undefined = conflict.noRecycleBin ? "skip" : choices[0];
   const newer = newerOf(conflict.incoming, conflict.existing);
+  const thumb = (side: ConflictSide, item: ConflictItem) =>
+    item.folder ? undefined : conflictThumbUrl(job.id, side, question, THUMB_PX);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
@@ -162,12 +180,14 @@ function Question({
             caption={t.incoming(job.kind, lastName(parentOf(conflict.source)))}
             name={lastName(conflict.source)}
             item={conflict.incoming}
+            thumb={thumb("incoming", conflict.incoming)}
             newer={newer === "incoming"}
           />
           <Side
             caption={t.existing(lastName(parentOf(conflict.target)))}
             name={lastName(conflict.target)}
             item={conflict.existing}
+            thumb={thumb("existing", conflict.existing)}
             newer={newer === "existing"}
           />
         </div>
@@ -222,16 +242,19 @@ function Question({
   );
 }
 
-/** One side: where it is, its icon, name, size and date modified. */
+/** One side: where it is, its thumbnail or icon, name, size and date modified. */
 function Side({
   caption,
   name,
   item,
+  thumb,
   newer,
 }: {
   caption: string;
   name: string;
   item: ConflictItem;
+  /** Its `thumb://` URL; none for a folder. */
+  thumb: string | undefined;
   newer: boolean;
 }) {
   const format = useSetting("dateFormat") ?? "DD.MM.YYYY";
@@ -242,7 +265,12 @@ function Side({
         {caption}
       </span>
       <div className="flex min-w-0 items-center gap-2.5">
-        <img src={typeIconUrl(item.icon, ICON_PX)} alt="" className="size-8 shrink-0" />
+        <Thumbnail
+          src={thumb}
+          icon={typeIconUrl(item.icon, ICON_PX)}
+          className="size-16 shrink-0"
+          iconClassName="size-8"
+        />
         <div className="flex min-w-0 flex-col">
           <span className="truncate" title={name}>
             {name}

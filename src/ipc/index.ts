@@ -13,7 +13,8 @@
  * - Events (`emit` from Rust to all windows): `subscribe(events.*, handler)`. The page only
  *   listens; it never emits.
  * - Custom protocols: `protocolUrl("icon", key)` for an `<img src>`; icons through
- *   `entryIconUrl`, `typeIconUrl`, `driveIconUrl` and `placeIconUrl`.
+ *   `entryIconUrl`, `typeIconUrl`, `driveIconUrl` and `placeIconUrl`, thumbnails through
+ *   `entryThumbUrl` and `conflictThumbUrl` (shown with `ui/Thumbnail`).
  */
 
 export type {
@@ -130,3 +131,10 @@ export {
   type SearchProgress,
   startSearch,
 } from "./search";
+export {
+  type ConflictSide,
+  conflictThumbUrl,
+  entryThumbUrl,
+  type ThumbEntry,
+  thumbPixels,
+} from "./thumbnails";

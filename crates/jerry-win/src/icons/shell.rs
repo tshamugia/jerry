@@ -399,7 +399,7 @@ fn is_local_and_present(file: &[u16]) -> bool {
     !attributes_are_cloud_only(&path)
 }
 
-fn is_cloud_only(path: &Path) -> bool {
+pub(crate) fn is_cloud_only(path: &Path) -> bool {
     let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     wide.push(0);
     attributes_are_cloud_only(&wide)
@@ -415,8 +415,8 @@ fn attributes_are_cloud_only(path: &[u16]) -> bool {
 
 /// `path` as the Shell takes it, NUL-terminated: without the `\\?\` prefix core uses (`\\?\UNC\`
 /// back to `\\`). `None` if it is too long for the Shell (`MAX_PATH`): Shell APIs often fail on
-/// longer paths, so such files show their type's icon.
-fn shell_path(path: &Path) -> Option<Vec<u16>> {
+/// longer paths, so such files show their type's icon (and have no thumbnail).
+pub(crate) fn shell_path(path: &Path) -> Option<Vec<u16>> {
     let units: Vec<u16> = path.as_os_str().encode_wide().collect();
     let starts = |prefix: &str| units.starts_with(&wide(prefix));
     let mut shell = if starts(r"\\?\UNC\") {

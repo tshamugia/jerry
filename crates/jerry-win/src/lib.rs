@@ -21,7 +21,9 @@ pub mod paste;
 pub mod placement;
 pub mod recycle;
 pub mod shell_pool;
+pub mod thumbnails;
 pub mod title_bar;
+mod wic;
 
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;

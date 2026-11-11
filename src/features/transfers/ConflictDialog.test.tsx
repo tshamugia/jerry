@@ -94,9 +94,14 @@ test("both files with size, date and icon, and the newer one marked", () => {
   const newer = within(dialog).getByText(`${dateText(NEW, "DD.MM.YYYY")} · Newer`);
   expect(newer).toHaveClass("font-semibold");
   expect(within(dialog).getByText(dateText(OLD, "DD.MM.YYYY"))).not.toHaveClass("font-semibold");
-  const icons = dialog.querySelectorAll("img");
-  expect(icons).toHaveLength(2);
-  expect(icons[0]?.getAttribute("src")).toContain("type-7-");
+  const images = [...dialog.querySelectorAll("img")].map((img) => img.getAttribute("src") ?? "");
+  expect(images.filter((src) => src.includes("/type-7-"))).toHaveLength(2);
+  // Each side's thumbnail, by job and side, over its icon until it is in.
+  const thumbs = images.filter((src) => src.startsWith("http://thumb.localhost/"));
+  expect(thumbs.map((src) => new URL(src).pathname.replace(/-\d+$/, ""))).toEqual([
+    "/conflict-2-incoming",
+    "/conflict-2-existing",
+  ]);
   const choices = within(dialog)
     .getAllByRole("button")
     .map((button) => button.textContent);
@@ -181,6 +186,10 @@ test("a folder offers Merge and Keep both and shows no size", () => {
   expect(within(dialog).queryByText(/Newer/)).toBeNull();
   expect(screen.getByRole("button", { name: "Merge" })).toHaveFocus();
   expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+  // Folders have no thumbnail: their icons only.
+  const images = [...dialog.querySelectorAll("img")].map((img) => img.getAttribute("src") ?? "");
+  expect(images).toHaveLength(2);
+  expect(images.every((src) => src.startsWith("http://icon.localhost/"))).toBe(true);
 });
 
 test("where there is no Recycle Bin it warns and Skip has the focus", () => {
@@ -197,6 +206,11 @@ test("where there is no Recycle Bin it warns and Skip has the focus", () => {
 test("once answered it waits for the queue, then shows what comes next", () => {
   fakeCore();
   shown({ generation: 1, jobs: [job(2, conflict()), job(4, conflict())] });
+  const thumbsOf = () =>
+    [...screen.getByRole("dialog").querySelectorAll("img")]
+      .map((img) => img.getAttribute("src") ?? "")
+      .filter((src) => src.startsWith("http://thumb.localhost/"));
+  const before = thumbsOf();
   fireEvent.click(screen.getByRole("button", { name: "Skip" }));
   expect(screen.queryByRole("dialog")).toBeNull();
   act(() => listed(1, [job(2, conflict()), job(4, conflict())]));
@@ -205,6 +219,9 @@ test("once answered it waits for the queue, then shows what comes next", () => {
   const next = conflict({ target: String.raw`D:\არქივი\გეგმა.pdf` });
   act(() => listed(2, [job(2), job(4, next)]));
   expect(screen.getByRole("dialog")).toHaveTextContent("გეგმა.pdf is already in არქივი.");
+  // The same job, another question: other thumbnails.
+  expect(thumbsOf()).toHaveLength(2);
+  expect(thumbsOf().some((src) => before.includes(src))).toBe(false);
   expect(screen.getByRole("checkbox")).not.toBeChecked();
   expect(screen.getByRole("button", { name: "Replace" })).toHaveFocus();
 });

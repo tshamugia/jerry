@@ -115,7 +115,7 @@ fn parse(path: &str) -> Option<IconUrl> {
     Some(IconUrl { icon, px })
 }
 
-fn image(png: &Arc<[u8]>, lasting: bool) -> Response<Vec<u8>> {
+pub(crate) fn image(png: &Arc<[u8]>, lasting: bool) -> Response<Vec<u8>> {
     let cache = if lasting {
         "max-age=31536000, immutable"
     } else {
@@ -128,7 +128,7 @@ fn image(png: &Arc<[u8]>, lasting: bool) -> Response<Vec<u8>> {
         .unwrap_or_else(|_| status(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
-fn failure(error: &JerryError) -> Response<Vec<u8>> {
+pub(crate) fn failure(error: &JerryError) -> Response<Vec<u8>> {
     status(match error.code {
         ErrorCode::NotFound | ErrorCode::DeviceGone => StatusCode::NOT_FOUND,
         ErrorCode::Cancelled => StatusCode::SERVICE_UNAVAILABLE,
@@ -137,7 +137,7 @@ fn failure(error: &JerryError) -> Response<Vec<u8>> {
     })
 }
 
-fn status(code: StatusCode) -> Response<Vec<u8>> {
+pub(crate) fn status(code: StatusCode) -> Response<Vec<u8>> {
     let mut response = Response::new(Vec::new());
     *response.status_mut() = code;
     response.headers_mut().insert(

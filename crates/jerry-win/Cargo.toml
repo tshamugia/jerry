@@ -44,6 +44,11 @@ windows-core = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A fake OneDrive for the thumbnail test: a Cloud Files sync root with online-only files.
+windows = { workspace = true, features = [
+    "Win32_Storage_CloudFilters",
+    "Win32_System_CorrelationVector",
+] }
 
 [lints]
 workspace = true

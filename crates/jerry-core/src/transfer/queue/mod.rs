@@ -247,7 +247,7 @@ enum Stage {
     /// On its thread, paused or not.
     Active,
     /// On its thread, which waits for the user to answer a conflict. It holds no lane.
-    Asking(Box<TransferConflict>),
+    Asking(Box<Asked>),
     /// Answered: its thread carries on with this once its lane is free.
     Answered(Answer),
     Waiting {
@@ -257,6 +257,33 @@ enum Stage {
     /// A Jerry before this one didn't finish it: it waits for Resume or Cancel.
     Unfinished,
     Ended(Ended),
+}
+
+/// The conflict a job waits on: what the window shows, and the files on its two sides.
+#[derive(Debug, Clone, PartialEq)]
+struct Asked {
+    view: TransferConflict,
+    incoming: ConflictFile,
+    existing: ConflictFile,
+}
+
+/// One side of the conflict a job waits on, as it was on disk when the job asked. The conflict
+/// window's thumbnails (#67) refer to it by job and side, never by a path from the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictFile {
+    pub path: PathBuf,
+    pub attributes: u32,
+    /// When it was last modified (`FILETIME`), 0 if that can't be read.
+    pub modified: u64,
+}
+
+/// Which side of a conflict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictSide {
+    /// What comes.
+    Incoming,
+    /// What is already there.
+    Existing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -397,8 +424,8 @@ impl Entry {
 
     fn state(&self) -> TransferState {
         match &self.stage {
-            Stage::Asking(conflict) => TransferState::Conflict {
-                conflict: (**conflict).clone(),
+            Stage::Asking(asked) => TransferState::Conflict {
+                conflict: asked.view.clone(),
             },
             Stage::Queued | Stage::Active | Stage::Answered(_) if self.paused => {
                 TransferState::Paused
@@ -733,16 +760,29 @@ impl Queue {
         let entry = state
             .find(id)
             .ok_or_else(|| JerryError::new(ErrorCode::NotFound))?;
-        let Stage::Asking(conflict) = &entry.stage else {
+        let Stage::Asking(asked) = &entry.stage else {
             return Err(JerryError::new(ErrorCode::NotFound));
         };
-        if !conflict.choices.contains(&answer.choice) {
+        if !asked.view.choices.contains(&answer.choice) {
             tracing::error!(?answer, "an answer the conflict doesn't offer");
             return Err(JerryError::internal());
         }
         entry.stage = Stage::Answered(answer);
         self.0.changed(&mut state);
         Ok(())
+    }
+
+    /// The file on `side` of the conflict job `id` waits on, for its thumbnail. None if it waits
+    /// on none.
+    pub fn conflict_file(&self, id: u32, side: ConflictSide) -> Option<ConflictFile> {
+        let mut state = self.0.lock();
+        let Stage::Asking(asked) = &state.find(id)?.stage else {
+            return None;
+        };
+        Some(match side {
+            ConflictSide::Incoming => asked.incoming.clone(),
+            ConflictSide::Existing => asked.existing.clone(),
+        })
     }
 
     /// Puts the jobs of `order` first, in that order; the others follow as they were. Ids that
@@ -988,13 +1028,22 @@ impl Shared {
     /// lane meanwhile.
     fn observe(self: &Arc<Self>, id: u32, event: Event<'_>) {
         if let Event::Conflict(conflict) = event {
-            let view = self.conflict_view(conflict);
+            let file = |path: &Path, side: &Side| ConflictFile {
+                path: path.to_path_buf(),
+                attributes: side.attributes,
+                modified: side.modified,
+            };
+            let asked = Asked {
+                view: self.conflict_view(conflict),
+                incoming: file(conflict.source, &conflict.incoming),
+                existing: file(conflict.target, &conflict.existing),
+            };
             let mut state = self.lock();
             if let Some(entry) = state.find(id)
                 && !entry.control.is_cancelled()
             {
                 entry.meter.take(event);
-                entry.stage = Stage::Asking(Box::new(view));
+                entry.stage = Stage::Asking(Box::new(asked));
                 self.changed(&mut state);
             }
             return;
